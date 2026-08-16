@@ -92,6 +92,21 @@ const helpinformation = {
 
 }
 
+const actorHelpInformation = {
+    'car_charge': {
+        label: 'Auto laden',
+        description: ' Home-Assistant-Automation, die ausgelöst wird, wenn Shyft dein Auto laden möchte.'
+    },
+    'room_temperature_increase': {
+        label: 'Raumtemperatur höher',
+        description: ' Home-Assistant-Automation, die ausgelöst wird, wenn Shyft die Raumtemperatur erhöhen möchte.'
+    },
+    'hot_water_prepare': {
+        label: 'Warmwasser bereiten',
+        description: ' Home-Assistant-Automation, die ausgelöst wird, wenn Shyft die Warmwasserbereitung anstoßen möchte.'
+    },
+}
+
 async function getJson(url) {
     const response = await fetch(url);
 
@@ -138,6 +153,7 @@ async function postJson(url, data) {
 
 
 const VALUE_POSTFIX = "_value";
+const ACTOR_VALUE_POSTFIX = "_actor_value";
 
 function saveConfiguration() {
     return async () => {
@@ -146,7 +162,10 @@ function saveConfiguration() {
         for (const [key] of Object.entries(configData["sensorMappings"])) {
             sensorValues[key] = document.getElementById(key + VALUE_POSTFIX).value;
         }
-        const actorValues = configData["actorMappings"];
+        const actorValues = {};
+        for (const [key] of Object.entries(configData["actorMappings"])) {
+            actorValues[key] = document.getElementById(key + ACTOR_VALUE_POSTFIX).value;
+        }
 
         const toBeWritten = {"sensorMappings": sensorValues, "actorMappings": actorValues};
         await putJson(configUri, toBeWritten);
@@ -166,6 +185,7 @@ const loadConfiguration = async (event) => {
             sensorIdsGUIElement.appendChild(option);
         }
         renderSensorMappings(configData["sensorMappings"]);
+        renderActorMappings(configData["actorMappings"]);
     } catch (err) {
     }
 }
@@ -195,6 +215,44 @@ function renderSensorMappings(configData) {
 
         const inputValue = document.createElement('input');
         inputValue.id = key + VALUE_POSTFIX;
+        inputValue.value = value;
+        inputValue.setAttribute("list", "sensorIds");
+        inputValue.setAttribute("class", "sensorInput");
+
+        const valueCell = document.createElement('td');
+        valueCell.appendChild(inputValue);
+
+        row.appendChild(keyCell);
+        row.appendChild(valueCell);
+        tbody.appendChild(row);
+    }
+}
+
+function renderActorMappings(configData) {
+    const tbody = document.getElementById('actorMappingId');
+    tbody.innerHTML = '';
+    for (const [key, value] of Object.entries(configData)) {
+        const row = document.createElement('tr');
+        const keyCell = document.createElement('td');
+        const context = actorHelpInformation[key] ?? {'label': key};
+        const label = context.label;
+        keyCell.textContent = label;
+
+        const tooltip = document.createElement("span");
+        tooltip.className = 'tooltip';
+        const tooltipIcon = document.createElement("span");
+        tooltipIcon.className = 'tooltip-icon';
+        tooltipIcon.textContent = '?';
+        tooltip.appendChild(tooltipIcon);
+        const tooltipText = document.createElement("span");
+        tooltipText.className = 'tooltip-text';
+        const tooltipFromConfig = actorHelpInformation[key] ?? {'description': key};
+        tooltipText.textContent = tooltipFromConfig.description;
+        tooltip.appendChild(tooltipText);
+        keyCell.appendChild(tooltip);
+
+        const inputValue = document.createElement('input');
+        inputValue.id = key + ACTOR_VALUE_POSTFIX;
         inputValue.value = value;
         inputValue.setAttribute("list", "sensorIds");
         inputValue.setAttribute("class", "sensorInput");

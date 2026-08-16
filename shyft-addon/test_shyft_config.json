@@ -21,6 +21,8 @@
     "wallbox_current_charging_power": "sensor.heatpump_mock_the_sensor_mock"
   },
   "actorMappings": {
-    "heating_on": "sensor.heatpump_mock_the_sensor_mock"
+    "car_charge": "automation.heatpump_mock_the_automation_mock",
+    "room_temperature_increase": "automation.heatpump_mock_the_automation_mock",
+    "hot_water_prepare": "automation.heatpump_mock_the_automation_mock"
   }
 }

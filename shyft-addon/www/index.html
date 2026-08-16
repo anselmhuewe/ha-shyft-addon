@@ -96,6 +96,21 @@
         <tbody id="sensorMappingId"/>
     </table>
 </p>
+<div>
+    Ordne hier jedem Shyft-Befehl die Home-Assistant-Automation zu, die ausgeführt werden soll, wenn Shyft diesen Befehl sendet.
+    Die Automation musst du vorher in Home Assistant angelegt haben.
+</div>
+<p>
+    <table id="actorMappingTable">
+        <thead>
+        <tr>
+            <th class="tableHeaderCell">Shyft-Befehl</th>
+            <th class="tableHeaderCell">Home Assistant Automation</th>
+        </tr>
+        </thead>
+        <tbody id="actorMappingId"/>
+    </table>
+</p>
 <div class="actionMenu">
     <button onclick="trigger()">Verbindung testen</button>
     <button id="saveConfig">Konfiguration Speichern</button>

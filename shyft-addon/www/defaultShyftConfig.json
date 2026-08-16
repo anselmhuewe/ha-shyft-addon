@@ -23,6 +23,8 @@
     "wallbox_plugged": ""
   },
   "actorMappings": {
-    "heating_on": ""
+    "car_charge": "",
+    "room_temperature_increase": "",
+    "hot_water_prepare": ""
   }
 }
