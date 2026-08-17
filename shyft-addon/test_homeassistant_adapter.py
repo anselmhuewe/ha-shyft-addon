@@ -74,35 +74,41 @@ def test_calculate_stae(given_unit_of_measurement, expected_state):
 
 
 
-def test_build_devices_and_entities():
+def test_build_integrations_and_entities():
     # given
     sut = HomeAssistantAdapter(supervisor_token="xxx")
-    devices = [
-        {"id": "device_1", "name": "Wechselrichter Fronius", "name_by_user": None},
-        {"id": "device_2", "name": "Generic Battery", "name_by_user": "Meine Batterie"},
-        {"id": "device_3", "name": "Unused Device", "name_by_user": None},
+    config_entries = [
+        {"entry_id": "entry_1", "title": "Symo 8.2", "domain": "fronius"},
+        {"entry_id": "entry_2", "title": "Meine Batterie", "domain": "sonnen"},
+        {"entry_id": "entry_3", "title": "Unused Entry", "domain": "shelly"},
     ]
     entities = [
-        {"entity_id": "sensor.pv_power", "device_id": "device_1"},
-        {"entity_id": "sensor.pv_load", "device_id": "device_1"},
-        {"entity_id": "sensor.battery_soc", "device_id": "device_2"},
-        {"entity_id": "sensor.no_device", "device_id": None},
-        {"entity_id": "sensor.unknown_device", "device_id": "device_does_not_exist"},
+        # linked directly via config_entry_id
+        {"entity_id": "sensor.pv_power", "device_id": "device_1", "config_entry_id": "entry_1"},
+        # linked only via its device's config_entries (no config_entry_id on the entity itself)
+        {"entity_id": "sensor.pv_load", "device_id": "device_1", "config_entry_id": None},
+        {"entity_id": "sensor.battery_soc", "device_id": "device_2", "config_entry_id": "entry_2"},
+        {"entity_id": "sensor.no_entry", "device_id": None, "config_entry_id": None},
+        {"entity_id": "sensor.unknown_entry", "device_id": None, "config_entry_id": "entry_does_not_exist"},
+    ]
+    devices = [
+        {"id": "device_1", "config_entries": ["entry_1"]},
+        {"id": "device_2", "config_entries": ["entry_2"]},
     ]
 
     # when
-    actual = sut._build_devices_and_entities(devices, entities)
+    actual = sut._build_integrations_and_entities(config_entries, entities, devices)
 
     # then
-    assert actual["devices"] == [
-        {"id": "device_2", "name": "Meine Batterie"},
-        {"id": "device_3", "name": "Unused Device"},
-        {"id": "device_1", "name": "Wechselrichter Fronius"},
+    assert actual["integrations"] == [
+        {"id": "entry_2", "name": "Meine Batterie (sonnen)"},
+        {"id": "entry_1", "name": "Symo 8.2 (fronius)"},
+        {"id": "entry_3", "name": "Unused Entry (shelly)"},
     ]
     assert actual["entityMap"] == {
-        "device_1": ["sensor.pv_power", "sensor.pv_load"],
-        "device_2": ["sensor.battery_soc"],
-        "device_3": [],
+        "entry_1": ["sensor.pv_power", "sensor.pv_load"],
+        "entry_2": ["sensor.battery_soc"],
+        "entry_3": [],
     }
 
 

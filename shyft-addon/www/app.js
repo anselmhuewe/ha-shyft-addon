@@ -2,9 +2,9 @@ const outsideHomeAssistant = "http://localhost:8000/0";
 const insideHomeAssistant = window.location.pathname;
 const configUri = insideHomeAssistant + "/config";
 const sensorIdsUri = insideHomeAssistant + "/sensorids";
-const devicesUri = insideHomeAssistant + "/devices";
+const integrationsUri = insideHomeAssistant + "/integrations";
 let configData = {}
-let devicesData = {devices: [], entityMap: {}};
+let integrationsData = {integrations: [], entityMap: {}};
 let allSensorIdOptions = [];
 
 const helpinformation = {
@@ -146,18 +146,20 @@ const actorHelpInformation = {
     },
 }
 
-const DEVICE_SECTIONS = [
+const INTEGRATION_SECTIONS = [
     {
         key: 'wechselrichter',
         label: 'Wechselrichter',
         sensors: ['photovoltaic_powerflow_pv', 'photovoltaic_powerflow_load', 'photovoltaic_powerflow_grid', 'photovoltaic_powerflow_battery'],
-        actions: ['pv_feed_in_limit', 'consumption_limit_14a']
+        actions: ['pv_feed_in_limit', 'consumption_limit_14a'],
+        requiresPowerSensor: true
     },
     {
         key: 'batterie',
         label: 'Batterie',
         sensors: ['battery_storage_command_mode', 'battery_state_of_charge', 'battery_charge_limit_current', 'battery_discharge_limit_current'],
-        actions: ['battery_charge_shift_pv_surplus', 'battery_discharge_shift', 'battery_grid_charge', 'battery_action_stop']
+        actions: ['battery_charge_shift_pv_surplus', 'battery_discharge_shift', 'battery_grid_charge', 'battery_action_stop'],
+        requiresPowerSensor: true
     },
     {
         key: 'waermepumpe',
@@ -242,10 +244,11 @@ const ACTOR_VALUE_POSTFIX = "_actor_value";
 async function saveConfigurationNow() {
     const sensorValues = {...(configData["sensorMappings"] || {})};
     const actorValues = {...(configData["actorMappings"] || {})};
-    const deviceValues = {};
+    const integrationValues = {};
 
-    for (const section of DEVICE_SECTIONS) {
-        deviceValues[section.key] = document.getElementById(deviceSelectId(section)).value;
+    for (const section of INTEGRATION_SECTIONS) {
+        const integrationInput = document.getElementById(integrationInputId(section));
+        integrationValues[section.key] = integrationInput ? extractEntryId(integrationInput.value) : '';
 
         for (const key of section.sensors) {
             const element = document.getElementById(key + VALUE_POSTFIX);
@@ -261,7 +264,7 @@ async function saveConfigurationNow() {
         }
     }
 
-    const toBeWritten = {"sensorMappings": sensorValues, "actorMappings": actorValues, "deviceMappings": deviceValues};
+    const toBeWritten = {"sensorMappings": sensorValues, "actorMappings": actorValues, "integrationMappings": integrationValues};
     await putJson(configUri, toBeWritten);
     configData = toBeWritten;
 }
@@ -271,16 +274,28 @@ let saveStatusTimeout = null;
 async function autoSave() {
     const statusElement = document.getElementById('saveStatus');
     try {
-        if (statusElement) statusElement.textContent = 'Speichere...';
+        if (statusElement) {
+            statusElement.classList.remove('status-saved', 'status-error');
+            statusElement.textContent = 'Speichere...';
+        }
         await saveConfigurationNow();
         if (statusElement) {
+            statusElement.classList.remove('status-error');
+            statusElement.classList.add('status-saved');
             statusElement.textContent = 'Gespeichert';
             clearTimeout(saveStatusTimeout);
-            saveStatusTimeout = setTimeout(() => { statusElement.textContent = ''; }, 2000);
+            saveStatusTimeout = setTimeout(() => {
+                statusElement.textContent = '';
+                statusElement.classList.remove('status-saved');
+            }, 2000);
         }
     } catch (err) {
         console.log(err);
-        if (statusElement) statusElement.textContent = 'Fehler beim Speichern';
+        if (statusElement) {
+            statusElement.classList.remove('status-saved');
+            statusElement.classList.add('status-error');
+            statusElement.textContent = 'Fehler beim Speichern';
+        }
     }
 }
 
@@ -289,7 +304,7 @@ const loadConfiguration = async (event) => {
         console.log("loadConfiguration called");
         configData = await getJson(configUri);
         allSensorIdOptions = await getJson(sensorIdsUri);
-        devicesData = await getJson(devicesUri);
+        integrationsData = await getJson(integrationsUri);
 
         const allEntityOptionsElement = document.getElementById('allEntityOptions');
         for (const optionText of allSensorIdOptions) {
@@ -298,47 +313,71 @@ const loadConfiguration = async (event) => {
             allEntityOptionsElement.appendChild(option);
         }
 
-        renderDeviceSections();
+        renderIntegrationSections();
     } catch (err) {
         console.log(err);
     }
 }
 
-function deviceSelectId(section) {
-    return 'device_select_' + section.key;
+function integrationInputId(section) {
+    return 'integration_input_' + section.key;
 }
 
-function renderDeviceSections() {
+function extractEntryId(value) {
+    return (value || '').split(':')[0].trim();
+}
+
+function formatIntegrationValue(entryId) {
+    if (!entryId) return '';
+    const match = integrationsData.integrations.find(integration => integration.id === entryId);
+    if (match) return entryId + ': ' + match.name;
+    return entryId + ' (nicht mehr gefunden)';
+}
+
+function integrationHasPowerSensor(entryId) {
+    const entityIds = integrationsData.entityMap[entryId] || [];
+    return allSensorIdOptions.some(optionText => {
+        const colonIndex = optionText.indexOf(':');
+        if (colonIndex === -1) return false;
+        const entityId = optionText.slice(0, colonIndex);
+        if (!entityIds.includes(entityId)) return false;
+        const unit = optionText.slice(colonIndex + 1).trim().split(' ').pop();
+        return unit === 'W' || unit === 'kW';
+    });
+}
+
+function renderIntegrationSections() {
     const container = document.getElementById('deviceSections');
     container.innerHTML = '';
-    const deviceMappings = configData["deviceMappings"] || {};
+    const integrationMappings = configData["integrationMappings"] || {};
 
-    for (const section of DEVICE_SECTIONS) {
+    for (const section of INTEGRATION_SECTIONS) {
         const sectionDiv = document.createElement('div');
-        sectionDiv.className = 'deviceSection';
+        sectionDiv.className = 'integrationSection';
 
         const heading = document.createElement('div');
-        heading.className = 'deviceHeading';
+        heading.className = 'integrationHeading';
         const headingTitle = document.createElement('h2');
         headingTitle.textContent = section.label;
         heading.appendChild(headingTitle);
 
-        const select = buildDeviceSelect(section, deviceMappings[section.key] || '');
-        heading.appendChild(select);
+        const currentEntryId = integrationMappings[section.key] || '';
+        const input = buildIntegrationInput(heading, section, currentEntryId);
         sectionDiv.appendChild(heading);
 
         const bodyDiv = document.createElement('div');
         bodyDiv.id = 'section_body_' + section.key;
-        bodyDiv.style.display = select.value ? '' : 'none';
-        if (select.value) {
-            renderSectionBody(bodyDiv, section, select.value);
+        bodyDiv.style.display = currentEntryId ? '' : 'none';
+        if (currentEntryId) {
+            renderSectionBody(bodyDiv, section, currentEntryId);
         }
         sectionDiv.appendChild(bodyDiv);
 
-        select.addEventListener('change', () => {
-            bodyDiv.style.display = select.value ? '' : 'none';
-            if (select.value) {
-                renderSectionBody(bodyDiv, section, select.value);
+        input.addEventListener('change', () => {
+            const entryId = extractEntryId(input.value);
+            bodyDiv.style.display = entryId ? '' : 'none';
+            if (entryId) {
+                renderSectionBody(bodyDiv, section, entryId);
             } else {
                 bodyDiv.innerHTML = '';
             }
@@ -349,44 +388,43 @@ function renderDeviceSections() {
     }
 }
 
-function buildDeviceSelect(section, currentDeviceId) {
-    const select = document.createElement('select');
-    select.id = deviceSelectId(section);
+function buildIntegrationInput(heading, section, currentEntryId) {
+    const datalistId = 'integrationOptions_' + section.key;
+    const datalist = document.createElement('datalist');
+    datalist.id = datalistId;
 
-    const noneOption = document.createElement('option');
-    noneOption.value = '';
-    noneOption.textContent = 'nicht vorhanden';
-    select.appendChild(noneOption);
-
-    for (const device of devicesData.devices) {
+    const options = integrationsData.integrations.filter(integration =>
+        !section.requiresPowerSensor || integrationHasPowerSensor(integration.id)
+    );
+    for (const integration of options) {
         const option = document.createElement('option');
-        option.value = device.id;
-        option.textContent = device.name;
-        select.appendChild(option);
+        option.value = integration.id + ': ' + integration.name;
+        datalist.appendChild(option);
     }
+    heading.appendChild(datalist);
 
-    if (currentDeviceId && !devicesData.devices.some(device => device.id === currentDeviceId)) {
-        const staleOption = document.createElement('option');
-        staleOption.value = currentDeviceId;
-        staleOption.textContent = currentDeviceId + ' (nicht mehr gefunden)';
-        select.appendChild(staleOption);
-    }
+    const input = document.createElement('input');
+    input.id = integrationInputId(section);
+    input.setAttribute('list', datalistId);
+    input.setAttribute('class', 'sensorInput');
+    input.setAttribute('placeholder', 'nicht vorhanden');
+    input.value = formatIntegrationValue(currentEntryId);
+    heading.appendChild(input);
 
-    select.value = currentDeviceId;
-    return select;
+    return input;
 }
 
-function renderSectionBody(bodyDiv, section, deviceId) {
+function renderSectionBody(bodyDiv, section, entryId) {
     bodyDiv.innerHTML = '';
 
     if (section.sensors.length > 0) {
         const entityDatalistId = 'entityOptions_' + section.key;
         const datalist = document.createElement('datalist');
         datalist.id = entityDatalistId;
-        const deviceEntityIds = devicesData.entityMap[deviceId] || [];
+        const integrationEntityIds = integrationsData.entityMap[entryId] || [];
         for (const optionText of allSensorIdOptions) {
             const entityId = optionText.split(':')[0];
-            if (deviceEntityIds.includes(entityId)) {
+            if (integrationEntityIds.includes(entityId)) {
                 const option = document.createElement('option');
                 option.value = optionText;
                 datalist.appendChild(option);

@@ -1,5 +1,5 @@
 {
-  "deviceMappings": {
+  "integrationMappings": {
     "wechselrichter": "",
     "batterie": "",
     "waermepumpe": "",

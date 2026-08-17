@@ -2,28 +2,100 @@
 <head>
     <meta charset="utf-8">
     <style>
-        body {
-            background-color: white;
-            color: black;
-            font-family: Arial, sans-serif;
-            margin: 20px;
+        :root {
+            --font-heading: -apple-system, "Segoe UI", "Open Sans", Roboto, Helvetica, Arial, sans-serif;
+            --font-body: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            --color-bg: #ffffff;
+            --color-bg-card: #f6faf9;
+            --color-text: #091747;
+            --color-text-secondary: #5b6b8c;
+            --color-accent: #2ecc71;
+            --color-accent-contrast: #ffffff;
+            --color-border: #e0e6e4;
+            --color-input-bg: #ffffff;
+            --color-input-border: #d5dbd9;
+            --color-error: #e74c3c;
+            --color-tooltip-bg: #091747;
+            --color-tooltip-text: #ffffff;
         }
+
+        @media (prefers-color-scheme: dark) {
+            :root {
+                --color-bg: #0b1220;
+                --color-bg-card: #121b30;
+                --color-text: #eef2f7;
+                --color-text-secondary: #93a0bc;
+                --color-accent-contrast: #06110b;
+                --color-border: #223154;
+                --color-input-bg: #0f1830;
+                --color-input-border: #2a3a5c;
+                --color-error: #ff7a6e;
+                --color-tooltip-bg: #1c2b4d;
+                --color-tooltip-text: #eef2f7;
+            }
+        }
+
+        body {
+            background-color: var(--color-bg);
+            color: var(--color-text);
+            font-family: var(--font-body);
+            line-height: 1.5;
+            max-width: 960px;
+            margin: 0 auto;
+            padding: 24px;
+        }
+
+        h1 {
+            font-family: var(--font-heading);
+            font-weight: 700;
+            letter-spacing: -0.01em;
+        }
+
+        .brand {
+            color: var(--color-accent);
+        }
+
+        .intro {
+            color: var(--color-text-secondary);
+            margin-bottom: 1.5em;
+        }
+
         .sensorInput {
             box-sizing: border-box;
             width: 100%;
+            padding: 0.5em 0.7em;
+            border: 1px solid var(--color-input-border);
+            border-radius: 6px;
+            background: var(--color-input-bg);
+            color: var(--color-text);
+            font-family: var(--font-body);
+            font-size: 0.95em;
+            transition: border-color 0.15s ease, box-shadow 0.15s ease;
         }
+        .sensorInput:focus {
+            outline: none;
+            border-color: var(--color-accent);
+            box-shadow: 0 0 0 3px rgba(46, 204, 113, 0.2);
+        }
+
         #deviceSections table {
             width: 100%;
-            table-layout: fixed;
+            border-collapse: collapse;
         }
         #deviceSections table th:first-child,
         #deviceSections table td:first-child {
-            width: 50%;
+            width: 1%;
+            white-space: nowrap;
         }
-        #deviceSections table th:last-child,
-        #deviceSections table td:last-child {
-            width: 50%;
+        #deviceSections td,
+        #deviceSections th {
+            padding: 0.5em 0.75em 0.5em 0;
+            text-align: left;
         }
+        #deviceSections tbody tr:not(:last-child) td {
+            border-bottom: 1px solid var(--color-border);
+        }
+
         .tooltip {
             position: relative;
             display: inline-block;
@@ -37,7 +109,8 @@
             width: 14px;
             height: 14px;
             border-radius: 50%;
-            border: 1px solid #666;
+            border: 1px solid var(--color-text-secondary);
+            color: var(--color-text-secondary);
             font-size: 10px;
             line-height: 1;
             cursor: help;
@@ -50,8 +123,8 @@
             bottom: 150%;
             left: 50%;
             padding: 4px 8px;
-            background: #333;
-            color: #fff;
+            background: var(--color-tooltip-bg);
+            color: var(--color-tooltip-text);
             font-size: 11px;
             border-radius: 4px;
             white-space: nowrap;
@@ -70,53 +143,91 @@
             transform: translateX(-50%);
             border-width: 5px;
             border-style: solid;
-            border-color: #333 transparent transparent transparent;
-        }
-
-        .tableHeaderCell {
-            padding-top: 2em;
+            border-color: var(--color-tooltip-bg) transparent transparent transparent;
         }
 
         .tooltip:hover .tooltip-text {
             opacity: 1;
             visibility: visible;
         }
+
+        .tableHeaderCell {
+            padding-top: 1.5em;
+            color: var(--color-text-secondary);
+            font-size: 0.85em;
+            text-transform: uppercase;
+            letter-spacing: 0.03em;
+            font-weight: 600;
+        }
+
         .actionMenu {
-            margin: 1em;
-        }
-        .deviceSection {
-            margin-top: 2em;
-            padding-bottom: 1em;
-            border-bottom: 1px solid #ccc;
-        }
-        .deviceHeading {
+            margin: 1.5em 0;
             display: flex;
             align-items: center;
+            gap: 1em;
+        }
+        .actionMenu button {
+            font-family: var(--font-body);
+            background: var(--color-accent);
+            color: var(--color-accent-contrast);
+            border: none;
+            border-radius: 4px;
+            padding: 0.6em 1.3em;
+            font-weight: 600;
+            font-size: 0.95em;
+            cursor: pointer;
+            transition: opacity 0.15s ease;
+        }
+        .actionMenu button:hover {
+            opacity: 0.85;
+        }
+
+        .integrationSection {
+            margin-top: 1.5em;
+            padding: 1.25em 1.5em;
+            background: var(--color-bg-card);
+            border-radius: 12px;
+        }
+        .integrationHeading {
+            display: flex;
+            flex-direction: column;
+            align-items: flex-start;
             gap: 0.5em;
         }
-        .deviceHeading select {
-            font-size: 1em;
+        .integrationHeading h2 {
+            font-family: var(--font-heading);
+            font-weight: 600;
+            font-size: 1.25em;
+            color: var(--color-text);
+            margin: 0;
         }
-        .sectionSubHeading {
-            margin-top: 1em;
-            margin-bottom: 0.3em;
-            font-weight: bold;
+        .integrationHeading input {
+            max-width: 420px;
         }
+
         #saveStatus {
             font-size: 0.9em;
-            color: #666;
+            color: var(--color-text-secondary);
             min-height: 1.2em;
+        }
+        #saveStatus.status-saved {
+            color: var(--color-accent);
+            font-weight: 600;
+        }
+        #saveStatus.status-error {
+            color: var(--color-error);
+            font-weight: 600;
         }
     </style>
     <title>shyft addon</title>
 </head>
 <body>
-<h1>shyft-power - Dein Energiemanager</h1>
-<div>
+<h1><span class="brand">shyft</span>-power - Dein Energiemanager</h1>
+<div class="intro">
     So richtest du das Add-on ein:
     Füge in deinem shyft-power.com-Account das Gerät "Home Assistant (per Add-on)" hinzu und folge der dortigen Anleitung.
-    Wähle unten für jeden Gerätetyp dein Home-Assistant-Gerät aus und ordne dann die dazugehörigen Shyft-Sensoren den passenden Home-Assistant-Entity-IDs zu.
-    Geräte, die du nicht nutzt, kannst du auf "nicht vorhanden" stehen lassen.
+    Wähle unten für jeden Gerätetyp die passende Home-Assistant-Integration aus (Suchfeld mit Autovervollständigung) und ordne dann die dazugehörigen Shyft-Sensoren den passenden Home-Assistant-Entity-IDs zu.
+    Integrationen, die du nicht nutzt, kannst du auf "nicht vorhanden" stehen lassen.
     Änderungen werden automatisch gespeichert.
 </div>
 <div id="config"/>
