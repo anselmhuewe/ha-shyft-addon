@@ -26,6 +26,12 @@ HASSIO_URI_RUNNING_REMOTE = "http://homeassistant.local:8123"
 # HASSIO_URI = HASSIO_URI_RUNNING_REMOTE
 HASSIO_URI = HASSIO_URI_RUNNING_ON_HAOS
 
+def mask_secret(secret):
+    if not secret or len(secret) < 10:
+        return "not set"
+    return f"{secret[:6]}***{secret[-4:]}"
+
+
 homeassistant_adapter = HomeAssistantAdapter(
     homeassistant_uri=HASSIO_URI_RUNNING_ON_HAOS,
     supervisor_token=SUPERVISOR_TOKEN)
@@ -140,8 +146,8 @@ if __name__ == "__main__":
     shyft_adapter.development_mode = DEVELOPMENT_MODE;
 
     homeassistant_adapter.detailed_logging = DETAILED_LOGGING
-    print("TOKEN FOR HAOS_API", SUPERVISOR_TOKEN)
-    print("Loaded SHYFT_ACCESS_KEY:", SHYFT_ACCESS_KEY)
+    print("TOKEN FOR HAOS_API", mask_secret(SUPERVISOR_TOKEN))
+    print("Loaded SHYFT_ACCESS_KEY:", mask_secret(SHYFT_ACCESS_KEY))
     print("Detailed logging:", DETAILED_LOGGING)
 
     app.run(host="0.0.0.0", port=8080)

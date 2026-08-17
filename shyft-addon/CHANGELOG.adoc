@@ -1,3 +1,7 @@
+== 0.0.14.1
+
+* Mask SUPERVISOR_TOKEN and SHYFT_ACCESS_KEY in startup logs instead of printing them in plain text
+
 == 0.0.14.0
 
 * KAN-163 : Filter pv history values better (two values for one hour)
