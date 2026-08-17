@@ -1,9 +1,10 @@
 from sync_service import SyncService
 from homeassistant_adapter import HomeAssistantAdapter
 from shyft_adapter import ShyftAdapter
+from version import VERSION
 
 import os
-from flask import Flask, send_from_directory, jsonify, request
+from flask import Flask, send_from_directory, jsonify, request, Response
 import requests
 import json
 import shutil
@@ -45,10 +46,13 @@ def add_no_cache_headers(response):
     return response
 
 
-# Serve the static HTML
+# Serve the static HTML, with the app.js cache-busting query param filled in
 @app.route("/")
 def index():
-    return send_from_directory("www", "index.html")
+    with open(os.path.join("www", "index.html"), "r", encoding="utf-8") as file:
+        html = file.read()
+    html = html.replace("{{VERSION}}", VERSION)
+    return Response(html, mimetype="text/html")
 
 # Delivers data to bubble
 @app.route("/trigger", methods=["POST"])

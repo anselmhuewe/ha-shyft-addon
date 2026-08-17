@@ -1,3 +1,7 @@
+== 0.0.14.3
+
+* Add a cache-busting version query param to app.js so browsers can't keep serving a stale, pre-update copy (the no-cache header in 0.0.14.2 only prevented *future* staleness, it couldn't undo an already-cached copy)
+
 == 0.0.14.2
 
 * Send no-cache headers so the browser always loads the latest app.js/index.html after an addon update
