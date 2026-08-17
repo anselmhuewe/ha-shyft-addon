@@ -146,26 +146,54 @@ const actorHelpInformation = {
     },
 }
 
+// Restricts entity suggestions per sensor field. 'none' = no restriction.
+// When an entity's state is unavailable/unknown we can't reliably check its
+// device_class/state, so it is allowed through rather than hidden.
+const SENSOR_ENTITY_FILTERS = {
+    'photovoltaic_powerflow_pv': {type: 'device_class', value: 'power'},
+    'photovoltaic_powerflow_load': {type: 'device_class', value: 'power'},
+    'photovoltaic_powerflow_grid': {type: 'device_class', value: 'power'},
+    'photovoltaic_powerflow_battery': {type: 'device_class', value: 'power'},
+    'battery_storage_command_mode': {type: 'none'},
+    'battery_state_of_charge': {type: 'device_class', value: 'battery'},
+    'battery_charge_limit_current': {type: 'device_class', value: 'power'},
+    'battery_discharge_limit_current': {type: 'device_class', value: 'power'},
+    'heatpump_dhw_tank_temp': {type: 'device_class', value: 'temperature'},
+    'heatpump_dhw_activated': {type: 'state_on_off'},
+    'heatpump_dhw_on_off': {type: 'state_on_off'},
+    'heatpump_heating_target_temp_normal': {type: 'device_class', value: 'temperature'},
+    'heatpump_heating_activated': {type: 'state_on_off'},
+    'heatpump_current_power_elect': {type: 'device_class', value: 'power'},
+    'heatpump_on_off': {type: 'state_on_off'},
+    'heatpump_supply_temp_hp': {type: 'device_class', value: 'temperature'},
+    'heatpump_temp_indoor_measured': {type: 'device_class', value: 'temperature'},
+    'electronicvehicle_plugged': {type: 'none'},
+    'electronicvehicle_state_of_charge': {type: 'device_class', value: 'battery'},
+    'wallbox_current_charging_power': {type: 'device_class', value: 'power'},
+    'wallbox_plugged': {type: 'none'},
+}
+
 const INTEGRATION_SECTIONS = [
     {
         key: 'wechselrichter',
         label: 'Wechselrichter',
         sensors: ['photovoltaic_powerflow_pv', 'photovoltaic_powerflow_load', 'photovoltaic_powerflow_grid', 'photovoltaic_powerflow_battery'],
         actions: ['pv_feed_in_limit', 'consumption_limit_14a'],
-        requiresPowerSensor: true
+        requiresDeviceClass: 'power'
     },
     {
         key: 'batterie',
         label: 'Batterie',
         sensors: ['battery_storage_command_mode', 'battery_state_of_charge', 'battery_charge_limit_current', 'battery_discharge_limit_current'],
         actions: ['battery_charge_shift_pv_surplus', 'battery_discharge_shift', 'battery_grid_charge', 'battery_action_stop'],
-        requiresPowerSensor: true
+        requiresDeviceClass: 'power'
     },
     {
         key: 'waermepumpe',
         label: 'Wärmepumpe',
         sensors: ['heatpump_dhw_tank_temp', 'heatpump_dhw_activated', 'heatpump_dhw_on_off', 'heatpump_heating_target_temp_normal', 'heatpump_heating_activated', 'heatpump_current_power_elect', 'heatpump_on_off', 'heatpump_supply_temp_hp'],
-        actions: ['hot_water', 'heating_target_temp']
+        actions: ['hot_water', 'heating_target_temp'],
+        requiresDeviceClass: 'temperature'
     },
     {
         key: 'auto',
@@ -241,14 +269,15 @@ async function postJson(url, data) {
 const VALUE_POSTFIX = "_value";
 const ACTOR_VALUE_POSTFIX = "_actor_value";
 
+let currentIntegrationSelections = {};
+
 async function saveConfigurationNow() {
     const sensorValues = {...(configData["sensorMappings"] || {})};
     const actorValues = {...(configData["actorMappings"] || {})};
     const integrationValues = {};
 
     for (const section of INTEGRATION_SECTIONS) {
-        const integrationInput = document.getElementById(integrationInputId(section));
-        integrationValues[section.key] = integrationInput ? extractEntryId(integrationInput.value) : '';
+        integrationValues[section.key] = currentIntegrationSelections[section.key] || [];
 
         for (const key of section.sensors) {
             const element = document.getElementById(key + VALUE_POSTFIX);
@@ -307,9 +336,9 @@ const loadConfiguration = async (event) => {
         integrationsData = await getJson(integrationsUri);
 
         const allEntityOptionsElement = document.getElementById('allEntityOptions');
-        for (const optionText of allSensorIdOptions) {
+        for (const entity of allSensorIdOptions) {
             const option = document.createElement("option");
-            option.value = optionText;
+            option.value = entity.label;
             allEntityOptionsElement.appendChild(option);
         }
 
@@ -319,32 +348,52 @@ const loadConfiguration = async (event) => {
     }
 }
 
-function integrationInputId(section) {
-    return 'integration_input_' + section.key;
+function isAmbiguousState(state) {
+    const normalized = (state || '').toLowerCase();
+    return normalized === 'unavailable' || normalized === 'unknown' || normalized === '';
 }
 
-function extractEntryId(value) {
-    return (value || '').split(':')[0].trim();
+function matchesDeviceClass(entity, deviceClass) {
+    if (entity.device_class === deviceClass) return true;
+    // give the benefit of the doubt only when we genuinely have no class info to check
+    return isAmbiguousState(entity.state) && !entity.device_class;
 }
 
-function formatIntegrationValue(entryId) {
-    if (!entryId) return '';
-    const match = integrationsData.integrations.find(integration => integration.id === entryId);
-    if (match) return entryId + ': ' + match.name;
-    return entryId + ' (nicht mehr gefunden)';
+function matchesOnOffState(entity) {
+    const state = (entity.state || '').toLowerCase();
+    if (state === 'on' || state === 'off') return true;
+    return isAmbiguousState(entity.state);
 }
 
-function integrationHasPowerSensor(entryId) {
+function entityMatchesSensorFilter(entity, filter) {
+    if (!filter || filter.type === 'none') return true;
+    if (filter.type === 'device_class') return matchesDeviceClass(entity, filter.value);
+    if (filter.type === 'state_on_off') return matchesOnOffState(entity);
+    return true;
+}
+
+function integrationHasDeviceClass(entryId, deviceClass) {
+    // strict match on purpose: the permissive "unavailable -> allow" rule in matchesDeviceClass
+    // is meant for individual sensor suggestions, not for this existence check - otherwise any
+    // integration with one unrelated unavailable entity would satisfy every possible requirement
     const entityIds = integrationsData.entityMap[entryId] || [];
-    return allSensorIdOptions.some(optionText => {
-        const colonIndex = optionText.indexOf(':');
-        if (colonIndex === -1) return false;
-        const entityId = optionText.slice(0, colonIndex);
-        if (!entityIds.includes(entityId)) return false;
-        const unit = optionText.slice(colonIndex + 1).trim().split(' ').pop();
-        return unit === 'W' || unit === 'kW';
-    });
+    return allSensorIdOptions.some(entity => entityIds.includes(entity.entity_id) && entity.device_class === deviceClass);
 }
+
+let openIntegrationPicker = null;
+
+function closeOpenIntegrationPicker() {
+    if (openIntegrationPicker) {
+        openIntegrationPicker.panel.hidden = true;
+        openIntegrationPicker = null;
+    }
+}
+
+document.addEventListener('mousedown', (event) => {
+    if (openIntegrationPicker && !openIntegrationPicker.wrapper.contains(event.target)) {
+        closeOpenIntegrationPicker();
+    }
+});
 
 function renderIntegrationSections() {
     const container = document.getElementById('deviceSections');
@@ -361,85 +410,184 @@ function renderIntegrationSections() {
         headingTitle.textContent = section.label;
         heading.appendChild(headingTitle);
 
-        const currentEntryId = integrationMappings[section.key] || '';
-        const input = buildIntegrationInput(heading, section, currentEntryId);
-        sectionDiv.appendChild(heading);
+        const currentIds = integrationMappings[section.key] || [];
+        currentIntegrationSelections[section.key] = currentIds;
 
         const bodyDiv = document.createElement('div');
         bodyDiv.id = 'section_body_' + section.key;
-        bodyDiv.style.display = currentEntryId ? '' : 'none';
-        if (currentEntryId) {
-            renderSectionBody(bodyDiv, section, currentEntryId);
+        bodyDiv.style.display = currentIds.length > 0 ? '' : 'none';
+        if (currentIds.length > 0) {
+            renderSectionBody(bodyDiv, section, currentIds);
         }
-        sectionDiv.appendChild(bodyDiv);
 
-        input.addEventListener('change', () => {
-            const entryId = extractEntryId(input.value);
-            bodyDiv.style.display = entryId ? '' : 'none';
-            if (entryId) {
-                renderSectionBody(bodyDiv, section, entryId);
+        const picker = buildIntegrationPicker(section, currentIds, (selectedIds) => {
+            currentIntegrationSelections[section.key] = selectedIds;
+            bodyDiv.style.display = selectedIds.length > 0 ? '' : 'none';
+            if (selectedIds.length > 0) {
+                renderSectionBody(bodyDiv, section, selectedIds);
             } else {
                 bodyDiv.innerHTML = '';
             }
             autoSave();
         });
+        heading.appendChild(picker);
+        sectionDiv.appendChild(heading);
+        sectionDiv.appendChild(bodyDiv);
 
         container.appendChild(sectionDiv);
     }
 }
 
-function buildIntegrationInput(heading, section, currentEntryId) {
-    const datalistId = 'integrationOptions_' + section.key;
-    const datalist = document.createElement('datalist');
-    datalist.id = datalistId;
+function buildIntegrationPicker(section, currentIds, onChange) {
+    const wrapper = document.createElement('div');
+    wrapper.className = 'integrationPicker';
+
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'integrationPickerButton';
+    const buttonText = document.createElement('span');
+    buttonText.className = 'integrationPickerButtonText';
+    const buttonArrow = document.createElement('span');
+    buttonArrow.className = 'integrationPickerButtonArrow';
+    buttonArrow.textContent = '▾';
+    button.appendChild(buttonText);
+    button.appendChild(buttonArrow);
+    wrapper.appendChild(button);
+
+    const panel = document.createElement('div');
+    panel.className = 'integrationPickerPanel';
+    panel.hidden = true;
+
+    const search = document.createElement('input');
+    search.type = 'text';
+    search.className = 'integrationPickerSearch';
+    search.setAttribute('autocomplete', 'off');
+    search.placeholder = 'Suchen...';
+    panel.appendChild(search);
+
+    const list = document.createElement('div');
+    list.className = 'integrationPickerList';
+    panel.appendChild(list);
+
+    wrapper.appendChild(panel);
 
     const options = integrationsData.integrations.filter(integration =>
-        !section.requiresPowerSensor || integrationHasPowerSensor(integration.id)
+        !section.requiresDeviceClass || integrationHasDeviceClass(integration.id, section.requiresDeviceClass)
     );
-    for (const integration of options) {
-        const option = document.createElement('option');
-        option.value = integration.id + ': ' + integration.name;
-        datalist.appendChild(option);
+
+    let selectedIds = [...currentIds];
+
+    function updateButtonText() {
+        if (selectedIds.length === 0) {
+            buttonText.textContent = 'nicht vorhanden';
+        } else {
+            buttonText.textContent = selectedIds
+                .map(id => (integrationsData.integrations.find(integration => integration.id === id) || {}).name || id)
+                .join(', ');
+        }
     }
-    heading.appendChild(datalist);
 
-    const input = document.createElement('input');
-    input.id = integrationInputId(section);
-    input.setAttribute('list', datalistId);
-    input.setAttribute('class', 'sensorInput');
-    input.setAttribute('placeholder', 'nicht vorhanden');
-    input.value = formatIntegrationValue(currentEntryId);
-    heading.appendChild(input);
+    function renderList(filterText) {
+        list.innerHTML = '';
+        const normalizedFilter = (filterText || '').trim().toLowerCase();
+        const filtered = options.filter(integration => integration.name.toLowerCase().includes(normalizedFilter));
 
-    return input;
+        if (filtered.length === 0) {
+            const empty = document.createElement('div');
+            empty.className = 'integrationPickerEmpty';
+            empty.textContent = 'Keine Treffer';
+            list.appendChild(empty);
+            return;
+        }
+
+        for (const integration of filtered) {
+            const optionLabel = document.createElement('label');
+            optionLabel.className = 'integrationPickerOption';
+
+            const checkbox = document.createElement('input');
+            checkbox.type = 'checkbox';
+            checkbox.value = integration.id;
+            checkbox.checked = selectedIds.includes(integration.id);
+            checkbox.addEventListener('change', () => {
+                if (checkbox.checked) {
+                    if (!selectedIds.includes(integration.id)) {
+                        selectedIds.push(integration.id);
+                    }
+                } else {
+                    selectedIds = selectedIds.filter(id => id !== integration.id);
+                }
+                updateButtonText();
+                onChange([...selectedIds]);
+            });
+
+            const text = document.createElement('span');
+            text.textContent = integration.name;
+
+            optionLabel.appendChild(checkbox);
+            optionLabel.appendChild(text);
+            list.appendChild(optionLabel);
+        }
+    }
+
+    search.addEventListener('input', () => renderList(search.value));
+
+    button.addEventListener('click', (event) => {
+        event.stopPropagation();
+        const wasOpen = !panel.hidden;
+        closeOpenIntegrationPicker();
+        if (wasOpen) {
+            return;
+        }
+        panel.hidden = false;
+        openIntegrationPicker = {wrapper, panel};
+        search.value = '';
+        renderList('');
+        search.focus();
+    });
+
+    updateButtonText();
+
+    return wrapper;
 }
 
-function renderSectionBody(bodyDiv, section, entryId) {
+function renderSectionBody(bodyDiv, section, entryIds) {
     bodyDiv.innerHTML = '';
 
     if (section.sensors.length > 0) {
-        const entityDatalistId = 'entityOptions_' + section.key;
-        const datalist = document.createElement('datalist');
-        datalist.id = entityDatalistId;
-        const integrationEntityIds = integrationsData.entityMap[entryId] || [];
-        for (const optionText of allSensorIdOptions) {
-            const entityId = optionText.split(':')[0];
-            if (integrationEntityIds.includes(entityId)) {
-                const option = document.createElement('option');
-                option.value = optionText;
-                datalist.appendChild(option);
+        const integrationEntityIds = new Set();
+        for (const entryId of entryIds) {
+            for (const entityId of (integrationsData.entityMap[entryId] || [])) {
+                integrationEntityIds.add(entityId);
             }
         }
-        bodyDiv.appendChild(datalist);
-        bodyDiv.appendChild(buildMappingTable('Shyft-Sensor', 'Home Assistant Entity ID', section.sensors, configData["sensorMappings"] || {}, helpinformation, VALUE_POSTFIX, entityDatalistId));
+        const candidateEntities = allSensorIdOptions.filter(entity => integrationEntityIds.has(entity.entity_id));
+
+        const sensorDatalistIds = {};
+        for (const key of section.sensors) {
+            const datalistId = 'entityOptions_' + section.key + '_' + key;
+            const datalist = document.createElement('datalist');
+            datalist.id = datalistId;
+            const filter = SENSOR_ENTITY_FILTERS[key];
+            for (const entity of candidateEntities) {
+                if (entityMatchesSensorFilter(entity, filter)) {
+                    const option = document.createElement('option');
+                    option.value = entity.label;
+                    datalist.appendChild(option);
+                }
+            }
+            bodyDiv.appendChild(datalist);
+            sensorDatalistIds[key] = datalistId;
+        }
+
+        bodyDiv.appendChild(buildMappingTable('Shyft-Sensor', 'Home Assistant Entity ID', section.sensors, configData["sensorMappings"] || {}, helpinformation, VALUE_POSTFIX, key => sensorDatalistIds[key]));
     }
 
     if (section.actions.length > 0) {
-        bodyDiv.appendChild(buildMappingTable('Shyft-Aktion', 'Home Assistant Automation', section.actions, configData["actorMappings"] || {}, actorHelpInformation, ACTOR_VALUE_POSTFIX, 'allEntityOptions'));
+        bodyDiv.appendChild(buildMappingTable('Shyft-Aktion', 'Home Assistant Automation', section.actions, configData["actorMappings"] || {}, actorHelpInformation, ACTOR_VALUE_POSTFIX, () => 'allEntityOptions'));
     }
 }
 
-function buildMappingTable(headerLeft, headerRight, keys, mappingData, helpInfo, valuePostfix, datalistId) {
+function buildMappingTable(headerLeft, headerRight, keys, mappingData, helpInfo, valuePostfix, getDatalistId) {
     const table = document.createElement('table');
 
     const thead = document.createElement('thead');
@@ -457,7 +605,7 @@ function buildMappingTable(headerLeft, headerRight, keys, mappingData, helpInfo,
 
     const tbody = document.createElement('tbody');
     for (const key of keys) {
-        tbody.appendChild(buildMappingRow(key, mappingData[key] || '', helpInfo, valuePostfix, datalistId));
+        tbody.appendChild(buildMappingRow(key, mappingData[key] || '', helpInfo, valuePostfix, getDatalistId(key)));
     }
     table.appendChild(tbody);
 
@@ -482,15 +630,32 @@ function buildMappingRow(key, value, helpInfo, valuePostfix, datalistId) {
     tooltip.appendChild(tooltipText);
     keyCell.appendChild(tooltip);
 
+    const inputWrapper = document.createElement('div');
+    inputWrapper.className = 'clearableInput';
+
     const inputValue = document.createElement('input');
     inputValue.id = key + valuePostfix;
     inputValue.value = value;
     inputValue.setAttribute("list", datalistId);
     inputValue.setAttribute("class", "sensorInput");
+    inputValue.setAttribute("autocomplete", "off");
     inputValue.addEventListener('change', autoSave);
+    inputWrapper.appendChild(inputValue);
+
+    const clearButton = document.createElement('button');
+    clearButton.type = 'button';
+    clearButton.className = 'clearInputButton';
+    clearButton.textContent = '×';
+    clearButton.setAttribute('aria-label', 'Eingabe löschen');
+    clearButton.addEventListener('click', () => {
+        inputValue.value = '';
+        inputValue.dispatchEvent(new Event('change'));
+        inputValue.focus();
+    });
+    inputWrapper.appendChild(clearButton);
 
     const valueCell = document.createElement('td');
-    valueCell.appendChild(inputValue);
+    valueCell.appendChild(inputWrapper);
 
     row.appendChild(keyCell);
     row.appendChild(valueCell);

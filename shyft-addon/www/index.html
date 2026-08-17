@@ -78,9 +78,36 @@
             box-shadow: 0 0 0 3px rgba(46, 204, 113, 0.2);
         }
 
+        .clearableInput {
+            position: relative;
+        }
+        .clearableInput .sensorInput {
+            padding-right: 2em;
+        }
+        .clearInputButton {
+            position: absolute;
+            right: 0.4em;
+            top: 50%;
+            transform: translateY(-50%);
+            background: none;
+            border: none;
+            color: var(--color-text-secondary);
+            font-size: 1.1em;
+            line-height: 1;
+            cursor: pointer;
+            padding: 0.2em 0.3em;
+        }
+        .clearInputButton:hover {
+            color: var(--color-text);
+        }
+
         #deviceSections table {
             width: 100%;
             border-collapse: collapse;
+        }
+        #deviceSections table + table {
+            margin-top: 1em;
+            border-top: 1px solid var(--color-border);
         }
         #deviceSections table th:first-child,
         #deviceSections table td:first-child {
@@ -201,8 +228,94 @@
             color: var(--color-text);
             margin: 0;
         }
-        .integrationHeading input {
+        .integrationPicker {
+            position: relative;
             max-width: 420px;
+            width: 100%;
+        }
+        .integrationPickerButton {
+            width: 100%;
+            box-sizing: border-box;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 0.5em;
+            padding: 0.5em 0.7em;
+            border: 1px solid var(--color-input-border);
+            border-radius: 6px;
+            background: var(--color-input-bg);
+            color: var(--color-text);
+            font-family: var(--font-body);
+            font-size: 0.95em;
+            cursor: pointer;
+            text-align: left;
+        }
+        .integrationPickerButton:hover,
+        .integrationPickerButton:focus {
+            outline: none;
+            border-color: var(--color-accent);
+        }
+        .integrationPickerButtonText {
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .integrationPickerButtonArrow {
+            color: var(--color-text-secondary);
+            font-size: 0.8em;
+            flex-shrink: 0;
+        }
+        .integrationPickerPanel {
+            position: absolute;
+            top: calc(100% + 4px);
+            left: 0;
+            right: 0;
+            z-index: 20;
+            background: var(--color-input-bg);
+            border: 1px solid var(--color-input-border);
+            border-radius: 6px;
+            box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
+            padding: 0.5em;
+        }
+        .integrationPickerSearch {
+            box-sizing: border-box;
+            width: 100%;
+            padding: 0.4em 0.6em;
+            margin-bottom: 0.4em;
+            border: 1px solid var(--color-input-border);
+            border-radius: 6px;
+            background: var(--color-bg);
+            color: var(--color-text);
+            font-family: var(--font-body);
+            font-size: 0.9em;
+        }
+        .integrationPickerSearch:focus {
+            outline: none;
+            border-color: var(--color-accent);
+        }
+        .integrationPickerList {
+            max-height: 220px;
+            overflow-y: auto;
+        }
+        .integrationPickerOption {
+            display: flex;
+            align-items: center;
+            gap: 0.5em;
+            padding: 0.35em 0.3em;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 0.9em;
+        }
+        .integrationPickerOption:hover {
+            background: var(--color-bg-card);
+        }
+        .integrationPickerOption input {
+            margin: 0;
+        }
+        .integrationPickerEmpty {
+            padding: 0.4em 0.3em;
+            color: var(--color-text-secondary);
+            font-size: 0.85em;
         }
 
         #saveStatus {
@@ -226,8 +339,8 @@
 <div class="intro">
     So richtest du das Add-on ein:
     Füge in deinem shyft-power.com-Account das Gerät "Home Assistant (per Add-on)" hinzu und folge der dortigen Anleitung.
-    Wähle unten für jeden Gerätetyp die passende Home-Assistant-Integration aus (Suchfeld mit Autovervollständigung) und ordne dann die dazugehörigen Shyft-Sensoren den passenden Home-Assistant-Entity-IDs zu.
-    Integrationen, die du nicht nutzt, kannst du auf "nicht vorhanden" stehen lassen.
+    Wähle unten für jeden Gerätetyp die passenden Home-Assistant-Integrationen aus (Mehrfachauswahl mit Suchfeld) und ordne dann die dazugehörigen Shyft-Sensoren den passenden Home-Assistant-Entity-IDs zu.
+    Wenn du keine Integration auswählst, bleibt der Bereich auf "nicht vorhanden".
     Änderungen werden automatisch gespeichert.
 </div>
 <div id="config"/>

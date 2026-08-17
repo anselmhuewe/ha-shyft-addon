@@ -35,12 +35,12 @@
     "consumer_off": "automation.heatpump_mock_the_automation_mock"
   },
   "integrationMappings": {
-    "wechselrichter": "entry_id_mock",
-    "batterie": "entry_id_mock",
-    "waermepumpe": "entry_id_mock",
-    "auto": "entry_id_mock",
-    "wallbox": "entry_id_mock",
-    "raumtemperatur": "entry_id_mock",
-    "sonstiger_verbraucher": "entry_id_mock"
+    "wechselrichter": ["entry_id_mock"],
+    "batterie": ["entry_id_mock"],
+    "waermepumpe": ["entry_id_mock"],
+    "auto": ["entry_id_mock"],
+    "wallbox": ["entry_id_mock"],
+    "raumtemperatur": ["entry_id_mock"],
+    "sonstiger_verbraucher": ["entry_id_mock"]
   }
 }

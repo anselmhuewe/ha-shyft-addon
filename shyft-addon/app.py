@@ -90,8 +90,14 @@ def readIntegrations():
 def mapToResponse(response):
     result = []
     for item in response:
-        unitOfMeasurement = item["attributes"].get("unit_of_measurement", "")
-        result.append(item["entity_id"] + ": " + item["state"] + " " + unitOfMeasurement)
+        attributes = item.get("attributes", {})
+        unitOfMeasurement = attributes.get("unit_of_measurement", "")
+        result.append({
+            "entity_id": item["entity_id"],
+            "label": item["entity_id"] + ": " + item["state"] + " " + unitOfMeasurement,
+            "device_class": attributes.get("device_class", ""),
+            "state": item["state"],
+        })
     return jsonify(result)
 
 
@@ -100,10 +106,11 @@ def writeConfig():
     content = request.get_data(as_text=True)
     data = json.loads(content)
 
-    # iterate over key/value pairs
+    # iterate over key/value pairs. integrationMappings holds lists (multi-select), the rest hold plain strings
     for key, value in data.items():
         for inner_key, inner_value in value.items():
-            data[key][inner_key] = inner_value.split(":", 1)[0]
+            if isinstance(inner_value, str):
+                data[key][inner_key] = inner_value.split(":", 1)[0]
 
     result = json.dumps(data)
     with open(CONFIG_PATH, "w") as file:

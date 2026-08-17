@@ -1,3 +1,17 @@
+== 0.0.15.1
+
+* Add a clear ("×") button to sensor/action entity fields
+* Filter sensor entity suggestions by device_class instead of unit_of_measurement (power/battery/temperature/on-off, per field), with a permissive fallback for entities that are unavailable/unknown
+* Wärmepumpe integration picker now requires at least one temperature-class sensor, same as the existing power-sensor requirement for Wechselrichter/Batterie
+* Fix: the "allow when uncertain" rule no longer lets any integration with one unrelated unavailable entity satisfy every device-class requirement
+
+== 0.0.15.0
+
+* Integration picker is now multi-select (checkboxes + search) instead of one integration per device type, so sensors from several integrations can feed the same device section
+* Fix: integration names in the picker no longer show the raw internal ID
+* Fix: disable browser autofill on sensor/action entity fields so the browser's own form-fill history no longer bleeds into the entity suggestions
+* Add visual separation between the Sensor and Aktion tables within a section
+
 == 0.0.14.3
 
 * Add a cache-busting version query param to app.js so browsers can't keep serving a stale, pre-update copy (the no-cache header in 0.0.14.2 only prevented *future* staleness, it couldn't undo an already-cached copy)

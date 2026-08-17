@@ -1,12 +1,12 @@
 {
   "integrationMappings": {
-    "wechselrichter": "",
-    "batterie": "",
-    "waermepumpe": "",
-    "auto": "",
-    "wallbox": "",
-    "raumtemperatur": "",
-    "sonstiger_verbraucher": ""
+    "wechselrichter": [],
+    "batterie": [],
+    "waermepumpe": [],
+    "auto": [],
+    "wallbox": [],
+    "raumtemperatur": [],
+    "sonstiger_verbraucher": []
   },
   "sensorMappings": {
     "photovoltaic_powerflow_pv": "",

@@ -33,12 +33,12 @@ PUT http://localhost:8080/config
     "consumer_off" : ""
   },
   "integrationMappings" : {
-    "wechselrichter" : "",
-    "batterie" : "",
-    "waermepumpe" : "",
-    "auto" : "",
-    "wallbox" : "",
-    "raumtemperatur" : "",
-    "sonstiger_verbraucher" : ""
+    "wechselrichter" : [],
+    "batterie" : [],
+    "waermepumpe" : [],
+    "auto" : [],
+    "wallbox" : [],
+    "raumtemperatur" : [],
+    "sonstiger_verbraucher" : []
   }
 }
