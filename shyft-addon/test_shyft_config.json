@@ -21,8 +21,26 @@
     "wallbox_current_charging_power": "sensor.heatpump_mock_the_sensor_mock"
   },
   "actorMappings": {
-    "car_charge": "automation.heatpump_mock_the_automation_mock",
-    "room_temperature_increase": "automation.heatpump_mock_the_automation_mock",
-    "hot_water_prepare": "automation.heatpump_mock_the_automation_mock"
+    "pv_feed_in_limit": "automation.heatpump_mock_the_automation_mock",
+    "consumption_limit_14a": "automation.heatpump_mock_the_automation_mock",
+    "battery_charge_shift_pv_surplus": "automation.heatpump_mock_the_automation_mock",
+    "battery_discharge_shift": "automation.heatpump_mock_the_automation_mock",
+    "battery_grid_charge": "automation.heatpump_mock_the_automation_mock",
+    "battery_action_stop": "automation.heatpump_mock_the_automation_mock",
+    "hot_water": "automation.heatpump_mock_the_automation_mock",
+    "heating_target_temp": "automation.heatpump_mock_the_automation_mock",
+    "car_charge_start": "automation.heatpump_mock_the_automation_mock",
+    "car_charge_stop": "automation.heatpump_mock_the_automation_mock",
+    "consumer_on": "automation.heatpump_mock_the_automation_mock",
+    "consumer_off": "automation.heatpump_mock_the_automation_mock"
+  },
+  "deviceMappings": {
+    "wechselrichter": "device_id_mock",
+    "batterie": "device_id_mock",
+    "waermepumpe": "device_id_mock",
+    "auto": "device_id_mock",
+    "wallbox": "device_id_mock",
+    "raumtemperatur": "device_id_mock",
+    "sonstiger_verbraucher": "device_id_mock"
   }
 }

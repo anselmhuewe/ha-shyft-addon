@@ -1,6 +1,9 @@
 
 GET http://localhost:8080/sensorids
 
+### devices
+GET http://localhost:8080/devices
+
 ### putting
 PUT http://localhost:8080/config
 
@@ -16,9 +19,26 @@ PUT http://localhost:8080/config
     "battery_charge_limit_current" : ""
   },
   "actorMappings" : {
-    "car_charge" : "",
-    "room_temperature_increase" : "",
-    "hot_water_prepare" : ""
+    "pv_feed_in_limit" : "",
+    "consumption_limit_14a" : "",
+    "battery_charge_shift_pv_surplus" : "",
+    "battery_discharge_shift" : "",
+    "battery_grid_charge" : "",
+    "battery_action_stop" : "",
+    "hot_water" : "",
+    "heating_target_temp" : "",
+    "car_charge_start" : "",
+    "car_charge_stop" : "",
+    "consumer_on" : "",
+    "consumer_off" : ""
+  },
+  "deviceMappings" : {
+    "wechselrichter" : "",
+    "batterie" : "",
+    "waermepumpe" : "",
+    "auto" : "",
+    "wallbox" : "",
+    "raumtemperatur" : "",
+    "sonstiger_verbraucher" : ""
   }
-
 }

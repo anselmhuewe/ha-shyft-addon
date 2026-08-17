@@ -74,6 +74,38 @@ def test_calculate_stae(given_unit_of_measurement, expected_state):
 
 
 
+def test_build_devices_and_entities():
+    # given
+    sut = HomeAssistantAdapter(supervisor_token="xxx")
+    devices = [
+        {"id": "device_1", "name": "Wechselrichter Fronius", "name_by_user": None},
+        {"id": "device_2", "name": "Generic Battery", "name_by_user": "Meine Batterie"},
+        {"id": "device_3", "name": "Unused Device", "name_by_user": None},
+    ]
+    entities = [
+        {"entity_id": "sensor.pv_power", "device_id": "device_1"},
+        {"entity_id": "sensor.pv_load", "device_id": "device_1"},
+        {"entity_id": "sensor.battery_soc", "device_id": "device_2"},
+        {"entity_id": "sensor.no_device", "device_id": None},
+        {"entity_id": "sensor.unknown_device", "device_id": "device_does_not_exist"},
+    ]
+
+    # when
+    actual = sut._build_devices_and_entities(devices, entities)
+
+    # then
+    assert actual["devices"] == [
+        {"id": "device_2", "name": "Meine Batterie"},
+        {"id": "device_3", "name": "Unused Device"},
+        {"id": "device_1", "name": "Wechselrichter Fronius"},
+    ]
+    assert actual["entityMap"] == {
+        "device_1": ["sensor.pv_power", "sensor.pv_load"],
+        "device_2": ["sensor.battery_soc"],
+        "device_3": [],
+    }
+
+
 def _read_to_period_element(file_path: str) -> PeriodElement:
     file_content = read_file_to_json(file_path)
     result: [PeriodElement] = []

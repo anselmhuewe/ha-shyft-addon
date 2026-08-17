@@ -9,7 +9,20 @@
             margin: 20px;
         }
         .sensorInput {
-            width: 500px;
+            box-sizing: border-box;
+            width: 100%;
+        }
+        #deviceSections table {
+            width: 100%;
+            table-layout: fixed;
+        }
+        #deviceSections table th:first-child,
+        #deviceSections table td:first-child {
+            width: 50%;
+        }
+        #deviceSections table th:last-child,
+        #deviceSections table td:last-child {
+            width: 50%;
         }
         .tooltip {
             position: relative;
@@ -61,7 +74,7 @@
         }
 
         .tableHeaderCell {
-            padding-bottom: 2em;
+            padding-top: 2em;
         }
 
         .tooltip:hover .tooltip-text {
@@ -71,6 +84,29 @@
         .actionMenu {
             margin: 1em;
         }
+        .deviceSection {
+            margin-top: 2em;
+            padding-bottom: 1em;
+            border-bottom: 1px solid #ccc;
+        }
+        .deviceHeading {
+            display: flex;
+            align-items: center;
+            gap: 0.5em;
+        }
+        .deviceHeading select {
+            font-size: 1em;
+        }
+        .sectionSubHeading {
+            margin-top: 1em;
+            margin-bottom: 0.3em;
+            font-weight: bold;
+        }
+        #saveStatus {
+            font-size: 0.9em;
+            color: #666;
+            min-height: 1.2em;
+        }
     </style>
     <title>shyft addon</title>
 </head>
@@ -79,41 +115,17 @@
 <div>
     So richtest du das Add-on ein:
     Füge in deinem shyft-power.com-Account das Gerät "Home Assistant (per Add-on)" hinzu und folge der dortigen Anleitung.
-    Ordne dann hier jedem Shyft-Sensor die dazugehörige Home-Assistant-Entity-ID zu.
-    Die Sensoren der nicht verwendeten Geräte kannst du einfach leer lassen.
+    Wähle unten für jeden Gerätetyp dein Home-Assistant-Gerät aus und ordne dann die dazugehörigen Shyft-Sensoren den passenden Home-Assistant-Entity-IDs zu.
+    Geräte, die du nicht nutzt, kannst du auf "nicht vorhanden" stehen lassen.
+    Änderungen werden automatisch gespeichert.
 </div>
 <div id="config"/>
-<datalist id="sensorIds">
+<datalist id="allEntityOptions">
 </datalist>
-<p>
-    <table id="sensorMappingTable">
-        <thead>
-        <tr>
-            <th class="tableHeaderCell">Shyft-Sensor</th>
-            <th class="tableHeaderCell">Home Assistant Entity ID</th>
-        </tr>
-        </thead>
-        <tbody id="sensorMappingId"/>
-    </table>
-</p>
-<div>
-    Ordne hier jedem Shyft-Befehl die Home-Assistant-Automation zu, die ausgeführt werden soll, wenn Shyft diesen Befehl sendet.
-    Die Automation musst du vorher in Home Assistant angelegt haben.
-</div>
-<p>
-    <table id="actorMappingTable">
-        <thead>
-        <tr>
-            <th class="tableHeaderCell">Shyft-Befehl</th>
-            <th class="tableHeaderCell">Home Assistant Automation</th>
-        </tr>
-        </thead>
-        <tbody id="actorMappingId"/>
-    </table>
-</p>
+<div id="deviceSections"></div>
 <div class="actionMenu">
     <button onclick="trigger()">Verbindung testen</button>
-    <button id="saveConfig">Konfiguration Speichern</button>
+    <span id="saveStatus"></span>
 </div>
 
 <script>

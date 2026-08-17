@@ -2,7 +2,10 @@ const outsideHomeAssistant = "http://localhost:8000/0";
 const insideHomeAssistant = window.location.pathname;
 const configUri = insideHomeAssistant + "/config";
 const sensorIdsUri = insideHomeAssistant + "/sensorids";
+const devicesUri = insideHomeAssistant + "/devices";
 let configData = {}
+let devicesData = {devices: [], entityMap: {}};
+let allSensorIdOptions = [];
 
 const helpinformation = {
     'photovoltaic_powerflow_load': {
@@ -93,19 +96,100 @@ const helpinformation = {
 }
 
 const actorHelpInformation = {
-    'car_charge': {
+    'pv_feed_in_limit': {
+        label: 'PV: Einspeisung begrenzen',
+        description: ' Home-Assistant-Automation, die ausgelöst wird, wenn Shyft die PV-Einspeisung ins Netz begrenzen möchte.'
+    },
+    'consumption_limit_14a': {
+        label: 'Verbrauch begrenzen (§14a)',
+        description: ' Home-Assistant-Automation, die ausgelöst wird, wenn Shyft den Verbrauch im Rahmen von §14a EnWG begrenzen möchte.'
+    },
+    'battery_charge_shift_pv_surplus': {
+        label: 'Batterie-Laden verschieben (PV-Überschuss)',
+        description: ' Home-Assistant-Automation, die ausgelöst wird, wenn Shyft das Laden der Batterie aus PV-Überschuss zeitlich verschieben möchte.'
+    },
+    'battery_discharge_shift': {
+        label: 'Batterie-Entladen verschieben',
+        description: ' Home-Assistant-Automation, die ausgelöst wird, wenn Shyft das Entladen der Batterie zeitlich verschieben möchte.'
+    },
+    'battery_grid_charge': {
+        label: 'Batterie netzladen',
+        description: ' Home-Assistant-Automation, die ausgelöst wird, wenn Shyft die Batterie aus dem Netz laden möchte.'
+    },
+    'battery_action_stop': {
+        label: 'Batterie-Aktion beenden',
+        description: ' Home-Assistant-Automation, die ausgelöst wird, wenn Shyft eine laufende Batterie-Aktion beenden möchte.'
+    },
+    'hot_water': {
+        label: 'Warmwasser',
+        description: ' Home-Assistant-Automation, die ausgelöst wird, wenn Shyft die Warmwasserbereitung ansteuern möchte.'
+    },
+    'heating_target_temp': {
+        label: 'Heizung Soll-Temperatur',
+        description: ' Home-Assistant-Automation, die ausgelöst wird, wenn Shyft die Soll-Temperatur der Heizung anpassen möchte.'
+    },
+    'car_charge_start': {
         label: 'Auto laden',
-        description: ' Home-Assistant-Automation, die ausgelöst wird, wenn Shyft dein Auto laden möchte.'
+        description: ' Home-Assistant-Automation, die ausgelöst wird, wenn Shyft das Laden deines Autos starten möchte.'
     },
-    'room_temperature_increase': {
-        label: 'Raumtemperatur höher',
-        description: ' Home-Assistant-Automation, die ausgelöst wird, wenn Shyft die Raumtemperatur erhöhen möchte.'
+    'car_charge_stop': {
+        label: 'Auto laden beenden',
+        description: ' Home-Assistant-Automation, die ausgelöst wird, wenn Shyft das Laden deines Autos beenden möchte.'
     },
-    'hot_water_prepare': {
-        label: 'Warmwasser bereiten',
-        description: ' Home-Assistant-Automation, die ausgelöst wird, wenn Shyft die Warmwasserbereitung anstoßen möchte.'
+    'consumer_on': {
+        label: 'Verbraucher an',
+        description: ' Home-Assistant-Automation, die ausgelöst wird, wenn Shyft den sonstigen Verbraucher einschalten möchte.'
+    },
+    'consumer_off': {
+        label: 'Verbraucher aus',
+        description: ' Home-Assistant-Automation, die ausgelöst wird, wenn Shyft den sonstigen Verbraucher ausschalten möchte.'
     },
 }
+
+const DEVICE_SECTIONS = [
+    {
+        key: 'wechselrichter',
+        label: 'Wechselrichter',
+        sensors: ['photovoltaic_powerflow_pv', 'photovoltaic_powerflow_load', 'photovoltaic_powerflow_grid', 'photovoltaic_powerflow_battery'],
+        actions: ['pv_feed_in_limit', 'consumption_limit_14a']
+    },
+    {
+        key: 'batterie',
+        label: 'Batterie',
+        sensors: ['battery_storage_command_mode', 'battery_state_of_charge', 'battery_charge_limit_current', 'battery_discharge_limit_current'],
+        actions: ['battery_charge_shift_pv_surplus', 'battery_discharge_shift', 'battery_grid_charge', 'battery_action_stop']
+    },
+    {
+        key: 'waermepumpe',
+        label: 'Wärmepumpe',
+        sensors: ['heatpump_dhw_tank_temp', 'heatpump_dhw_activated', 'heatpump_dhw_on_off', 'heatpump_heating_target_temp_normal', 'heatpump_heating_activated', 'heatpump_current_power_elect', 'heatpump_on_off', 'heatpump_supply_temp_hp'],
+        actions: ['hot_water', 'heating_target_temp']
+    },
+    {
+        key: 'auto',
+        label: 'Auto',
+        sensors: ['electronicvehicle_state_of_charge', 'electronicvehicle_plugged'],
+        actions: []
+    },
+    {
+        key: 'wallbox',
+        label: 'Wallbox',
+        sensors: ['wallbox_current_charging_power', 'wallbox_plugged'],
+        actions: ['car_charge_start', 'car_charge_stop']
+    },
+    {
+        key: 'raumtemperatur',
+        label: 'Raumtemperatur',
+        sensors: ['heatpump_temp_indoor_measured'],
+        actions: []
+    },
+    {
+        key: 'sonstiger_verbraucher',
+        label: 'Sonstiger Verbraucher',
+        sensors: [],
+        actions: ['consumer_on', 'consumer_off']
+    },
+]
 
 async function getJson(url) {
     const response = await fetch(url);
@@ -155,20 +239,48 @@ async function postJson(url, data) {
 const VALUE_POSTFIX = "_value";
 const ACTOR_VALUE_POSTFIX = "_actor_value";
 
-function saveConfiguration() {
-    return async () => {
-        console.log("saveConfiguration aufgerufen");
-        const sensorValues = {};
-        for (const [key] of Object.entries(configData["sensorMappings"])) {
-            sensorValues[key] = document.getElementById(key + VALUE_POSTFIX).value;
-        }
-        const actorValues = {};
-        for (const [key] of Object.entries(configData["actorMappings"])) {
-            actorValues[key] = document.getElementById(key + ACTOR_VALUE_POSTFIX).value;
-        }
+async function saveConfigurationNow() {
+    const sensorValues = {...(configData["sensorMappings"] || {})};
+    const actorValues = {...(configData["actorMappings"] || {})};
+    const deviceValues = {};
 
-        const toBeWritten = {"sensorMappings": sensorValues, "actorMappings": actorValues};
-        await putJson(configUri, toBeWritten);
+    for (const section of DEVICE_SECTIONS) {
+        deviceValues[section.key] = document.getElementById(deviceSelectId(section)).value;
+
+        for (const key of section.sensors) {
+            const element = document.getElementById(key + VALUE_POSTFIX);
+            if (element) {
+                sensorValues[key] = element.value;
+            }
+        }
+        for (const key of section.actions) {
+            const element = document.getElementById(key + ACTOR_VALUE_POSTFIX);
+            if (element) {
+                actorValues[key] = element.value;
+            }
+        }
+    }
+
+    const toBeWritten = {"sensorMappings": sensorValues, "actorMappings": actorValues, "deviceMappings": deviceValues};
+    await putJson(configUri, toBeWritten);
+    configData = toBeWritten;
+}
+
+let saveStatusTimeout = null;
+
+async function autoSave() {
+    const statusElement = document.getElementById('saveStatus');
+    try {
+        if (statusElement) statusElement.textContent = 'Speichere...';
+        await saveConfigurationNow();
+        if (statusElement) {
+            statusElement.textContent = 'Gespeichert';
+            clearTimeout(saveStatusTimeout);
+            saveStatusTimeout = setTimeout(() => { statusElement.textContent = ''; }, 2000);
+        }
+    } catch (err) {
+        console.log(err);
+        if (statusElement) statusElement.textContent = 'Fehler beim Speichern';
     }
 }
 
@@ -176,104 +288,177 @@ const loadConfiguration = async (event) => {
     try {
         console.log("loadConfiguration called");
         configData = await getJson(configUri);
-        const sensorIds = await getJson(sensorIdsUri);
-        const sensorIdsGUIElement = document.getElementById('sensorIds');
+        allSensorIdOptions = await getJson(sensorIdsUri);
+        devicesData = await getJson(devicesUri);
 
-        for (const sensorId of sensorIds) {
+        const allEntityOptionsElement = document.getElementById('allEntityOptions');
+        for (const optionText of allSensorIdOptions) {
             const option = document.createElement("option");
-            option.value = sensorId;
-            sensorIdsGUIElement.appendChild(option);
+            option.value = optionText;
+            allEntityOptionsElement.appendChild(option);
         }
-        renderSensorMappings(configData["sensorMappings"]);
-        renderActorMappings(configData["actorMappings"]);
+
+        renderDeviceSections();
     } catch (err) {
+        console.log(err);
     }
 }
 
-function renderSensorMappings(configData) {
-    const tbody = document.getElementById('sensorMappingId');
-    tbody.innerHTML = '';
-    for (const [key, value] of Object.entries(configData)) {
-        const row = document.createElement('tr');
-        const keyCell = document.createElement('td');
-        const context = helpinformation[key] ?? {'label': key};
-        const label = context.label;
-        keyCell.textContent = label;
+function deviceSelectId(section) {
+    return 'device_select_' + section.key;
+}
 
-        const tooltip = document.createElement("span");
-        tooltip.className = 'tooltip';
-        const tooltipIcon = document.createElement("span");
-        tooltipIcon.className = 'tooltip-icon';
-        tooltipIcon.textContent = '?';
-        tooltip.appendChild(tooltipIcon);
-        const tooltipText = document.createElement("span");
-        tooltipText.className = 'tooltip-text';
-        const tooltipFromConfig = helpinformation[key] ?? {'description': key};
-        tooltipText.textContent = tooltipFromConfig.description;
-        tooltip.appendChild(tooltipText);
-        keyCell.appendChild(tooltip);
+function renderDeviceSections() {
+    const container = document.getElementById('deviceSections');
+    container.innerHTML = '';
+    const deviceMappings = configData["deviceMappings"] || {};
 
-        const inputValue = document.createElement('input');
-        inputValue.id = key + VALUE_POSTFIX;
-        inputValue.value = value;
-        inputValue.setAttribute("list", "sensorIds");
-        inputValue.setAttribute("class", "sensorInput");
+    for (const section of DEVICE_SECTIONS) {
+        const sectionDiv = document.createElement('div');
+        sectionDiv.className = 'deviceSection';
 
-        const valueCell = document.createElement('td');
-        valueCell.appendChild(inputValue);
+        const heading = document.createElement('div');
+        heading.className = 'deviceHeading';
+        const headingTitle = document.createElement('h2');
+        headingTitle.textContent = section.label;
+        heading.appendChild(headingTitle);
 
-        row.appendChild(keyCell);
-        row.appendChild(valueCell);
-        tbody.appendChild(row);
+        const select = buildDeviceSelect(section, deviceMappings[section.key] || '');
+        heading.appendChild(select);
+        sectionDiv.appendChild(heading);
+
+        const bodyDiv = document.createElement('div');
+        bodyDiv.id = 'section_body_' + section.key;
+        bodyDiv.style.display = select.value ? '' : 'none';
+        if (select.value) {
+            renderSectionBody(bodyDiv, section, select.value);
+        }
+        sectionDiv.appendChild(bodyDiv);
+
+        select.addEventListener('change', () => {
+            bodyDiv.style.display = select.value ? '' : 'none';
+            if (select.value) {
+                renderSectionBody(bodyDiv, section, select.value);
+            } else {
+                bodyDiv.innerHTML = '';
+            }
+            autoSave();
+        });
+
+        container.appendChild(sectionDiv);
     }
 }
 
-function renderActorMappings(configData) {
-    const tbody = document.getElementById('actorMappingId');
-    tbody.innerHTML = '';
-    for (const [key, value] of Object.entries(configData)) {
-        const row = document.createElement('tr');
-        const keyCell = document.createElement('td');
-        const context = actorHelpInformation[key] ?? {'label': key};
-        const label = context.label;
-        keyCell.textContent = label;
+function buildDeviceSelect(section, currentDeviceId) {
+    const select = document.createElement('select');
+    select.id = deviceSelectId(section);
 
-        const tooltip = document.createElement("span");
-        tooltip.className = 'tooltip';
-        const tooltipIcon = document.createElement("span");
-        tooltipIcon.className = 'tooltip-icon';
-        tooltipIcon.textContent = '?';
-        tooltip.appendChild(tooltipIcon);
-        const tooltipText = document.createElement("span");
-        tooltipText.className = 'tooltip-text';
-        const tooltipFromConfig = actorHelpInformation[key] ?? {'description': key};
-        tooltipText.textContent = tooltipFromConfig.description;
-        tooltip.appendChild(tooltipText);
-        keyCell.appendChild(tooltip);
+    const noneOption = document.createElement('option');
+    noneOption.value = '';
+    noneOption.textContent = 'nicht vorhanden';
+    select.appendChild(noneOption);
 
-        const inputValue = document.createElement('input');
-        inputValue.id = key + ACTOR_VALUE_POSTFIX;
-        inputValue.value = value;
-        inputValue.setAttribute("list", "sensorIds");
-        inputValue.setAttribute("class", "sensorInput");
+    for (const device of devicesData.devices) {
+        const option = document.createElement('option');
+        option.value = device.id;
+        option.textContent = device.name;
+        select.appendChild(option);
+    }
 
-        const valueCell = document.createElement('td');
-        valueCell.appendChild(inputValue);
+    if (currentDeviceId && !devicesData.devices.some(device => device.id === currentDeviceId)) {
+        const staleOption = document.createElement('option');
+        staleOption.value = currentDeviceId;
+        staleOption.textContent = currentDeviceId + ' (nicht mehr gefunden)';
+        select.appendChild(staleOption);
+    }
 
-        row.appendChild(keyCell);
-        row.appendChild(valueCell);
-        tbody.appendChild(row);
+    select.value = currentDeviceId;
+    return select;
+}
+
+function renderSectionBody(bodyDiv, section, deviceId) {
+    bodyDiv.innerHTML = '';
+
+    if (section.sensors.length > 0) {
+        const entityDatalistId = 'entityOptions_' + section.key;
+        const datalist = document.createElement('datalist');
+        datalist.id = entityDatalistId;
+        const deviceEntityIds = devicesData.entityMap[deviceId] || [];
+        for (const optionText of allSensorIdOptions) {
+            const entityId = optionText.split(':')[0];
+            if (deviceEntityIds.includes(entityId)) {
+                const option = document.createElement('option');
+                option.value = optionText;
+                datalist.appendChild(option);
+            }
+        }
+        bodyDiv.appendChild(datalist);
+        bodyDiv.appendChild(buildMappingTable('Shyft-Sensor', 'Home Assistant Entity ID', section.sensors, configData["sensorMappings"] || {}, helpinformation, VALUE_POSTFIX, entityDatalistId));
+    }
+
+    if (section.actions.length > 0) {
+        bodyDiv.appendChild(buildMappingTable('Shyft-Aktion', 'Home Assistant Automation', section.actions, configData["actorMappings"] || {}, actorHelpInformation, ACTOR_VALUE_POSTFIX, 'allEntityOptions'));
     }
 }
 
+function buildMappingTable(headerLeft, headerRight, keys, mappingData, helpInfo, valuePostfix, datalistId) {
+    const table = document.createElement('table');
 
-function setup() {
-    const saveConfigButton = document.getElementById('saveConfig');
-    saveConfigButton.addEventListener('click', saveConfiguration());
+    const thead = document.createElement('thead');
+    const headRow = document.createElement('tr');
+    const th1 = document.createElement('th');
+    th1.className = 'tableHeaderCell';
+    th1.textContent = headerLeft;
+    const th2 = document.createElement('th');
+    th2.className = 'tableHeaderCell';
+    th2.textContent = headerRight;
+    headRow.appendChild(th1);
+    headRow.appendChild(th2);
+    thead.appendChild(headRow);
+    table.appendChild(thead);
+
+    const tbody = document.createElement('tbody');
+    for (const key of keys) {
+        tbody.appendChild(buildMappingRow(key, mappingData[key] || '', helpInfo, valuePostfix, datalistId));
+    }
+    table.appendChild(tbody);
+
+    return table;
 }
 
-// wait until DOM is ready
-window.addEventListener('DOMContentLoaded', setup);
+function buildMappingRow(key, value, helpInfo, valuePostfix, datalistId) {
+    const row = document.createElement('tr');
+    const keyCell = document.createElement('td');
+    const context = helpInfo[key] ?? {label: key};
+    keyCell.textContent = context.label;
+
+    const tooltip = document.createElement("span");
+    tooltip.className = 'tooltip';
+    const tooltipIcon = document.createElement("span");
+    tooltipIcon.className = 'tooltip-icon';
+    tooltipIcon.textContent = '?';
+    tooltip.appendChild(tooltipIcon);
+    const tooltipText = document.createElement("span");
+    tooltipText.className = 'tooltip-text';
+    tooltipText.textContent = (helpInfo[key] ?? {description: key}).description;
+    tooltip.appendChild(tooltipText);
+    keyCell.appendChild(tooltip);
+
+    const inputValue = document.createElement('input');
+    inputValue.id = key + valuePostfix;
+    inputValue.value = value;
+    inputValue.setAttribute("list", datalistId);
+    inputValue.setAttribute("class", "sensorInput");
+    inputValue.addEventListener('change', autoSave);
+
+    const valueCell = document.createElement('td');
+    valueCell.appendChild(inputValue);
+
+    row.appendChild(keyCell);
+    row.appendChild(valueCell);
+    return row;
+}
+
 
 if (document.readyState === 'complete') {
     loadConfiguration();

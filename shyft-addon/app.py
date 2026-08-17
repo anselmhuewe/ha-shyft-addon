@@ -65,6 +65,11 @@ def readSensorIds():
     return mapToResponse(response)
 
 
+@app.route("/devices", methods=["GET"])
+def readDevices():
+    return jsonify(homeassistant_adapter.get_devices_and_entities())
+
+
 def mapToResponse(response):
     result = []
     for item in response:

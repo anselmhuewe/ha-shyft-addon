@@ -4,11 +4,14 @@ from constants import HOMEASSISTANT_URI
 
 from datetime import datetime
 import requests
+import websocket
+import json
 import logging
 
 UNIT_OF_MEASUREMENT_W = "W"
 UNIT_OF_MEASUREMENT_KW = "kW"
 DEFAULT_UNIT_OF_MEASUREMENT = UNIT_OF_MEASUREMENT_KW
+WEBSOCKET_PATH = "/websocket"
 
 logger = logging.getLogger(__name__)
 
@@ -107,6 +110,47 @@ class HomeAssistantAdapter:
     def _map_datetime_to_bucket_time(self, value: datetime) -> datetime:
         minutes_rounded = (value.minute // self._bucket_size_in_minutes) * self._bucket_size_in_minutes
         return value.replace(minute=minutes_rounded, second=0, microsecond=0)
+
+    def get_devices_and_entities(self):
+        "Loads the HA device registry and entity registry via the websocket API and maps each device to its entity_ids"
+        ws_uri = self.homeassistant_uri.replace("https://", "wss://").replace("http://", "ws://") + WEBSOCKET_PATH
+        ws = websocket.create_connection(ws_uri)
+        try:
+            ws.recv()  # auth_required
+            ws.send(json.dumps({"type": "auth", "access_token": self.supervisor_token}))
+            auth_response = json.loads(ws.recv())
+            if auth_response.get("type") != "auth_ok":
+                raise Exception("Home Assistant websocket authentication failed")
+
+            devices = self._ws_command(ws, 1, "config/device_registry/list")
+            entities = self._ws_command(ws, 2, "config/entity_registry/list")
+        finally:
+            ws.close()
+
+        return self._build_devices_and_entities(devices, entities)
+
+    def _ws_command(self, ws, msg_id, command_type):
+        ws.send(json.dumps({"id": msg_id, "type": command_type}))
+        response = json.loads(ws.recv())
+        if not response.get("success"):
+            raise Exception(f"Home Assistant websocket command {command_type} failed: {response}")
+        return response["result"]
+
+    def _build_devices_and_entities(self, devices, entities):
+        device_list = []
+        entity_map = {}
+        for device in devices:
+            name = device.get("name_by_user") or device.get("name") or device["id"]
+            device_list.append({"id": device["id"], "name": name})
+            entity_map[device["id"]] = []
+
+        for entity in entities:
+            device_id = entity.get("device_id")
+            if device_id and device_id in entity_map:
+                entity_map[device_id].append(entity["entity_id"])
+
+        device_list.sort(key=lambda d: d["name"].lower())
+        return {"devices": device_list, "entityMap": entity_map}
 
     def get_from_homeassistant(self, path):
         headers = {
