@@ -38,6 +38,13 @@ homeassistant_adapter = HomeAssistantAdapter(
 shyft_adapter = ShyftAdapter()
 sync_service = SyncService(homeassistant_adapter, shyft_adapter)
 
+@app.after_request
+def add_no_cache_headers(response):
+    "Prevents the browser from serving a stale app.js/index.html after an addon update"
+    response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    return response
+
+
 # Serve the static HTML
 @app.route("/")
 def index():

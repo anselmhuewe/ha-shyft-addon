@@ -1,3 +1,7 @@
+== 0.0.14.2
+
+* Send no-cache headers so the browser always loads the latest app.js/index.html after an addon update
+
 == 0.0.14.1
 
 * Mask SUPERVISOR_TOKEN and SHYFT_ACCESS_KEY in startup logs instead of printing them in plain text
