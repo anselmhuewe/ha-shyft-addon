@@ -1,0 +1,59 @@
+blueprint:
+  name: "Shyft: Heizung Soll-Temperatur setzen"
+  description: >
+    Setzt die Soll-Temperatur deiner Heizung/Wärmepumpe. Wähle die Entity,
+    über die deine Wärmepumpen-Integration die Zieltemperatur entgegennimmt
+    - je nach Hersteller ist das entweder eine `number`-Entity oder eine
+    `climate`-Entity. Shyft übergibt beim Aufruf die gewünschte Temperatur
+    im Feld "target_temperature".
+
+    Nach dem Import unter Einstellungen -> Automatisierungen & Szenen ->
+    Skripte findest du das erzeugte Skript. Trage seine Entity-ID
+    (script.xxx) im shyft-power-Addon bei "Heizung Soll-Temperatur" ein.
+  domain: script
+  source_url: https://github.com/anselmhuewe/ha-shyft-addon/blob/main/blueprints/heizung_soll_temperatur.yaml
+  input:
+    zieltemperatur_entity:
+      name: Zieltemperatur-Entity
+      description: >
+        Die Number- oder Climate-Entity deiner Wärmepumpe, über die die
+        Soll-Temperatur gesteuert wird.
+      selector:
+        entity:
+          domain:
+            - number
+            - climate
+
+fields:
+  target_temperature:
+    name: Zieltemperatur
+    description: Die von Shyft berechnete Soll-Temperatur in °C.
+    required: true
+    selector:
+      number:
+        min: 0
+        max: 100
+        step: 0.5
+        unit_of_measurement: "°C"
+
+variables:
+  zieltemperatur_entity: !input zieltemperatur_entity
+
+sequence:
+  - choose:
+      - conditions:
+          - "{{ zieltemperatur_entity.split('.')[0] == 'number' }}"
+        sequence:
+          - action: number.set_value
+            target:
+              entity_id: "{{ zieltemperatur_entity }}"
+            data:
+              value: "{{ target_temperature }}"
+      - conditions:
+          - "{{ zieltemperatur_entity.split('.')[0] == 'climate' }}"
+        sequence:
+          - action: climate.set_temperature
+            target:
+              entity_id: "{{ zieltemperatur_entity }}"
+            data:
+              temperature: "{{ target_temperature }}"

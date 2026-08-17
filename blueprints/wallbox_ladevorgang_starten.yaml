@@ -1,0 +1,44 @@
+blueprint:
+  name: "Shyft: Wallbox Ladevorgang starten"
+  description: >
+    Startet den Ladevorgang an deiner Wallbox. Es gibt keine herstellerweit
+    einheitliche Aktion dafür - wähle unten die Aktion (den Service) deiner
+    eigenen Wallbox-Integration, die das Laden startet, z.B.
+    `easee.start_charging` oder `go_echarger.set_charging_allowed`.
+
+    Akzeptiert deine Wallbox beim Start auch eine Ladestromstärke (Ampere)?
+    Dann wechsle beim Ausfüllen der Aktion oben in den YAML-Modus und trage
+    in dem entsprechenden Datenfeld die Vorlage `{{ ampere }}` ein - Shyft
+    übergibt diesen Wert beim Aufruf im Feld "ampere".
+
+    Nach dem Import unter Einstellungen -> Automatisierungen & Szenen ->
+    Skripte findest du das erzeugte Skript. Trage seine Entity-ID
+    (script.xxx) im shyft-power-Addon bei "Auto laden" ein.
+  domain: script
+  source_url: https://github.com/anselmhuewe/ha-shyft-addon/blob/main/blueprints/wallbox_ladevorgang_starten.yaml
+  input:
+    start_charging_action:
+      name: Aktion zum Ladestart
+      description: >
+        Die Aktion (Service) deiner Wallbox-Integration, die den Ladevorgang
+        startet.
+      selector:
+        action: {}
+
+fields:
+  ampere:
+    name: Ladestromstärke (A)
+    description: >
+      Optional: Ladestrom in Ampere, den Shyft setzen möchte. Nur relevant,
+      wenn die oben gewählte Aktion diesen Wert per Vorlage ({{ ampere }})
+      verwendet.
+    required: false
+    selector:
+      number:
+        min: 0
+        max: 32
+        step: 1
+        unit_of_measurement: "A"
+
+sequence:
+  - action: !input start_charging_action
