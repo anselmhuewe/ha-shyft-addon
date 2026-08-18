@@ -1,3 +1,7 @@
+== 0.0.16.3
+
+* Log heating_target_temp script-sync failures to the addon log instead of swallowing them silently
+
 == 0.0.16.2
 
 * Update "Zieltemperatur (aktuell)" tooltip text

@@ -181,6 +181,7 @@ def writeConfig():
         if "actorMappings" in data:
             data["actorMappings"]["heating_target_temp"] = script_entity_id
     except Exception as e:
+        print("Failed to sync heating_target_temp script:", repr(e))
         script_sync_errors["heating_target_temp"] = str(e)
 
     with open(CONFIG_PATH, "w") as file:
