@@ -594,15 +594,29 @@ function renderSectionBody(bodyDiv, section, entryIds) {
             sensorDatalistIds[key] = datalistId;
         }
 
-        bodyDiv.appendChild(buildMappingTable('Shyft-Sensor', 'Home Assistant Entity ID', section.sensors, configData["sensorMappings"] || {}, helpinformation, VALUE_POSTFIX, key => sensorDatalistIds[key]));
+        const sensorsHeading = document.createElement('div');
+        sensorsHeading.className = 'sectionSubHeading';
+        sensorsHeading.textContent = 'Sensoren';
+        bodyDiv.appendChild(sensorsHeading);
+
+        bodyDiv.appendChild(buildMappingTable(section.sensors, configData["sensorMappings"] || {}, helpinformation, VALUE_POSTFIX, key => sensorDatalistIds[key], true));
     }
 
     const manualActions = section.actions.filter(key => !AUTO_MANAGED_ACTIONS.has(key));
-    if (manualActions.length > 0) {
-        bodyDiv.appendChild(buildMappingTable('Shyft-Aktion', 'Home Assistant Automation', manualActions, configData["actorMappings"] || {}, actorHelpInformation, ACTOR_VALUE_POSTFIX, () => 'allEntityOptions'));
+    const hasAutoManagedAction = section.actions.some(key => AUTO_MANAGED_ACTIONS.has(key));
+
+    if (manualActions.length > 0 || hasAutoManagedAction) {
+        const controlHeading = document.createElement('div');
+        controlHeading.className = 'sectionSubHeading controlSectionHeading';
+        controlHeading.textContent = 'Steuerung';
+        bodyDiv.appendChild(controlHeading);
     }
 
-    if (section.actions.includes('heating_target_temp')) {
+    if (manualActions.length > 0) {
+        bodyDiv.appendChild(buildMappingTable(manualActions, configData["actorMappings"] || {}, actorHelpInformation, ACTOR_VALUE_POSTFIX, () => 'allEntityOptions', false));
+    }
+
+    if (hasAutoManagedAction) {
         bodyDiv.appendChild(buildHeatingTargetTempControl());
     }
 }
@@ -613,7 +627,14 @@ function buildHeatingTargetTempControl() {
 
     const title = document.createElement('div');
     title.className = 'autoActionTitle';
-    title.textContent = actorHelpInformation['heating_target_temp'].label;
+    const titleText = document.createElement('span');
+    titleText.textContent = actorHelpInformation['heating_target_temp'].label;
+    title.appendChild(titleText);
+    const checkmark = document.createElement('span');
+    checkmark.className = 'autoActionCheckmark';
+    checkmark.textContent = ' ✓';
+    checkmark.hidden = true;
+    title.appendChild(checkmark);
     wrapper.appendChild(title);
 
     const status = document.createElement('div');
@@ -642,6 +663,7 @@ function buildHeatingTargetTempControl() {
             if (!result.configured) {
                 status.textContent = 'Befülle die "Zieltemperatur (aktuell)"';
                 status.className = 'autoActionStatus status-missing';
+                checkmark.hidden = true;
                 minusButton.disabled = true;
                 plusButton.disabled = true;
                 valueDisplay.textContent = 'Aktueller Wert: –';
@@ -652,16 +674,19 @@ function buildHeatingTargetTempControl() {
             if (result.error) {
                 status.textContent = 'Eingerichtet, aktueller Wert aber nicht lesbar: ' + result.error;
                 status.className = 'autoActionStatus status-error';
+                checkmark.hidden = true;
                 valueDisplay.textContent = 'Aktueller Wert: –';
             } else {
-                status.textContent = 'Eingerichtet (' + result.entity_id + ')';
+                status.textContent = '';
                 status.className = 'autoActionStatus status-ok';
+                checkmark.hidden = false;
                 valueDisplay.textContent = 'Aktueller Wert: ' + result.value + ' °C';
             }
         } catch (err) {
             console.log(err);
             status.textContent = 'Status konnte nicht geladen werden.';
             status.className = 'autoActionStatus status-error';
+            checkmark.hidden = true;
             valueDisplay.textContent = 'Aktueller Wert: –';
         }
     }
@@ -694,9 +719,9 @@ function buildHeatingTargetTempControl() {
     minusButton.addEventListener('click', () => runTest(-1));
     plusButton.addEventListener('click', () => runTest(1));
 
+    controls.appendChild(valueDisplay);
     controls.appendChild(minusButton);
     controls.appendChild(plusButton);
-    controls.appendChild(valueDisplay);
     wrapper.appendChild(controls);
 
     refreshHeatingTargetTempStatus = refreshStatus;
@@ -705,29 +730,28 @@ function buildHeatingTargetTempControl() {
     return wrapper;
 }
 
-function buildMappingTable(headerLeft, headerRight, keys, mappingData, helpInfo, valuePostfix, getDatalistId) {
+function buildMappingTable(keys, mappingData, helpInfo, valuePostfix, getDatalistId, showLiveValue) {
     const table = document.createElement('table');
-
-    const thead = document.createElement('thead');
-    const headRow = document.createElement('tr');
-    const th1 = document.createElement('th');
-    th1.className = 'tableHeaderCell';
-    th1.textContent = headerLeft;
-    const th2 = document.createElement('th');
-    th2.className = 'tableHeaderCell';
-    th2.textContent = headerRight;
-    headRow.appendChild(th1);
-    headRow.appendChild(th2);
-    thead.appendChild(headRow);
-    table.appendChild(thead);
 
     const tbody = document.createElement('tbody');
     for (const key of keys) {
-        tbody.appendChild(buildMappingRow(key, mappingData[key] || '', helpInfo, valuePostfix, getDatalistId(key)));
+        tbody.appendChild(buildMappingRow(key, mappingData[key] || '', helpInfo, valuePostfix, getDatalistId(key), showLiveValue));
     }
     table.appendChild(tbody);
 
     return table;
+}
+
+function extractEntityId(value) {
+    return (value || '').split(/[:\s]/)[0];
+}
+
+function formatEntityDisplay(entityId) {
+    if (!entityId) return '';
+    const match = allSensorIdOptions.find(entity => entity.entity_id === entityId);
+    if (!match) return entityId;
+    const stateAndUnit = match.label.slice(match.entity_id.length + 2, -1); // strip "entity_id (" prefix and trailing ")"
+    return `${entityId} (${stateAndUnit})`;
 }
 
 function buildTooltip(description) {
@@ -744,7 +768,7 @@ function buildTooltip(description) {
     return tooltip;
 }
 
-function buildMappingRow(key, value, helpInfo, valuePostfix, datalistId) {
+function buildMappingRow(key, value, helpInfo, valuePostfix, datalistId, showLiveValue) {
     const row = document.createElement('tr');
     const keyCell = document.createElement('td');
     const context = helpInfo[key] ?? {label: key};
@@ -756,11 +780,16 @@ function buildMappingRow(key, value, helpInfo, valuePostfix, datalistId) {
 
     const inputValue = document.createElement('input');
     inputValue.id = key + valuePostfix;
-    inputValue.value = value;
+    inputValue.value = showLiveValue ? formatEntityDisplay(value) : value;
     inputValue.setAttribute("list", datalistId);
     inputValue.setAttribute("class", "sensorInput");
     inputValue.setAttribute("autocomplete", "off");
-    inputValue.addEventListener('change', autoSave);
+    inputValue.addEventListener('change', () => {
+        if (showLiveValue) {
+            inputValue.value = formatEntityDisplay(extractEntityId(inputValue.value));
+        }
+        autoSave();
+    });
     inputWrapper.appendChild(inputValue);
 
     const clearButton = document.createElement('button');
@@ -784,8 +813,35 @@ function buildMappingRow(key, value, helpInfo, valuePostfix, datalistId) {
 }
 
 
+const LIVE_VALUE_REFRESH_INTERVAL_MS = 30000;
+
+async function refreshLiveSensorValues() {
+    if (document.visibilityState !== 'visible') {
+        return;
+    }
+    try {
+        allSensorIdOptions = await getJson(sensorIdsUri);
+    } catch (err) {
+        console.log(err);
+        return;
+    }
+
+    for (const section of INTEGRATION_SECTIONS) {
+        for (const key of section.sensors) {
+            const input = document.getElementById(key + VALUE_POSTFIX);
+            // skip fields the user is currently typing in so we don't interrupt them
+            if (!input || document.activeElement === input) {
+                continue;
+            }
+            input.value = formatEntityDisplay(extractEntityId(input.value));
+        }
+    }
+}
+
 if (document.readyState === 'complete') {
     loadConfiguration();
 } else {
     window.addEventListener('load', loadConfiguration);
 }
+
+setInterval(refreshLiveSensorValues, LIVE_VALUE_REFRESH_INTERVAL_MS);

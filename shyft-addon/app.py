@@ -6,6 +6,7 @@ from version import VERSION
 import os
 from flask import Flask, send_from_directory, jsonify, request, Response
 import json
+import re
 import time
 import shutil
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -93,7 +94,7 @@ def mapToResponse(response):
         unitOfMeasurement = attributes.get("unit_of_measurement", "")
         result.append({
             "entity_id": item["entity_id"],
-            "label": item["entity_id"] + ": " + item["state"] + " " + unitOfMeasurement,
+            "label": item["entity_id"] + " (" + item["state"] + " " + unitOfMeasurement + ")",
             "device_class": attributes.get("device_class", ""),
             "state": item["state"],
         })
@@ -135,6 +136,7 @@ def sync_heating_target_temp_script(entity_id):
     "Creates/updates or removes the auto-managed script so it always targets the currently mapped entity. Returns the resulting actorMappings value."
     if not entity_id:
         homeassistant_adapter.delete_script_config(HEATING_TARGET_TEMP_SCRIPT_ID)
+        homeassistant_adapter.call_service("script", "reload")
         return ""
 
     config = build_heating_target_temp_script_config(entity_id)
@@ -142,6 +144,8 @@ def sync_heating_target_temp_script(entity_id):
         raise Exception(f"Entity {entity_id} ist weder eine number- noch eine climate-Entity")
 
     homeassistant_adapter.put_script_config(HEATING_TARGET_TEMP_SCRIPT_ID, config)
+    # writing the config alone doesn't make HA (re-)register the script entity - it needs an explicit reload
+    homeassistant_adapter.call_service("script", "reload")
     return f"script.{HEATING_TARGET_TEMP_SCRIPT_ID}"
 
 
@@ -150,11 +154,13 @@ def writeConfig():
     content = request.get_data(as_text=True)
     data = json.loads(content)
 
-    # iterate over key/value pairs. integrationMappings holds lists (multi-select), the rest hold plain strings
+    # iterate over key/value pairs. integrationMappings holds lists (multi-select), the rest hold plain strings.
+    # entity ids never contain ":" or whitespace, so splitting on the first one strips both the old
+    # "entity_id: state unit" and the current "entity_id (state unit)" display formats.
     for key, value in data.items():
         for inner_key, inner_value in value.items():
             if isinstance(inner_value, str):
-                data[key][inner_key] = inner_value.split(":", 1)[0]
+                data[key][inner_key] = re.split(r"[:\s]", inner_value, maxsplit=1)[0]
 
     script_sync_errors = {}
     heating_entity = data.get("sensorMappings", {}).get("heatpump_heating_target_temp_normal", "")
@@ -178,6 +184,17 @@ def statusHeatingTargetTemp():
     entity_id = _read_current_config().get("sensorMappings", {}).get("heatpump_heating_target_temp_normal", "")
     if not entity_id:
         return jsonify({"configured": False})
+
+    script_entity_id = f"script.{HEATING_TARGET_TEMP_SCRIPT_ID}"
+    script_state = homeassistant_adapter.get_from_homeassistant(f"/api/states/{script_entity_id}")
+    if not isinstance(script_state, dict) or "state" not in script_state:
+        return jsonify({
+            "configured": True,
+            "entity_id": entity_id,
+            "value": None,
+            "error": f"{script_entity_id} wurde noch nicht angelegt. Speichere die Zieltemperatur-Entity erneut oder prüfe die Addon-Logs."
+        })
+
     try:
         value = homeassistant_adapter.read_entity_numeric_value(entity_id)
         return jsonify({"configured": True, "entity_id": entity_id, "value": value})

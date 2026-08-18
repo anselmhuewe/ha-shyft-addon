@@ -1,3 +1,12 @@
+== 0.0.16.1
+
+* Remove the "Shyft-Sensor / Home Assistant Entity ID" and "Shyft-Aktion / Home Assistant Automation" table headers; replace with clear "Sensoren" / "Steuerung" section headings, with more visual separation before "Steuerung"
+* Show a green checkmark next to "Heizung Soll-Temperatur" instead of "Eingerichtet (entity_id)" text
+* Sensor entity fields now permanently show "entity_id (state unit)" instead of just the bare id, and refresh automatically every 30s (paused while the tab isn't visible, and skips fields currently being edited)
+* Fix: the addon wrote the auto-managed script's config but never told Home Assistant to reload it, so the script entity never actually appeared - now calls script.reload after every write/delete
+* Fix: the status check now verifies the script entity itself exists, instead of only checking that the mapped sensor entity is readable
+* Fix: value-extraction on save only handled the old "entity_id: state unit" format; now handles "entity_id (state unit)" too
+
 == 0.0.16.0
 
 * First auto-managed action: "Heizung Soll-Temperatur" no longer needs a manually entered automation/script - the addon creates and maintains a script (number.set_value or climate.set_temperature) itself, targeting whatever entity is mapped at "Zieltemperatur (aktuell)"
