@@ -211,7 +211,8 @@ const INTEGRATION_SECTIONS = [
         key: 'raumtemperatur',
         label: 'Raumtemperatur',
         sensors: ['heatpump_temp_indoor_measured'],
-        actions: []
+        actions: [],
+        description: 'Hinterlege einen Innenraum-Temperatursensor. Shyft stellt dann sicher, dass deine Räume nie zu kalt werden. Die Vorlauftemperatur deiner Wärmepumpe kann dann ohne Reserven gesteuert werden und so Kosten sparen. Hinterlegst du keinen Sensor, simulieren wir die Raumtemperatur.\nTipp: Wenn du das Minimum mehrerer Temperatursensoren verwenden willst, erstelle in Home Assistant einen entsprechenden Hilfssensor.'
     },
     {
         key: 'sonstiger_verbraucher',
@@ -269,7 +270,12 @@ async function postJson(url, data) {
 const VALUE_POSTFIX = "_value";
 const ACTOR_VALUE_POSTFIX = "_actor_value";
 
+// Actions the addon sets up and calls itself (via a generated script), rather than
+// asking the user to paste an automation/script entity id.
+const AUTO_MANAGED_ACTIONS = new Set(['heating_target_temp']);
+
 let currentIntegrationSelections = {};
+let refreshHeatingTargetTempStatus = null;
 
 async function saveConfigurationNow() {
     const sensorValues = {...(configData["sensorMappings"] || {})};
@@ -294,8 +300,11 @@ async function saveConfigurationNow() {
     }
 
     const toBeWritten = {"sensorMappings": sensorValues, "actorMappings": actorValues, "integrationMappings": integrationValues};
-    await putJson(configUri, toBeWritten);
-    configData = toBeWritten;
+    const response = await putJson(configUri, toBeWritten);
+    configData = response;
+    if (refreshHeatingTargetTempStatus) {
+        refreshHeatingTargetTempStatus();
+    }
 }
 
 let saveStatusTimeout = null;
@@ -406,9 +415,15 @@ function renderIntegrationSections() {
 
         const heading = document.createElement('div');
         heading.className = 'integrationHeading';
+        const headingRow = document.createElement('div');
+        headingRow.className = 'integrationHeadingRow';
         const headingTitle = document.createElement('h2');
         headingTitle.textContent = section.label;
-        heading.appendChild(headingTitle);
+        headingRow.appendChild(headingTitle);
+        if (section.description) {
+            headingRow.appendChild(buildTooltip(section.description));
+        }
+        heading.appendChild(headingRow);
 
         const currentIds = integrationMappings[section.key] || [];
         currentIntegrationSelections[section.key] = currentIds;
@@ -582,9 +597,112 @@ function renderSectionBody(bodyDiv, section, entryIds) {
         bodyDiv.appendChild(buildMappingTable('Shyft-Sensor', 'Home Assistant Entity ID', section.sensors, configData["sensorMappings"] || {}, helpinformation, VALUE_POSTFIX, key => sensorDatalistIds[key]));
     }
 
-    if (section.actions.length > 0) {
-        bodyDiv.appendChild(buildMappingTable('Shyft-Aktion', 'Home Assistant Automation', section.actions, configData["actorMappings"] || {}, actorHelpInformation, ACTOR_VALUE_POSTFIX, () => 'allEntityOptions'));
+    const manualActions = section.actions.filter(key => !AUTO_MANAGED_ACTIONS.has(key));
+    if (manualActions.length > 0) {
+        bodyDiv.appendChild(buildMappingTable('Shyft-Aktion', 'Home Assistant Automation', manualActions, configData["actorMappings"] || {}, actorHelpInformation, ACTOR_VALUE_POSTFIX, () => 'allEntityOptions'));
     }
+
+    if (section.actions.includes('heating_target_temp')) {
+        bodyDiv.appendChild(buildHeatingTargetTempControl());
+    }
+}
+
+function buildHeatingTargetTempControl() {
+    const wrapper = document.createElement('div');
+    wrapper.className = 'autoActionControl';
+
+    const title = document.createElement('div');
+    title.className = 'autoActionTitle';
+    title.textContent = actorHelpInformation['heating_target_temp'].label;
+    wrapper.appendChild(title);
+
+    const status = document.createElement('div');
+    status.className = 'autoActionStatus';
+    status.textContent = 'Lade Status...';
+    wrapper.appendChild(status);
+
+    const controls = document.createElement('div');
+    controls.className = 'autoActionButtons';
+
+    const minusButton = document.createElement('button');
+    minusButton.type = 'button';
+    minusButton.textContent = 'Test: -1 Grad';
+
+    const plusButton = document.createElement('button');
+    plusButton.type = 'button';
+    plusButton.textContent = 'Test: +1 Grad';
+
+    const valueDisplay = document.createElement('span');
+    valueDisplay.className = 'autoActionValue';
+    valueDisplay.textContent = 'Aktueller Wert: –';
+
+    async function refreshStatus() {
+        try {
+            const result = await getJson(insideHomeAssistant + '/actions/heating_target_temp/status');
+            if (!result.configured) {
+                status.textContent = 'Befülle die "Zieltemperatur (aktuell)"';
+                status.className = 'autoActionStatus status-missing';
+                minusButton.disabled = true;
+                plusButton.disabled = true;
+                valueDisplay.textContent = 'Aktueller Wert: –';
+                return;
+            }
+            minusButton.disabled = false;
+            plusButton.disabled = false;
+            if (result.error) {
+                status.textContent = 'Eingerichtet, aktueller Wert aber nicht lesbar: ' + result.error;
+                status.className = 'autoActionStatus status-error';
+                valueDisplay.textContent = 'Aktueller Wert: –';
+            } else {
+                status.textContent = 'Eingerichtet (' + result.entity_id + ')';
+                status.className = 'autoActionStatus status-ok';
+                valueDisplay.textContent = 'Aktueller Wert: ' + result.value + ' °C';
+            }
+        } catch (err) {
+            console.log(err);
+            status.textContent = 'Status konnte nicht geladen werden.';
+            status.className = 'autoActionStatus status-error';
+            valueDisplay.textContent = 'Aktueller Wert: –';
+        }
+    }
+
+    async function runTest(delta) {
+        minusButton.disabled = true;
+        plusButton.disabled = true;
+        valueDisplay.textContent = 'Teste...';
+        try {
+            const response = await fetch(insideHomeAssistant + '/actions/heating_target_temp/test', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({delta})
+            });
+            const result = await response.json();
+            if (result.success) {
+                valueDisplay.textContent = 'Aktueller Wert: ' + result.value + ' °C';
+            } else {
+                valueDisplay.textContent = 'Fehler: ' + (result.message || 'unbekannt');
+            }
+        } catch (err) {
+            console.log(err);
+            valueDisplay.textContent = 'Fehler beim Testen';
+        } finally {
+            minusButton.disabled = false;
+            plusButton.disabled = false;
+        }
+    }
+
+    minusButton.addEventListener('click', () => runTest(-1));
+    plusButton.addEventListener('click', () => runTest(1));
+
+    controls.appendChild(minusButton);
+    controls.appendChild(plusButton);
+    controls.appendChild(valueDisplay);
+    wrapper.appendChild(controls);
+
+    refreshHeatingTargetTempStatus = refreshStatus;
+    refreshStatus();
+
+    return wrapper;
 }
 
 function buildMappingTable(headerLeft, headerRight, keys, mappingData, helpInfo, valuePostfix, getDatalistId) {
@@ -612,12 +730,7 @@ function buildMappingTable(headerLeft, headerRight, keys, mappingData, helpInfo,
     return table;
 }
 
-function buildMappingRow(key, value, helpInfo, valuePostfix, datalistId) {
-    const row = document.createElement('tr');
-    const keyCell = document.createElement('td');
-    const context = helpInfo[key] ?? {label: key};
-    keyCell.textContent = context.label;
-
+function buildTooltip(description) {
     const tooltip = document.createElement("span");
     tooltip.className = 'tooltip';
     const tooltipIcon = document.createElement("span");
@@ -626,9 +739,17 @@ function buildMappingRow(key, value, helpInfo, valuePostfix, datalistId) {
     tooltip.appendChild(tooltipIcon);
     const tooltipText = document.createElement("span");
     tooltipText.className = 'tooltip-text';
-    tooltipText.textContent = (helpInfo[key] ?? {description: key}).description;
+    tooltipText.textContent = description;
     tooltip.appendChild(tooltipText);
-    keyCell.appendChild(tooltip);
+    return tooltip;
+}
+
+function buildMappingRow(key, value, helpInfo, valuePostfix, datalistId) {
+    const row = document.createElement('tr');
+    const keyCell = document.createElement('td');
+    const context = helpInfo[key] ?? {label: key};
+    keyCell.textContent = context.label;
+    keyCell.appendChild(buildTooltip(context.description ?? key));
 
     const inputWrapper = document.createElement('div');
     inputWrapper.className = 'clearableInput';

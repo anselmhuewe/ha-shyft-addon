@@ -5,8 +5,8 @@ from version import VERSION
 
 import os
 from flask import Flask, send_from_directory, jsonify, request, Response
-import requests
 import json
+import time
 import shutil
 from apscheduler.schedulers.background import BackgroundScheduler
 import logging
@@ -24,8 +24,7 @@ CONFIG_PATH = "/data/config.json"
 SUPERVISOR_TOKEN = os.getenv("SUPERVISOR_TOKEN")
 HASSIO_URI_RUNNING_ON_HAOS = "http://supervisor/core"
 HASSIO_URI_RUNNING_REMOTE = "http://homeassistant.local:8123"
-# HASSIO_URI = HASSIO_URI_RUNNING_REMOTE
-HASSIO_URI = HASSIO_URI_RUNNING_ON_HAOS
+HEATING_TARGET_TEMP_SCRIPT_ID = "shyft_heizung_soll_temperatur"
 
 def mask_secret(secret):
     if not secret or len(secret) < 10:
@@ -101,6 +100,51 @@ def mapToResponse(response):
     return jsonify(result)
 
 
+def build_heating_target_temp_script_config(entity_id):
+    "Builds a script that sets entity_id to a target_temperature passed in at call time - mirrors blueprints/heizung_soll_temperatur.yaml"
+    domain = entity_id.split(".")[0]
+    if domain == "number":
+        action = {
+            "action": "number.set_value",
+            "target": {"entity_id": entity_id},
+            "data": {"value": "{{ target_temperature }}"}
+        }
+    elif domain == "climate":
+        action = {
+            "action": "climate.set_temperature",
+            "target": {"entity_id": entity_id},
+            "data": {"temperature": "{{ target_temperature }}"}
+        }
+    else:
+        return None
+
+    return {
+        "alias": "Shyft: Heizung Soll-Temperatur",
+        "fields": {
+            "target_temperature": {
+                "name": "Zieltemperatur",
+                "description": "Die von Shyft berechnete Soll-Temperatur in °C.",
+                "selector": {"number": {"min": 0, "max": 100, "step": 0.5}}
+            }
+        },
+        "sequence": [action]
+    }
+
+
+def sync_heating_target_temp_script(entity_id):
+    "Creates/updates or removes the auto-managed script so it always targets the currently mapped entity. Returns the resulting actorMappings value."
+    if not entity_id:
+        homeassistant_adapter.delete_script_config(HEATING_TARGET_TEMP_SCRIPT_ID)
+        return ""
+
+    config = build_heating_target_temp_script_config(entity_id)
+    if config is None:
+        raise Exception(f"Entity {entity_id} ist weder eine number- noch eine climate-Entity")
+
+    homeassistant_adapter.put_script_config(HEATING_TARGET_TEMP_SCRIPT_ID, config)
+    return f"script.{HEATING_TARGET_TEMP_SCRIPT_ID}"
+
+
 @app.route("/config", methods=["PUT"])
 def writeConfig():
     content = request.get_data(as_text=True)
@@ -112,20 +156,58 @@ def writeConfig():
             if isinstance(inner_value, str):
                 data[key][inner_key] = inner_value.split(":", 1)[0]
 
-    result = json.dumps(data)
+    script_sync_errors = {}
+    heating_entity = data.get("sensorMappings", {}).get("heatpump_heating_target_temp_normal", "")
+    try:
+        script_entity_id = sync_heating_target_temp_script(heating_entity)
+        if "actorMappings" in data:
+            data["actorMappings"]["heating_target_temp"] = script_entity_id
+    except Exception as e:
+        script_sync_errors["heating_target_temp"] = str(e)
+
     with open(CONFIG_PATH, "w") as file:
-        file.write(result)
+        file.write(json.dumps(data))
 
-    return result
+    response_data = dict(data)
+    response_data["scriptSyncErrors"] = script_sync_errors
+    return jsonify(response_data)
 
-def postToHA(path, body):
-    headers = {
-        "Content-Type": "application/json",
-        "Authorization": f"Bearer {SUPERVISOR_TOKEN}"
-    }
-    completeUri = HASSIO_URI + path
-    response = requests.post(completeUri, headers=headers, json=body)
-    return response.json()
+
+@app.route("/actions/heating_target_temp/status", methods=["GET"])
+def statusHeatingTargetTemp():
+    entity_id = _read_current_config().get("sensorMappings", {}).get("heatpump_heating_target_temp_normal", "")
+    if not entity_id:
+        return jsonify({"configured": False})
+    try:
+        value = homeassistant_adapter.read_entity_numeric_value(entity_id)
+        return jsonify({"configured": True, "entity_id": entity_id, "value": value})
+    except Exception as e:
+        return jsonify({"configured": True, "entity_id": entity_id, "value": None, "error": str(e)})
+
+
+@app.route("/actions/heating_target_temp/test", methods=["POST"])
+def testHeatingTargetTemp():
+    body = request.get_json(force=True, silent=True) or {}
+    delta = body.get("delta", 0)
+
+    entity_id = _read_current_config().get("sensorMappings", {}).get("heatpump_heating_target_temp_normal", "")
+    if not entity_id:
+        return jsonify({"success": False, "message": "Keine Zieltemperatur-Entity zugeordnet"}), 400
+
+    try:
+        current_value = homeassistant_adapter.read_entity_numeric_value(entity_id)
+        new_value = current_value + delta
+        homeassistant_adapter.call_service("script", HEATING_TARGET_TEMP_SCRIPT_ID, {"target_temperature": new_value})
+        time.sleep(1.5)
+        confirmed_value = homeassistant_adapter.read_entity_numeric_value(entity_id)
+        return jsonify({"success": True, "value": confirmed_value})
+    except Exception as e:
+        return jsonify({"success": False, "message": str(e)}), 500
+
+
+def _read_current_config():
+    with open(CONFIG_PATH, "r") as file:
+        return json.load(file)
 
 
 def sync_sensors_periodically():

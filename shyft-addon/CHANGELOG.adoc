@@ -1,3 +1,9 @@
+== 0.0.16.0
+
+* First auto-managed action: "Heizung Soll-Temperatur" no longer needs a manually entered automation/script - the addon creates and maintains a script (number.set_value or climate.set_temperature) itself, targeting whatever entity is mapped at "Zieltemperatur (aktuell)"
+* New "Test: +1 Grad" / "Test: -1 Grad" buttons with live current-value display to verify the setup actually works
+* Addon can now write to Home Assistant (script config API, service calls) - previously read-only. New adapter methods: post/delete_from_homeassistant, put/delete_script_config, call_service, read_entity_numeric_value
+
 == 0.0.15.1
 
 * Add a clear ("×") button to sensor/action entity fields

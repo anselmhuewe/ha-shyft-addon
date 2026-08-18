@@ -175,3 +175,44 @@ class HomeAssistantAdapter:
             return response.json()
         except:
             raise Exception(response.text)
+
+    def post_to_homeassistant(self, path, json_body=None):
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {self.supervisor_token}"
+        }
+        completeUri = self.homeassistant_uri + path
+        response = requests.post(completeUri, headers=headers, json=json_body if json_body is not None else {})
+        if not response.ok:
+            raise Exception(f"POST {path} failed: {response.status_code} {response.text}")
+        try:
+            return response.json()
+        except ValueError:
+            return {}
+
+    def delete_from_homeassistant(self, path):
+        headers = {"Authorization": f"Bearer {self.supervisor_token}"}
+        completeUri = self.homeassistant_uri + path
+        response = requests.delete(completeUri, headers=headers)
+        if not response.ok and response.status_code != 404:
+            raise Exception(f"DELETE {path} failed: {response.status_code} {response.text}")
+
+    def put_script_config(self, script_id, config):
+        "Creates or updates a Home Assistant script via the config REST API (the same endpoint the UI script editor uses)"
+        return self.post_to_homeassistant(f"/api/config/script/config/{script_id}", config)
+
+    def delete_script_config(self, script_id):
+        self.delete_from_homeassistant(f"/api/config/script/config/{script_id}")
+
+    def call_service(self, domain, service, data=None):
+        return self.post_to_homeassistant(f"/api/services/{domain}/{service}", data)
+
+    def read_entity_numeric_value(self, entity_id):
+        "Reads the current numeric value of an entity - the target temperature attribute for climate entities, the state for number entities"
+        response = self.get_from_homeassistant(f"/api/states/{entity_id}")
+        domain = entity_id.split(".")[0]
+        if domain == "climate":
+            value = response.get("attributes", {}).get("temperature")
+        else:
+            value = response.get("state")
+        return float(value)

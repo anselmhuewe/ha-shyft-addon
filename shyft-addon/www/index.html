@@ -149,12 +149,14 @@
             position: absolute;
             bottom: 150%;
             left: 50%;
-            padding: 4px 8px;
+            padding: 6px 10px;
             background: var(--color-tooltip-bg);
             color: var(--color-tooltip-text);
             font-size: 11px;
             border-radius: 4px;
-            white-space: nowrap;
+            white-space: pre-line;
+            width: max-content;
+            max-width: 260px;
             opacity: 0;
             pointer-events: none;
             transition: opacity 0.15s ease;
@@ -209,6 +211,54 @@
             opacity: 0.85;
         }
 
+        .autoActionControl {
+            margin-top: 1.5em;
+            padding-top: 1em;
+            border-top: 1px solid var(--color-border);
+        }
+        .autoActionTitle {
+            font-weight: 600;
+            margin-bottom: 0.3em;
+        }
+        .autoActionStatus {
+            font-size: 0.9em;
+            color: var(--color-text-secondary);
+            margin-bottom: 0.6em;
+        }
+        .autoActionStatus.status-ok {
+            color: var(--color-accent);
+        }
+        .autoActionStatus.status-error,
+        .autoActionStatus.status-missing {
+            color: var(--color-error);
+        }
+        .autoActionButtons {
+            display: flex;
+            align-items: center;
+            gap: 0.75em;
+        }
+        .autoActionButtons button {
+            font-family: var(--font-body);
+            background: var(--color-input-bg);
+            color: var(--color-text);
+            border: 1px solid var(--color-input-border);
+            border-radius: 6px;
+            padding: 0.5em 1em;
+            font-size: 0.9em;
+            cursor: pointer;
+        }
+        .autoActionButtons button:hover:not(:disabled) {
+            border-color: var(--color-accent);
+        }
+        .autoActionButtons button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        .autoActionValue {
+            font-weight: 600;
+            min-width: 5em;
+        }
+
         .integrationSection {
             margin-top: 1.5em;
             padding: 1.25em 1.5em;
@@ -220,6 +270,10 @@
             flex-direction: column;
             align-items: flex-start;
             gap: 0.5em;
+        }
+        .integrationHeadingRow {
+            display: flex;
+            align-items: center;
         }
         .integrationHeading h2 {
             font-family: var(--font-heading);
