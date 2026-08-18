@@ -1,3 +1,8 @@
+== 0.0.16.2
+
+* Update "Zieltemperatur (aktuell)" tooltip text
+* Fix: config.yaml's version was left at 0.0.16.0 in the previous release even though the code shipped as 0.0.16.1, so Supervisor never offered the update. The version now lives only in config.yaml (app.py reads it at startup) instead of also being duplicated in version.py, removing the class of bug entirely
+
 == 0.0.16.1
 
 * Remove the "Shyft-Sensor / Home Assistant Entity ID" and "Shyft-Aktion / Home Assistant Automation" table headers; replace with clear "Sensoren" / "Steuerung" section headings, with more visual separation before "Steuerung"

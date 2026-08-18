@@ -54,7 +54,7 @@ const helpinformation = {
     },
     'heatpump_heating_target_temp_normal': {
         label: 'Zieltemperatur (aktuell)',
-        description: ' Gewünschte Raumtemperatur in °C, die du an deiner Wärmepumpe einstellst. Über die stündliche Anpassung dieses Werte steuert Shyft die Leistung deiner Wärmepumpe.'
+        description: ' Gewünschte Raumtemperatur (Solltemperatur). Über die stündliche Anpassung dieses Wertes steuert Shyft kurzfristig die Leistung deiner Wärmepumpe und stellt die gewünschte Solltemperatur in deinen Räumen sicher.'
     },
     'heatpump_heating_activated': {
         label: 'Heizung aktiviert?',

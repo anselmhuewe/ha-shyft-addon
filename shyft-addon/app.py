@@ -1,7 +1,6 @@
 from sync_service import SyncService
 from homeassistant_adapter import HomeAssistantAdapter
 from shyft_adapter import ShyftAdapter
-from version import VERSION
 
 import os
 from flask import Flask, send_from_directory, jsonify, request, Response
@@ -14,9 +13,22 @@ import logging
 import sys
 
 
+def load_addon_version():
+    "Reads the version straight from config.yaml so there's a single source of truth (previously a separate version.py could drift out of sync)"
+    try:
+        with open("config.yaml", "r", encoding="utf-8") as f:
+            match = re.search(r'^version:\s*"([^"]+)"', f.read(), re.MULTILINE)
+            if match:
+                return match.group(1)
+    except Exception:
+        pass
+    return "0.0.0.0"
+
+
 logging.basicConfig(stream=sys.stdout, level=logging.INFO)
 app = Flask(__name__, static_folder="www", static_url_path="")
 
+VERSION = load_addon_version()
 SHYFT_ACCESS_KEY = "not_set_yet"
 DETAILED_LOGGING = False
 DEVELOPMENT_MODE = False
