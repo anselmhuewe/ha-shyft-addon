@@ -1,3 +1,20 @@
+== 0.0.19.0
+
+* Per-Aktionstyp-Toggle in der Konfiguration ("nur simulieren"), default An - ersetzt shyft-powers eigene "(deaktiviert)"-Logik vollständig; der Zustand des Toggles entscheidet jetzt, ob Start/Ende einer Aktion real oder nur simuliert (geloggt) wird. Die reinen "Stopp"-Aktoren (Batterie-Aktion beenden, Auto laden beenden) haben bewusst keinen eigenen Toggle, sie folgen dem Toggle ihres zugehörigen Start-Aktionstyps
+* Wird ein Aktionstyp umgeschaltet, während eine passende Aktion gerade läuft, wird sie sofort gestoppt bzw. gestartet, statt auf den nächsten 15-Minuten-Poll zu warten
+* Neuer Konfigurationsbereich "Benachrichtigungen": Handy-Zielfeld (Home-Assistant notify-Entity oder -Service) plus an/aus-Schalter pro Benachrichtigungstyp. Erster Typ: "Aktionen starten / beenden" (aktiv). Zweiter Typ "Gerätestatus abweichend von Shyft-Steuerung" ist im 15-Minuten-Poll verdrahtet, aber die eigentliche Abweichungserkennung fehlt noch - die braucht dieselbe pro-Aktion-Logik wie die Start/Ende-Ausführung selbst und folgt in einem späteren Schritt
+* Entfernt: das interne "shyftActionsEnabled"-Flag aus 0.0.18.0 (nie in der UI sichtbar) - durch die Aktionstyp-Toggles ersetzt
+
+== 0.0.18.0
+
+* New cron job: polls the shyft-power action queue on the hour and every 15 minutes and fires start/end hooks per action (start: Status "aktiv" and Date Start passed; end: Date End passed, regardless of Status). Both are deduplicated per action id via a persisted set that survives addon restarts, so an extended action (same id, later Date End) doesn't re-fire start, while a superseded ("abgelöst") action - which gets a new id from shyft-power - correctly fires its own start. What start/end actually do per action type is not implemented yet (placeholder logging only), pending a follow-up step
+* New "shyftActionsEnabled" config flag (defaults to off, no UI toggle yet) to later gate whether these hooks are allowed to act on real devices
+* Fix: saving the configuration form overwrote the whole config file instead of merging, which would have silently wiped the new action-tracking state on every normal save
+
+== 0.0.17.1
+
+* Fix: BUBBLE_URI_TEST (development_mode) still pointed at the old anselmhuewe.bubbleapps.io domain; now https://shyft-power.com/version-test/, so development_mode correctly targets shyft-power's test environment for all workflows including the new action queue
+
 == 0.0.17.0
 
 * Switch the outbound Bubble endpoint from anselmhuewe.bubbleapps.io to shyft-power.com

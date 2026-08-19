@@ -222,6 +222,9 @@
         .autoActionTitle {
             font-weight: 600;
             margin-bottom: 0.3em;
+            display: flex;
+            align-items: center;
+            gap: 0.6em;
         }
         .autoActionCheckmark {
             color: var(--color-accent);
@@ -501,6 +504,54 @@
             margin-top: 0.5em;
         }
 
+        .toggleCell {
+            width: 1%;
+            white-space: nowrap;
+            text-align: right;
+        }
+        .toggleSwitch {
+            position: relative;
+            display: inline-block;
+            width: 2.6em;
+            height: 1.5em;
+            vertical-align: middle;
+        }
+        .toggleSwitch input {
+            opacity: 0;
+            width: 0;
+            height: 0;
+        }
+        .toggleSlider {
+            position: absolute;
+            cursor: pointer;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-color: var(--color-input-border);
+            border-radius: 999px;
+            transition: background-color 0.15s ease;
+        }
+        .toggleSlider::before {
+            position: absolute;
+            content: "";
+            height: 1.1em;
+            width: 1.1em;
+            left: 0.2em;
+            bottom: 0.2em;
+            background-color: var(--color-bg);
+            border-radius: 50%;
+            transition: transform 0.15s ease;
+        }
+        .toggleSwitch input:checked + .toggleSlider {
+            background-color: var(--color-accent);
+        }
+        .toggleSwitch input:checked + .toggleSlider::before {
+            transform: translateX(1.1em);
+        }
+        .toggleSwitch input:focus-visible + .toggleSlider {
+            box-shadow: 0 0 0 3px rgba(46, 204, 113, 0.35);
+        }
         #saveStatus {
             font-size: 0.9em;
             color: var(--color-text-secondary);
@@ -542,6 +593,7 @@
     <datalist id="allEntityOptions">
     </datalist>
     <div id="deviceSections"></div>
+    <div id="notificationSection"></div>
     <div class="actionMenu">
         <button onclick="trigger()">Verbindung testen</button>
         <span id="saveStatus"></span>

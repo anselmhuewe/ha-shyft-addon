@@ -1,4 +1,22 @@
 {
+  "actionTypeEnabled": {
+    "pv_feed_in_limit": true,
+    "consumption_limit_14a": true,
+    "battery_charge_shift_pv_surplus": true,
+    "battery_discharge_shift": true,
+    "battery_grid_charge": true,
+    "hot_water": true,
+    "heating_target_temp": true,
+    "car_charge_start": true,
+    "consumer_on": true
+  },
+  "notificationTargets": {
+    "phone": ""
+  },
+  "notificationsEnabled": {
+    "action_start_end": true,
+    "device_status_deviation": true
+  },
   "integrationMappings": {
     "wechselrichter": [],
     "batterie": [],

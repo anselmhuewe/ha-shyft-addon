@@ -7,6 +7,7 @@ from flask import Flask, send_from_directory, jsonify, request, Response
 import json
 import re
 import shutil
+import time
 from apscheduler.schedulers.background import BackgroundScheduler
 import logging
 import sys
@@ -178,15 +179,23 @@ def sync_heating_target_temp_script(entity_id):
 @app.route("/config", methods=["PUT"])
 def writeConfig():
     content = request.get_data(as_text=True)
-    data = json.loads(content)
+    incoming = json.loads(content)
 
     # iterate over key/value pairs. integrationMappings holds lists (multi-select), the rest hold plain strings.
     # entity ids never contain ":" or whitespace, so splitting on the first one strips both the old
     # "entity_id: state unit" and the current "entity_id (state unit)" display formats.
-    for key, value in data.items():
+    for key, value in incoming.items():
+        if not isinstance(value, dict):
+            continue
         for inner_key, inner_value in value.items():
             if isinstance(inner_value, str):
-                data[key][inner_key] = re.split(r"[:\s]", inner_value, maxsplit=1)[0]
+                value[inner_key] = re.split(r"[:\s]", inner_value, maxsplit=1)[0]
+
+    # merge onto the existing config instead of replacing it outright, so backend-managed
+    # fields the frontend doesn't know about (startedShyftActionIds, endedShyftActionIds) survive
+    data = _read_current_config()
+    old_action_type_enabled = data.get("actionTypeEnabled", {})
+    data.update(incoming)
 
     script_sync_errors = {}
     heating_entity = data.get("sensorMappings", {}).get("heatpump_heating_target_temp_normal", "")
@@ -198,8 +207,13 @@ def writeConfig():
         print("Failed to sync heating_target_temp script:", repr(e))
         script_sync_errors["heating_target_temp"] = str(e)
 
-    with open(CONFIG_PATH, "w") as file:
-        file.write(json.dumps(data))
+    if "actionTypeEnabled" in incoming:
+        try:
+            apply_action_type_toggle_changes(old_action_type_enabled, data.get("actionTypeEnabled", {}), data)
+        except Exception as e:
+            print("[Shyft] Sofort-Abgleich nach Toggle-Aenderung fehlgeschlagen:", repr(e))
+
+    _write_current_config(data)
 
     response_data = dict(data)
     response_data["scriptSyncErrors"] = script_sync_errors
@@ -256,6 +270,216 @@ def _read_current_config():
         return json.load(file)
 
 
+def _write_current_config(data):
+    with open(CONFIG_PATH, "w") as file:
+        file.write(json.dumps(data))
+
+
+# Which actorMappings keys represent a distinct Aktionstyp shyft-power schedules, and the exact
+# "Action Name" string shyft-power uses for it in the action queue (confirmed identical/stable).
+# Keys left out on purpose: battery_action_stop and car_charge_stop are shared "stop" actors for
+# an already-toggled type (battery_grid_charge/battery_discharge_shift, car_charge_start) and
+# don't need their own toggle; consumer_off is the same kind of paired stop actor for consumer_on.
+ACTION_TYPE_TOGGLE_KEYS = {
+    "pv_feed_in_limit": "PV: Einspeisung begrenzen",
+    "consumption_limit_14a": "Verbrauch begrenzen (§14a)",
+    "battery_charge_shift_pv_surplus": "Batterie-Laden verschieben (PV-Überschuss)",
+    "battery_discharge_shift": "Batterie-Entladen verschieben",
+    "battery_grid_charge": "Batterie netzladen",
+    "hot_water": "Warmwasser",
+    "heating_target_temp": "Heizung Soll-Temperatur",
+    "car_charge_start": "Auto laden",
+    "consumer_on": "Verbraucher an",
+}
+ACTION_NAME_TO_ACTOR_KEY = {name: key for key, name in ACTION_TYPE_TOGGLE_KEYS.items()}
+
+# Notification types the user can toggle in the "Benachrichtigungen" config section - extend this
+# dict as new types are added, the frontend renders one toggle row per entry.
+NOTIFICATION_TYPES = {
+    "action_start_end": "Aktionen starten / beenden",
+    "device_status_deviation": "Gerätestatus abweichend von Shyft-Steuerung",
+}
+
+
+def is_action_type_enabled(config, action_name):
+    "Addon-side replacement for shyft-power's own '(deaktiviert)' status suffix - the per-Aktionstyp toggle decides, not shyft-power."
+    actor_key = ACTION_NAME_TO_ACTOR_KEY.get(action_name)
+    if actor_key is None:
+        return True
+    return config.get("actionTypeEnabled", {}).get(actor_key, True)
+
+
+def notify_action_event(config, action, verb):
+    "Sends an optional push notification (e.g. 'gestartet'/'beendet') if the user configured a phone target and hasn't disabled this notification type."
+    if not config.get("notificationsEnabled", {}).get("action_start_end", True):
+        return
+    target = config.get("notificationTargets", {}).get("phone", "")
+    if not target:
+        return
+    label = action.get("Action Name", "?")
+    try:
+        homeassistant_adapter.send_notification(target, f"Shyft-Aktion {verb}: {label}")
+    except Exception as e:
+        print(f"[Shyft] Benachrichtigung fehlgeschlagen: {e!r}")
+
+
+def check_device_status_deviation(action, config):
+    """Placeholder - comparing the actual Home Assistant device state against what shyft-power
+    currently commands for a running action requires the same per-action logic as the concrete
+    start/end behaviour (see handle_shyft_action_start/end), which is defined in a later step.
+    Wired into the 15-min poll now so the notification only needs enabling once that lands.
+    """
+    if not config.get("notificationsEnabled", {}).get("device_status_deviation", True):
+        return
+    # no per-action comparison logic yet - nothing to detect or notify about
+
+
+def handle_shyft_action_start(action, actions_enabled, config):
+    "Placeholder - the concrete start behaviour per action is defined in a later step"
+    label = action.get("Action Name", "?")
+    target = action.get("Target Value")
+    if actions_enabled:
+        print(f"[Shyft] Start faellig fuer '{label}' (Ziel: {target}) - Ausfuehrung pro Aktion noch nicht implementiert.")
+    else:
+        print(f"[Shyft] Start faellig fuer '{label}' (Ziel: {target}) - Aktionstyp ist deaktiviert, nur simuliert.")
+    notify_action_event(config, action, "gestartet" if actions_enabled else "gestartet (nur simuliert)")
+
+
+def handle_shyft_action_end(action, actions_enabled, config):
+    "Placeholder - the concrete end behaviour per action is defined in a later step"
+    label = action.get("Action Name", "?")
+    if actions_enabled:
+        print(f"[Shyft] Ende faellig fuer '{label}' - Ausfuehrung pro Aktion noch nicht implementiert.")
+    else:
+        print(f"[Shyft] Ende faellig fuer '{label}' - Aktionstyp ist deaktiviert, nur simuliert.")
+    notify_action_event(config, action, "beendet" if actions_enabled else "beendet (nur simuliert)")
+
+
+def process_shyft_actions():
+    """Polls shyft-power's action queue and fires start/end hooks based on timing, independent
+    of what the API currently reports for status (see handle_shyft_action_start/end).
+
+    Start: Status is "aktiv" and Date Start has passed - fired exactly once per action id,
+    tracked via a persisted set of already-started ids. This also covers extended actions for
+    free: an extension keeps the same id and only pushes Date End further out, so it's already
+    in the set and won't fire again. A superseded ("abgeloest") action gets a new id from Shyft,
+    which correctly fires its own start.
+
+    End: Date End has passed, regardless of Status - fired exactly once per action id, tracked
+    via a persisted set of already-ended ids so it survives addon restarts and doesn't require
+    re-checking the API.
+
+    Whether a fire is "real" or "simulated only" is decided per Aktionstyp via the addon's own
+    actionTypeEnabled toggle (see is_action_type_enabled) - shyft-power's own '(deaktiviert)'
+    status suffix is intentionally ignored here.
+    """
+    config = _read_current_config()
+    started_ids = set(config.get("startedShyftActionIds", []))
+    ended_ids = set(config.get("endedShyftActionIds", []))
+
+    user_id = extract_shyft_user_id(shyft_adapter.bubble_token)
+    if not user_id:
+        print("[Shyft] Kein gueltiger Access-Key konfiguriert, ueberspringe Action-Poll.")
+        return
+
+    result = shyft_adapter.get_actions(user_id)
+    if result.get("status") != "success":
+        print("[Shyft] Action-Poll fehlgeschlagen:", result.get("message"))
+        return
+
+    actions = (result.get("response") or {}).get("actions") or []
+    now_ms = time.time() * 1000
+    seen_ids = set()
+
+    for action in actions:
+        action_id = action.get("_id")
+        if action_id:
+            seen_ids.add(action_id)
+
+        status = (action.get("Status") or "").lower()
+        is_active = status.startswith("aktiv")
+        date_start = action.get("Date Start")
+        date_end = action.get("Date End")
+        enabled = is_action_type_enabled(config, action.get("Action Name"))
+
+        if is_active and date_start is not None and date_start <= now_ms and action_id and action_id not in started_ids:
+            handle_shyft_action_start(action, enabled, config)
+            started_ids.add(action_id)
+
+        if date_end is not None and date_end <= now_ms and action_id and action_id not in ended_ids:
+            handle_shyft_action_end(action, enabled, config)
+            ended_ids.add(action_id)
+
+        currently_running = is_active and date_start is not None and date_start <= now_ms and not (date_end is not None and date_end <= now_ms)
+        if currently_running:
+            check_device_status_deviation(action, config)
+
+    # only keep ids that could still turn up in a future poll, so these don't grow forever
+    config["startedShyftActionIds"] = sorted(started_ids & seen_ids)
+    config["endedShyftActionIds"] = sorted(ended_ids & seen_ids)
+    _write_current_config(config)
+
+
+def apply_action_type_toggle_changes(old_map, new_map, config):
+    """Called from writeConfig when the actionTypeEnabled toggles changed. A currently running
+    action of an affected Aktionstyp must be stopped/started right away instead of waiting for
+    the next scheduled poll (up to 15 min later).
+    """
+    changed_keys = [k for k in new_map if new_map.get(k, True) != old_map.get(k, True)]
+    if not changed_keys:
+        return
+
+    changed_names = {ACTION_TYPE_TOGGLE_KEYS[k] for k in changed_keys if k in ACTION_TYPE_TOGGLE_KEYS}
+    if not changed_names:
+        return
+
+    user_id = extract_shyft_user_id(shyft_adapter.bubble_token)
+    if not user_id:
+        return
+
+    result = shyft_adapter.get_actions(user_id)
+    if result.get("status") != "success":
+        print("[Shyft] Sofort-Abgleich nach Toggle-Aenderung fehlgeschlagen:", result.get("message"))
+        return
+
+    actions = (result.get("response") or {}).get("actions") or []
+    now_ms = time.time() * 1000
+    started_ids = set(config.get("startedShyftActionIds", []))
+    ended_ids = set(config.get("endedShyftActionIds", []))
+
+    for action in actions:
+        action_name = action.get("Action Name")
+        if action_name not in changed_names:
+            continue
+
+        action_id = action.get("_id")
+        status = (action.get("Status") or "").lower()
+        is_active = status.startswith("aktiv")
+        date_start = action.get("Date Start")
+        date_end = action.get("Date End")
+
+        # only a currently running action needs immediate action - anything else is handled by
+        # the normal poll (a future action just picks up the new toggle state when it starts)
+        if not (is_active and date_start is not None and date_start <= now_ms):
+            continue
+        if date_end is not None and date_end <= now_ms:
+            continue
+
+        # actions_enabled=True in both branches: this whole block only runs for a type whose
+        # toggle just changed, so the newly-on type must really start and the newly-off type
+        # must really stop - neither call is "simulate only"
+        now_enabled = is_action_type_enabled(config, action_name)
+        if now_enabled and action_id and action_id not in started_ids:
+            handle_shyft_action_start(action, True, config)
+            started_ids.add(action_id)
+        elif not now_enabled and action_id and action_id not in ended_ids:
+            handle_shyft_action_end(action, True, config)
+            ended_ids.add(action_id)
+
+    config["startedShyftActionIds"] = sorted(started_ids)
+    config["endedShyftActionIds"] = sorted(ended_ids)
+
+
 def sync_sensors_periodically():
     with app.app_context():
         sync_sensors()
@@ -264,10 +488,17 @@ def sync_pv_history_periodically():
     with app.app_context():
         sync_pv_history()
 
+def process_shyft_actions_periodically():
+    with app.app_context():
+        process_shyft_actions()
+
 
 scheduler = BackgroundScheduler()
 scheduler.add_job(sync_sensors_periodically, 'cron', minute="55")
 scheduler.add_job(sync_pv_history_periodically, 'cron', hour="21", minute="0")
+# on the hour and every 15 min after - actions can be created mid-hour for the current hour
+# and start immediately, so a coarser schedule would miss those until the next hour
+scheduler.add_job(process_shyft_actions_periodically, 'cron', minute="0,15,30,45")
 scheduler.start()
 
 

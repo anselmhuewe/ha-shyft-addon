@@ -270,10 +270,23 @@ async function postJson(url, data) {
 
 const VALUE_POSTFIX = "_value";
 const ACTOR_VALUE_POSTFIX = "_actor_value";
+const ACTION_TOGGLE_POSTFIX = "_toggle";
 
 // Actions the addon sets up and calls itself (via a generated script), rather than
 // asking the user to paste an automation/script entity id.
 const AUTO_MANAGED_ACTIONS = new Set(['heating_target_temp']);
+
+// actorMappings keys that get an on/off "nur simulieren" toggle. battery_action_stop/car_charge_stop
+// are shared stop-actors for an already-toggled type and don't get their own toggle.
+const ACTION_TYPE_TOGGLE_KEYS = new Set([
+    'pv_feed_in_limit', 'consumption_limit_14a', 'battery_charge_shift_pv_surplus',
+    'battery_discharge_shift', 'battery_grid_charge', 'hot_water', 'car_charge_start', 'consumer_on'
+]);
+
+const NOTIFICATION_TYPES = {
+    'action_start_end': 'Aktionen starten / beenden',
+    'device_status_deviation': 'Gerätestatus abweichend von Shyft-Steuerung'
+};
 
 let currentIntegrationSelections = {};
 let refreshHeatingTargetTempStatus = null;
@@ -282,6 +295,7 @@ async function saveConfigurationNow() {
     const sensorValues = {...(configData["sensorMappings"] || {})};
     const actorValues = {...(configData["actorMappings"] || {})};
     const integrationValues = {};
+    const actionTypeEnabled = {...(configData["actionTypeEnabled"] || {})};
 
     for (const section of INTEGRATION_SECTIONS) {
         integrationValues[section.key] = currentIntegrationSelections[section.key] || [];
@@ -297,10 +311,38 @@ async function saveConfigurationNow() {
             if (element) {
                 actorValues[key] = element.value;
             }
+            const toggleElement = document.getElementById(key + ACTION_TOGGLE_POSTFIX);
+            if (toggleElement) {
+                actionTypeEnabled[key] = toggleElement.checked;
+            }
+        }
+    }
+    const heatingToggle = document.getElementById('heating_target_temp' + ACTION_TOGGLE_POSTFIX);
+    if (heatingToggle) {
+        actionTypeEnabled['heating_target_temp'] = heatingToggle.checked;
+    }
+
+    const notificationTargets = {...(configData["notificationTargets"] || {})};
+    const phoneInput = document.getElementById('notificationPhone');
+    if (phoneInput) {
+        notificationTargets['phone'] = phoneInput.value;
+    }
+    const notificationsEnabled = {...(configData["notificationsEnabled"] || {})};
+    for (const key of Object.keys(NOTIFICATION_TYPES)) {
+        const toggleElement = document.getElementById('notification_' + key + ACTION_TOGGLE_POSTFIX);
+        if (toggleElement) {
+            notificationsEnabled[key] = toggleElement.checked;
         }
     }
 
-    const toBeWritten = {"sensorMappings": sensorValues, "actorMappings": actorValues, "integrationMappings": integrationValues};
+    const toBeWritten = {
+        "sensorMappings": sensorValues,
+        "actorMappings": actorValues,
+        "integrationMappings": integrationValues,
+        "actionTypeEnabled": actionTypeEnabled,
+        "notificationTargets": notificationTargets,
+        "notificationsEnabled": notificationsEnabled
+    };
     const response = await putJson(configUri, toBeWritten);
     configData = response;
     if (refreshHeatingTargetTempStatus) {
@@ -353,6 +395,7 @@ const loadConfiguration = async (event) => {
         }
 
         renderIntegrationSections();
+        renderNotificationSection();
     } catch (err) {
         console.log(err);
     }
@@ -452,6 +495,61 @@ function renderIntegrationSections() {
 
         container.appendChild(sectionDiv);
     }
+}
+
+function renderNotificationSection() {
+    const container = document.getElementById('notificationSection');
+    container.innerHTML = '';
+
+    const sectionDiv = document.createElement('div');
+    sectionDiv.className = 'integrationSection';
+
+    const heading = document.createElement('div');
+    heading.className = 'integrationHeading';
+    const headingTitle = document.createElement('h2');
+    headingTitle.textContent = 'Benachrichtigungen';
+    heading.appendChild(headingTitle);
+    sectionDiv.appendChild(heading);
+
+    const phoneHelpInfo = {
+        phone: {
+            label: 'Handy',
+            description: 'Ziel für Home-Assistant-Push-Benachrichtigungen: entweder eine notify.*-Entity oder der Name eines notify-Service (z.B. notify.mobile_app_dein_handy oder mobile_app_dein_handy).'
+        }
+    };
+    const phoneRow = buildMappingRow('phone', (configData["notificationTargets"] || {})['phone'] || '', phoneHelpInfo, '', null, false, null);
+    const phoneInput = phoneRow.querySelector('input');
+    phoneInput.id = 'notificationPhone';
+    phoneInput.removeAttribute('list');
+    const table = document.createElement('table');
+    const tbody = document.createElement('tbody');
+    tbody.appendChild(phoneRow);
+    table.appendChild(tbody);
+    sectionDiv.appendChild(table);
+
+    const notifyHeading = document.createElement('div');
+    notifyHeading.className = 'sectionSubHeading controlSectionHeading';
+    notifyHeading.textContent = 'Benachrichtigen bei';
+    sectionDiv.appendChild(notifyHeading);
+
+    const notifyTable = document.createElement('table');
+    const notifyTbody = document.createElement('tbody');
+    const notificationsEnabled = configData["notificationsEnabled"] || {};
+    for (const [key, label] of Object.entries(NOTIFICATION_TYPES)) {
+        const row = document.createElement('tr');
+        const keyCell = document.createElement('td');
+        keyCell.textContent = label;
+        const toggleCell = document.createElement('td');
+        toggleCell.className = 'toggleCell';
+        toggleCell.appendChild(buildToggleSwitch('notification_' + key + ACTION_TOGGLE_POSTFIX, notificationsEnabled[key] !== false));
+        row.appendChild(keyCell);
+        row.appendChild(toggleCell);
+        notifyTbody.appendChild(row);
+    }
+    notifyTable.appendChild(notifyTbody);
+    sectionDiv.appendChild(notifyTable);
+
+    container.appendChild(sectionDiv);
 }
 
 function buildIntegrationPicker(section, currentIds, onChange) {
@@ -614,7 +712,7 @@ function renderSectionBody(bodyDiv, section, entryIds) {
     }
 
     if (manualActions.length > 0) {
-        bodyDiv.appendChild(buildMappingTable(manualActions, configData["actorMappings"] || {}, actorHelpInformation, ACTOR_VALUE_POSTFIX, () => 'allEntityOptions', false));
+        bodyDiv.appendChild(buildMappingTable(manualActions, configData["actorMappings"] || {}, actorHelpInformation, ACTOR_VALUE_POSTFIX, () => 'allEntityOptions', false, configData["actionTypeEnabled"] || {}));
     }
 
     if (hasAutoManagedAction) {
@@ -636,6 +734,8 @@ function buildHeatingTargetTempControl() {
     checkmark.textContent = ' ✓';
     checkmark.hidden = true;
     title.appendChild(checkmark);
+    const toggleChecked = (configData["actionTypeEnabled"] || {})['heating_target_temp'] !== false;
+    title.appendChild(buildToggleSwitch('heating_target_temp' + ACTION_TOGGLE_POSTFIX, toggleChecked));
     wrapper.appendChild(title);
 
     const status = document.createElement('div');
@@ -734,16 +834,32 @@ function buildHeatingTargetTempControl() {
     return wrapper;
 }
 
-function buildMappingTable(keys, mappingData, helpInfo, valuePostfix, getDatalistId, showLiveValue) {
+function buildMappingTable(keys, mappingData, helpInfo, valuePostfix, getDatalistId, showLiveValue, toggleData) {
     const table = document.createElement('table');
 
     const tbody = document.createElement('tbody');
     for (const key of keys) {
-        tbody.appendChild(buildMappingRow(key, mappingData[key] || '', helpInfo, valuePostfix, getDatalistId(key), showLiveValue));
+        const hasToggle = !!toggleData && ACTION_TYPE_TOGGLE_KEYS.has(key);
+        tbody.appendChild(buildMappingRow(key, mappingData[key] || '', helpInfo, valuePostfix, getDatalistId(key), showLiveValue, hasToggle ? (toggleData[key] !== false) : null));
     }
     table.appendChild(tbody);
 
     return table;
+}
+
+function buildToggleSwitch(id, checked) {
+    const label = document.createElement('label');
+    label.className = 'toggleSwitch';
+    const input = document.createElement('input');
+    input.type = 'checkbox';
+    input.id = id;
+    input.checked = checked;
+    input.addEventListener('change', autoSave);
+    const slider = document.createElement('span');
+    slider.className = 'toggleSlider';
+    label.appendChild(input);
+    label.appendChild(slider);
+    return label;
 }
 
 function extractEntityId(value) {
@@ -772,7 +888,7 @@ function buildTooltip(description) {
     return tooltip;
 }
 
-function buildMappingRow(key, value, helpInfo, valuePostfix, datalistId, showLiveValue) {
+function buildMappingRow(key, value, helpInfo, valuePostfix, datalistId, showLiveValue, toggleChecked) {
     const row = document.createElement('tr');
     const keyCell = document.createElement('td');
     const context = helpInfo[key] ?? {label: key};
@@ -813,6 +929,13 @@ function buildMappingRow(key, value, helpInfo, valuePostfix, datalistId, showLiv
 
     row.appendChild(keyCell);
     row.appendChild(valueCell);
+
+    if (toggleChecked !== null && toggleChecked !== undefined) {
+        const toggleCell = document.createElement('td');
+        toggleCell.className = 'toggleCell';
+        toggleCell.appendChild(buildToggleSwitch(key + ACTION_TOGGLE_POSTFIX, toggleChecked));
+        row.appendChild(toggleCell);
+    }
     return row;
 }
 

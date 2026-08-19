@@ -207,6 +207,15 @@ class HomeAssistantAdapter:
     def call_service(self, domain, service, data=None):
         return self.post_to_homeassistant(f"/api/services/{domain}/{service}", data)
 
+    def send_notification(self, target, message):
+        "Sends a push notification via Home Assistant's notify integration. `target` is either a notify.* entity id (uses notify.send_message) or a bare legacy notify service name (e.g. mobile_app_my_phone)."
+        if not target:
+            return
+        if target.startswith("notify."):
+            self.call_service("notify", "send_message", {"entity_id": target, "message": message})
+        else:
+            self.call_service("notify", target, {"message": message})
+
     def read_entity_numeric_value(self, entity_id):
         "Reads the current numeric value of an entity - the target temperature attribute for climate entities, the state for number entities"
         response = self.get_from_homeassistant(f"/api/states/{entity_id}")
