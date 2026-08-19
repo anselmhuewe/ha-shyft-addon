@@ -6,7 +6,6 @@ import os
 from flask import Flask, send_from_directory, jsonify, request, Response
 import json
 import re
-import time
 import shutil
 from apscheduler.schedulers.background import BackgroundScheduler
 import logging
@@ -43,6 +42,12 @@ def mask_secret(secret):
     if not secret or len(secret) < 10:
         return "not set"
     return f"{secret[:6]}***{secret[-4:]}"
+
+
+def extract_shyft_user_id(access_key):
+    "The shyft_access_key is formatted as '<prefix>|<user_id>|<secret>'; the actions endpoint needs that user_id as a separate parameter"
+    parts = (access_key or "").split("|")
+    return parts[1] if len(parts) == 3 else ""
 
 
 homeassistant_adapter = HomeAssistantAdapter(
@@ -97,6 +102,15 @@ def readSensorIds():
 @app.route("/integrations", methods=["GET"])
 def readIntegrations():
     return jsonify(homeassistant_adapter.get_integrations_and_entities())
+
+
+@app.route("/shyft/actions", methods=["GET"])
+def readShyftActions():
+    "Display-only for now: pulls the action queue from shyft-power. Nothing here executes anything on the user's devices."
+    user_id = extract_shyft_user_id(shyft_adapter.bubble_token)
+    if not user_id:
+        return jsonify({"status": "error", "message": "Kein gültiger Shyft-Access-Key konfiguriert."})
+    return jsonify(shyft_adapter.get_actions(user_id))
 
 
 def mapToResponse(response):
@@ -228,9 +242,11 @@ def testHeatingTargetTemp():
         current_value = homeassistant_adapter.read_entity_numeric_value(entity_id)
         new_value = current_value + delta
         homeassistant_adapter.call_service("script", HEATING_TARGET_TEMP_SCRIPT_ID, {"target_temperature": new_value})
-        time.sleep(1.5)
-        confirmed_value = homeassistant_adapter.read_entity_numeric_value(entity_id)
-        return jsonify({"success": True, "value": confirmed_value})
+        # Cloud-connected devices (e.g. a heat pump reachable only via the manufacturer's
+        # cloud API) can take much longer than a second or two to actually report the new
+        # value back, so we return the optimistic value immediately instead of blocking
+        # here and risking showing the stale one. The frontend re-checks shortly after.
+        return jsonify({"success": True, "value": new_value, "confirmed": False})
     except Exception as e:
         return jsonify({"success": False, "message": str(e)}), 500
 

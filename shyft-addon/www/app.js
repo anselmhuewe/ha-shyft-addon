@@ -3,6 +3,7 @@ const insideHomeAssistant = window.location.pathname;
 const configUri = insideHomeAssistant + "/config";
 const sensorIdsUri = insideHomeAssistant + "/sensorids";
 const integrationsUri = insideHomeAssistant + "/integrations";
+const shyftActionsUri = insideHomeAssistant + "/shyft/actions";
 let configData = {}
 let integrationsData = {integrations: [], entityMap: {}};
 let allSensorIdOptions = [];
@@ -53,7 +54,7 @@ const helpinformation = {
         description: ' je nachdem ob deine Wärmepumpe gerade Brauchwasser erwärmt oder nicht.'
     },
     'heatpump_heating_target_temp_normal': {
-        label: 'Zieltemperatur (aktuell)',
+        label: 'Heizung Soll-Temperatur (aktuell)',
         description: ' Gewünschte Raumtemperatur (Solltemperatur). Über die stündliche Anpassung dieses Wertes steuert Shyft kurzfristig die Leistung deiner Wärmepumpe und stellt die gewünschte Solltemperatur in deinen Räumen sicher.'
     },
     'heatpump_heating_activated': {
@@ -125,7 +126,7 @@ const actorHelpInformation = {
         description: ' Home-Assistant-Automation, die ausgelöst wird, wenn Shyft die Warmwasserbereitung ansteuern möchte.'
     },
     'heating_target_temp': {
-        label: 'Heizung Soll-Temperatur',
+        label: 'Heizung Soll-Temperatur (aktuell)',
         description: ' Home-Assistant-Automation, die ausgelöst wird, wenn Shyft die Soll-Temperatur der Heizung anpassen möchte.'
     },
     'car_charge_start': {
@@ -647,11 +648,11 @@ function buildHeatingTargetTempControl() {
 
     const minusButton = document.createElement('button');
     minusButton.type = 'button';
-    minusButton.textContent = 'Test: -1 Grad';
+    minusButton.textContent = 'Test: -1 °C';
 
     const plusButton = document.createElement('button');
     plusButton.type = 'button';
-    plusButton.textContent = 'Test: +1 Grad';
+    plusButton.textContent = 'Test: +1 °C';
 
     const valueDisplay = document.createElement('span');
     valueDisplay.className = 'autoActionValue';
@@ -661,7 +662,7 @@ function buildHeatingTargetTempControl() {
         try {
             const result = await getJson(insideHomeAssistant + '/actions/heating_target_temp/status');
             if (!result.configured) {
-                status.textContent = 'Befülle die "Zieltemperatur (aktuell)"';
+                status.textContent = 'Befülle die "Heizung Soll-Temperatur (aktuell)"';
                 status.className = 'autoActionStatus status-missing';
                 checkmark.hidden = true;
                 minusButton.disabled = true;
@@ -703,7 +704,10 @@ function buildHeatingTargetTempControl() {
             });
             const result = await response.json();
             if (result.success) {
-                valueDisplay.textContent = 'Aktueller Wert: ' + result.value + ' °C';
+                // devices reachable only via a manufacturer cloud API can take a while to
+                // report the new value back, so show what we sent right away, then confirm
+                valueDisplay.textContent = 'Gesendet: ' + result.value + ' °C (prüfe...)';
+                setTimeout(refreshStatus, 4000);
             } else {
                 valueDisplay.textContent = 'Fehler: ' + (result.message || 'unbekannt');
             }
@@ -838,10 +842,180 @@ async function refreshLiveSensorValues() {
     }
 }
 
+function formatShyftTime(ms) {
+    if (!ms) return '';
+    return new Date(ms).toLocaleTimeString('de-DE', {hour: '2-digit', minute: '2-digit'});
+}
+
+function formatShyftDayHeading(ms) {
+    return new Date(ms).toLocaleDateString('de-DE', {day: 'numeric', month: 'long', year: 'numeric'});
+}
+
+function shyftDayKey(ms) {
+    const date = new Date(ms || Date.now());
+    return date.getFullYear() + '-' + date.getMonth() + '-' + date.getDate();
+}
+
+// Best-effort guess at the daily savings figure (sum of each action's "Savings" field) -
+// not confirmed against shyft-power's own calculation, treat as approximate.
+function formatShyftEuro(value) {
+    const arrow = value < 0 ? '↘' : (value > 0 ? '↗' : '→');
+    return arrow + ' ' + value.toLocaleString('de-DE', {minimumFractionDigits: 2, maximumFractionDigits: 2}) + ' €';
+}
+
+function buildShyftActionCard(action) {
+    const status = action['Status'] || '';
+    const normalizedStatus = status.toLowerCase();
+    const isActive = normalizedStatus.startsWith('aktiv');
+    const isDeactivated = normalizedStatus.includes('deaktiviert');
+    const baseStatus = status.replace(/\s*\(deaktiviert\)/i, '').trim();
+
+    const card = document.createElement('div');
+    card.className = 'shyftActionCard' + (isActive ? ' is-active' : '') + (isDeactivated ? ' is-deactivated' : '');
+
+    const time = document.createElement('div');
+    time.className = 'shyftActionTime';
+    const startLine = document.createElement('div');
+    startLine.textContent = formatShyftTime(action['Date Start']);
+    const endLine = document.createElement('div');
+    endLine.textContent = formatShyftTime(action['Date End']);
+    time.appendChild(startLine);
+    time.appendChild(endLine);
+    card.appendChild(time);
+
+    const main = document.createElement('div');
+    main.className = 'shyftActionMain';
+    const nameEl = document.createElement('div');
+    nameEl.className = 'shyftActionName';
+    nameEl.textContent = action['Action Name'] || '–';
+    main.appendChild(nameEl);
+    if (action['Subtitle']) {
+        const subtitleEl = document.createElement('div');
+        subtitleEl.className = 'shyftActionSubtitle';
+        subtitleEl.textContent = action['Subtitle'];
+        main.appendChild(subtitleEl);
+    }
+    card.appendChild(main);
+
+    const statusEl = document.createElement('div');
+    statusEl.className = 'shyftActionStatus';
+    const statusMain = document.createElement('div');
+    statusMain.textContent = baseStatus || '–';
+    statusEl.appendChild(statusMain);
+    if (isDeactivated) {
+        const statusSub = document.createElement('div');
+        statusSub.className = 'shyftActionStatusSub';
+        statusSub.textContent = '(deaktiviert)';
+        statusEl.appendChild(statusSub);
+    }
+    card.appendChild(statusEl);
+
+    return card;
+}
+
+function renderShyftActions(container, actions) {
+    container.innerHTML = '';
+
+    if (actions.length === 0) {
+        const empty = document.createElement('div');
+        empty.className = 'shyftActionsEmpty';
+        empty.textContent = 'Es wurden in den letzten drei Tagen keine Aktionen berechnet.';
+        container.appendChild(empty);
+        return;
+    }
+
+    // sorted by Date End descending to match shyft-power's own ordering
+    const sorted = [...actions].sort((a, b) => (b['Date End'] || 0) - (a['Date End'] || 0));
+
+    const groups = new Map();
+    for (const action of sorted) {
+        const key = shyftDayKey(action['Date Start'] || action['Date End']);
+        if (!groups.has(key)) {
+            groups.set(key, []);
+        }
+        groups.get(key).push(action);
+    }
+
+    for (const groupActions of groups.values()) {
+        const dayDiv = document.createElement('div');
+        dayDiv.className = 'shyftDayGroup';
+
+        const heading = document.createElement('div');
+        heading.className = 'shyftDayHeading';
+
+        const dateLabel = document.createElement('span');
+        dateLabel.className = 'shyftDayDate';
+        dateLabel.textContent = formatShyftDayHeading(groupActions[0]['Date Start'] || groupActions[0]['Date End']);
+        heading.appendChild(dateLabel);
+
+        const savingsSum = groupActions.reduce((sum, a) => sum + (typeof a['Savings'] === 'number' ? a['Savings'] : 0), 0);
+        const savingsLabel = document.createElement('span');
+        savingsLabel.className = 'shyftDaySavings ' + (savingsSum < 0 ? 'negative' : 'positive');
+        savingsLabel.textContent = formatShyftEuro(savingsSum);
+        heading.appendChild(savingsLabel);
+
+        dayDiv.appendChild(heading);
+
+        for (const action of groupActions) {
+            dayDiv.appendChild(buildShyftActionCard(action));
+        }
+
+        container.appendChild(dayDiv);
+    }
+}
+
+async function loadShyftActions() {
+    const container = document.getElementById('shyftActionsBody');
+    if (!container) return;
+
+    try {
+        const result = await getJson(shyftActionsUri);
+        if (result.status !== 'success') {
+            showShyftActionsError(container);
+            return;
+        }
+        const actions = (result.response && result.response.actions) || [];
+        renderShyftActions(container, actions);
+    } catch (err) {
+        console.log(err);
+        showShyftActionsError(container);
+    }
+}
+
+function showShyftActionsError(container) {
+    container.innerHTML = '';
+    const error = document.createElement('div');
+    error.className = 'shyftActionsError';
+    error.textContent = 'Leider konnten keine Aktionen abgerufen werden, überprüfe die Verbindung zu shyft-power.';
+    container.appendChild(error);
+}
+
+function setupTabs() {
+    const buttons = document.querySelectorAll('.tabButton');
+    for (const button of buttons) {
+        button.addEventListener('click', () => {
+            for (const b of buttons) {
+                b.classList.remove('active');
+            }
+            button.classList.add('active');
+            for (const panel of document.querySelectorAll('.tabPanel')) {
+                panel.classList.remove('active');
+            }
+            document.getElementById('tab-' + button.dataset.tab).classList.add('active');
+        });
+    }
+}
+
 if (document.readyState === 'complete') {
     loadConfiguration();
+    loadShyftActions();
+    setupTabs();
 } else {
-    window.addEventListener('load', loadConfiguration);
+    window.addEventListener('load', () => {
+        loadConfiguration();
+        loadShyftActions();
+        setupTabs();
+    });
 }
 
 setInterval(refreshLiveSensorValues, LIVE_VALUE_REFRESH_INTERVAL_MS);

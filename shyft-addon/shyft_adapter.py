@@ -26,6 +26,22 @@ class ShyftAdapter:
                            sensor_values : str):
         return self._call_workflow("addon_sensor_data", sensor_values)
 
+    def get_actions(self, user_id: str):
+        "Pulls the (read-only, for display only for now) action queue for user_id from shyft-power. Unlike _call_workflow, this returns the actual response body since the caller needs the action list."
+        try:
+            headers = {
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {self.bubble_token}"
+            }
+            complete_uri = self._create_complete_uri("return_actions_to_addon")
+            payload = json.dumps({"user": user_id})
+            self._log_info(f"get_actions uri={complete_uri}")
+            response = requests.post(complete_uri, headers=headers, data=payload)
+            response.raise_for_status()
+            return response.json()
+        except Exception as e:
+            return {"status": "error", "message": str(e)}
+
     def _call_workflow(self,
                        workflow_name: str,
                        payload: str):

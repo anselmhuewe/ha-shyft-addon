@@ -1,3 +1,9 @@
+== 0.0.17.0
+
+* Switch the outbound Bubble endpoint from anselmhuewe.bubbleapps.io to shyft-power.com
+* New "Gerätesteuerung" tab, alongside the existing config UI now under a "Konfiguration" tab, showing the read-only action queue pulled from shyft-power's new return_actions_to_addon endpoint - grouped by day with a daily savings figure, matching shyft-power's own web UI. Nothing here executes anything on the user's devices yet
+* New backend: ShyftAdapter.get_actions() and GET /shyft/actions, using the user id embedded in the shyft_access_key
+
 == 0.0.16.3
 
 * Log heating_target_temp script-sync failures to the addon log instead of swallowing them silently

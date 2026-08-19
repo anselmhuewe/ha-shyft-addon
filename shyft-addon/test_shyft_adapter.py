@@ -21,5 +21,5 @@ def test_create_complete_uri_development_mode():
 def test_create_complete_uri_prod_mode():
     sut = ShyftAdapter()
     actual = sut._create_complete_uri("given_workflow_name")
-    assert "https://anselmhuewe.bubbleapps.io/api/1.1/wf/given_workflow_name" == actual
+    assert "https://shyft-power.com/api/1.1/wf/given_workflow_name" == actual
 
