@@ -1,3 +1,8 @@
+== 0.0.19.1
+
+* Handy-Auswahl unter "Benachrichtigungen" ist jetzt ein Dropdown statt Freitext, auf Handys beschränkt (Home Assistant Mobile-App-Integration, per notify-Service - keine Entity nötig). Ein zuvor gespeichertes, aktuell nicht gemeldetes Handy bleibt als Option erhalten ("nicht gefunden"), statt beim nächsten Speichern stillschweigend verloren zu gehen
+* Neuer Endpoint GET /notification-targets, neue Adapter-Methode get_mobile_app_notify_targets()
+
 == 0.0.19.0
 
 * Per-Aktionstyp-Toggle in der Konfiguration ("nur simulieren"), default An - ersetzt shyft-powers eigene "(deaktiviert)"-Logik vollständig; der Zustand des Toggles entscheidet jetzt, ob Start/Ende einer Aktion real oder nur simuliert (geloggt) wird. Die reinen "Stopp"-Aktoren (Batterie-Aktion beenden, Auto laden beenden) haben bewusst keinen eigenen Toggle, sie folgen dem Toggle ihres zugehörigen Start-Aktionstyps

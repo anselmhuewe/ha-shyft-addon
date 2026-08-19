@@ -4,9 +4,11 @@ const configUri = insideHomeAssistant + "/config";
 const sensorIdsUri = insideHomeAssistant + "/sensorids";
 const integrationsUri = insideHomeAssistant + "/integrations";
 const shyftActionsUri = insideHomeAssistant + "/shyft/actions";
+const notificationTargetsUri = insideHomeAssistant + "/notification-targets";
 let configData = {}
 let integrationsData = {integrations: [], entityMap: {}};
 let allSensorIdOptions = [];
+let notificationTargetOptions = [];
 
 const helpinformation = {
     'photovoltaic_powerflow_load': {
@@ -386,6 +388,12 @@ const loadConfiguration = async (event) => {
         configData = await getJson(configUri);
         allSensorIdOptions = await getJson(sensorIdsUri);
         integrationsData = await getJson(integrationsUri);
+        try {
+            notificationTargetOptions = await getJson(notificationTargetsUri);
+        } catch (err) {
+            console.log(err);
+            notificationTargetOptions = [];
+        }
 
         const allEntityOptionsElement = document.getElementById('allEntityOptions');
         for (const entity of allSensorIdOptions) {
@@ -511,16 +519,46 @@ function renderNotificationSection() {
     heading.appendChild(headingTitle);
     sectionDiv.appendChild(heading);
 
-    const phoneHelpInfo = {
-        phone: {
-            label: 'Handy',
-            description: 'Ziel für Home-Assistant-Push-Benachrichtigungen: entweder eine notify.*-Entity oder der Name eines notify-Service (z.B. notify.mobile_app_dein_handy oder mobile_app_dein_handy).'
+    const phoneRow = document.createElement('tr');
+    const phoneKeyCell = document.createElement('td');
+    phoneKeyCell.textContent = 'Handy';
+    phoneKeyCell.appendChild(buildTooltip('Das Handy (Home-Assistant-Mobile-App-Integration), an das shyft-power Benachrichtigungen schicken soll.'));
+    const phoneValueCell = document.createElement('td');
+    const phoneSelect = document.createElement('select');
+    phoneSelect.id = 'notificationPhone';
+    phoneSelect.className = 'sensorInput';
+
+    const currentPhone = (configData["notificationTargets"] || {})['phone'] || '';
+    const emptyOption = document.createElement('option');
+    emptyOption.value = '';
+    emptyOption.textContent = '– kein Handy ausgewählt –';
+    phoneSelect.appendChild(emptyOption);
+
+    let currentPhoneFound = false;
+    for (const target of notificationTargetOptions) {
+        const option = document.createElement('option');
+        option.value = target.service;
+        option.textContent = target.label;
+        if (target.service === currentPhone) {
+            currentPhoneFound = true;
         }
-    };
-    const phoneRow = buildMappingRow('phone', (configData["notificationTargets"] || {})['phone'] || '', phoneHelpInfo, '', null, false, null);
-    const phoneInput = phoneRow.querySelector('input');
-    phoneInput.id = 'notificationPhone';
-    phoneInput.removeAttribute('list');
+        phoneSelect.appendChild(option);
+    }
+    // keep a previously configured target selectable even if it's currently not reported by HA
+    // (e.g. app temporarily offline), instead of silently discarding it on the next save
+    if (currentPhone && !currentPhoneFound) {
+        const staleOption = document.createElement('option');
+        staleOption.value = currentPhone;
+        staleOption.textContent = currentPhone + ' (nicht gefunden)';
+        phoneSelect.appendChild(staleOption);
+    }
+    phoneSelect.value = currentPhone;
+    phoneSelect.addEventListener('change', autoSave);
+
+    phoneValueCell.appendChild(phoneSelect);
+    phoneRow.appendChild(phoneKeyCell);
+    phoneRow.appendChild(phoneValueCell);
+
     const table = document.createElement('table');
     const tbody = document.createElement('tbody');
     tbody.appendChild(phoneRow);

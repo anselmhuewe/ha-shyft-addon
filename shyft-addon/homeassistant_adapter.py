@@ -207,6 +207,19 @@ class HomeAssistantAdapter:
     def call_service(self, domain, service, data=None):
         return self.post_to_homeassistant(f"/api/services/{domain}/{service}", data)
 
+    def get_mobile_app_notify_targets(self):
+        "Lists Home Assistant's notify services for paired phones (Mobile App integration, one service per device: notify.mobile_app_<device>) - these are services, not entities."
+        response = self.get_from_homeassistant("/api/services")
+        notify_domain = next((d for d in response if d.get("domain") == "notify"), None)
+        services = notify_domain.get("services", {}) if notify_domain else {}
+        targets = []
+        for service_name in services:
+            if service_name.startswith("mobile_app_"):
+                label = service_name[len("mobile_app_"):].replace("_", " ").strip().title() or service_name
+                targets.append({"service": service_name, "label": label})
+        targets.sort(key=lambda t: t["label"].lower())
+        return targets
+
     def send_notification(self, target, message):
         "Sends a push notification via Home Assistant's notify integration. `target` is either a notify.* entity id (uses notify.send_message) or a bare legacy notify service name (e.g. mobile_app_my_phone)."
         if not target:

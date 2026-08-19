@@ -105,6 +105,16 @@ def readIntegrations():
     return jsonify(homeassistant_adapter.get_integrations_and_entities())
 
 
+@app.route("/notification-targets", methods=["GET"])
+def readNotificationTargets():
+    "Lists paired phones (Home Assistant Mobile App integration) as notification targets"
+    try:
+        return jsonify(homeassistant_adapter.get_mobile_app_notify_targets())
+    except Exception as e:
+        print("Failed to load notification targets:", repr(e))
+        return jsonify([])
+
+
 @app.route("/shyft/actions", methods=["GET"])
 def readShyftActions():
     "Display-only for now: pulls the action queue from shyft-power. Nothing here executes anything on the user's devices."
