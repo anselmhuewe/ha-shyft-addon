@@ -118,7 +118,7 @@ def readNotificationTargets():
 
 @app.route("/shyft/actions", methods=["GET"])
 def readShyftActions():
-    "Display-only for now: pulls the action queue from shyft-power. Nothing here executes anything on the user's devices."
+    "Pulls the action queue from shyft-power for display in the Gerätesteuerung tab (the actual execution against devices happens separately in process_shyft_actions)."
     user_id = extract_shyft_user_id(shyft_adapter.bubble_token)
     if not user_id:
         return jsonify({"status": "error", "message": "Kein gültiger Shyft-Access-Key konfiguriert."})
@@ -242,8 +242,16 @@ def compute_charging_phases_and_amps(target_kw):
 
 
 def resolve_service_data(data_template, value):
-    "Recursively substitutes the literal string '{value}' anywhere in a service-call data dict with the computed number (phase count or Ampere) for this stage."
+    """Recursively resolves placeholders in a service-call data dict against the computed number
+    (phase count or Ampere) for this stage:
+    - the literal string '{value}' is replaced with the computed value as-is
+    - {"$map": {"1": "1_phase", "3": "3_phase"}} looks the computed value up in that mapping -
+      needed when a field expects an enum string that doesn't match the number directly, e.g.
+      easee.set_charger_phase_mode's "mode" field wants "1_phase"/"3_phase", not 1/3
+    """
     if isinstance(data_template, dict):
+        if set(data_template.keys()) == {"$map"} and isinstance(data_template["$map"], dict):
+            return data_template["$map"].get(str(value), value)
         return {k: resolve_service_data(v, value) for k, v in data_template.items()}
     if isinstance(data_template, str) and data_template.strip() == "{value}":
         return value
@@ -278,6 +286,11 @@ def call_recipe_stage(stage, value=None):
     homeassistant_adapter.call_service(domain, service_name, data)
 
 
+# Gives the wallbox time to actually process the phase switch before the start command follows -
+# without this, "Ladevorgang starten" can race ahead of the phase change on some wallboxes.
+CHARGING_PHASE_SWITCH_DELAY_SECONDS = 5
+
+
 def execute_car_charge_start(target_kw):
     config = _read_current_config()
     recipe = config.get("carChargeRecipe", {})
@@ -286,6 +299,7 @@ def execute_car_charge_start(target_kw):
 
     phases, amps = compute_charging_phases_and_amps(target_kw)
     call_recipe_stage(recipe.get("phaseCount", {}), value=phases)
+    time.sleep(CHARGING_PHASE_SWITCH_DELAY_SECONDS)
     call_recipe_stage(recipe.get("start", {}), value=amps)
 
 
@@ -295,9 +309,29 @@ def execute_car_charge_stop():
     call_recipe_stage(recipe.get("stop", {}))
 
 
+def extract_select_options(field_info):
+    """Reads the fixed choices out of a service field's selector, if it has a 'select' selector -
+    the same schema Home Assistant's own Developer Tools -> Actions editor uses to render a
+    dropdown instead of a free-text box. Options can be given as bare strings or {value, label}
+    dicts; if the integration provides no inline label (translation_key-based selectors don't),
+    we fall back to a humanized version of the value so there's still something readable to show.
+    """
+    options = ((field_info.get("selector") or {}).get("select") or {}).get("options") or []
+    result = []
+    for option in options:
+        if isinstance(option, dict):
+            value = option.get("value")
+            label = option.get("label") or str(value).replace("_", " ").strip().capitalize()
+        else:
+            value = option
+            label = str(option).replace("_", " ").strip().capitalize()
+        result.append({"value": value, "label": label})
+    return result
+
+
 @app.route("/services", methods=["GET"])
 def readServices():
-    "Flat list of all Home Assistant services with their declared field names - used to build the 'Auto laden' Befehl-Auswahl (see buildCarChargeControl in app.js)"
+    "Flat list of all Home Assistant services with their declared fields (incl. selector-based dropdown options where available) - used to build the 'Auto laden' Befehl-Auswahl (see buildCarChargeControl in app.js)"
     try:
         services_response = homeassistant_adapter.get_from_homeassistant("/api/services")
     except Exception as e:
@@ -308,10 +342,17 @@ def readServices():
     for domain_entry in services_response:
         domain = domain_entry.get("domain")
         for service_name, service_info in (domain_entry.get("services") or {}).items():
+            fields = []
+            for field_name, field_info in (service_info.get("fields") or {}).items():
+                fields.append({
+                    "name": field_name,
+                    "label": field_info.get("name") or field_name,
+                    "options": extract_select_options(field_info),
+                })
             result.append({
                 "service": f"{domain}.{service_name}",
                 "label": service_info.get("name") or f"{domain}.{service_name}",
-                "fields": list((service_info.get("fields") or {}).keys()),
+                "fields": fields,
             })
     result.sort(key=lambda s: s["service"])
     return jsonify(result)
@@ -319,16 +360,18 @@ def readServices():
 
 @app.route("/actions/car_charge_start/test", methods=["POST"])
 def testCarChargeStart():
+    "Runs the exact same kW -> Phasen/Ampere pipeline as a real shyft-power action (see execute_car_charge_start), so this test is a faithful dry run rather than a simplified stand-in."
     config = _read_current_config()
     recipe = config.get("carChargeRecipe", {})
     if recipe.get("type") != "two_stage":
         return jsonify({"success": False, "message": "Keine Variante ausgewählt"}), 400
 
     body = request.get_json(force=True, silent=True) or {}
-    phase_count = body.get("phaseCount", 1)
-    amps = body.get("amps", CHARGING_MIN_AMPS)
+    target_kw = body.get("targetKw")
     try:
+        phase_count, amps = compute_charging_phases_and_amps(target_kw)
         call_recipe_stage(recipe.get("phaseCount", {}), value=phase_count)
+        time.sleep(CHARGING_PHASE_SWITCH_DELAY_SECONDS)
         call_recipe_stage(recipe.get("start", {}), value=amps)
         return jsonify({"success": True, "phaseCount": phase_count, "amps": amps})
     except Exception as e:

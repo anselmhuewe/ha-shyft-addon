@@ -1,3 +1,12 @@
+== 0.0.23.0
+
+* Sensordaten an shyft-power werden jetzt bei Bedarf in die erwartete Einheit umgerechnet (z.B. W → kW, ÷1000), statt die von Home Assistant gelieferte Einheit unverändert durchzureichen. Sensoren ohne numerische Einheit (Modi, An/Aus) bleiben unangetastet
+* "Auto laden": 5 Sekunden Pause zwischen "Phasenanzahl setzen" und "Ladevorgang starten" (real wie im Test), damit die Wallbox den Phasenwechsel sicher verarbeitet hat, bevor der Startbefehl kommt
+* "Auto laden": Datenfelder-Auswahl zeigt jetzt bei Befehlen mit festen Wertebereichen (z.B. easee.set_charger_phase_mode) ein Dropdown mit den echten, von Home Assistant gemeldeten Optionen inkl. Klartext-Label, statt dass man die exakten Werte selbst kennen und eintippen muss. Neue Datenfeld-Konvention {"$map": {"1": "1_phase", "3": "3_phase"}} für Felder, die statt der berechneten Zahl einen bestimmten Text erwarten
+* "Auto laden": Test jetzt mit zwei festen Buttons ("Test: mit 2,3 kW laden" / "Test: mit 6,9 kW laden") statt Phasenzahl-Eingabefeld - deckt beide Rechenpfade (1-phasig, 3-phasig) ab und durchläuft dieselbe kW-zu-Phasen/Ampere-Berechnung wie eine echte Aktion
+* Aktionskarten in der Gerätesteuerung zeigen jetzt das Marken-Icon der zuständigen Integration (von Home Assistants öffentlichem Icon-Verzeichnis brands.home-assistant.io)
+* Kleinere Korrekturen: "Auto laden"-Überschrift/Beschriftungen, Platzhaltertexte bei der Befehlsauswahl, veralteter "Nur zur Anzeige"-Hinweis auf dem Gerätesteuerung-Tab entfernt
+
 == 0.0.22.0
 
 * "Auto laden" ruft jetzt echte Home-Assistant-Befehle (Services) statt nur Entities auf - nötig, weil manche Wallbox-Integrationen (z.B. Easee) Phasenwahl/Start/Stopp über eigene Services wie easee.set_charger_phase_mode oder easee.action_command abbilden, nicht über number/button-Entities. Jede Stufe bekommt eine Service-Auswahl (vorgeschlagen werden generische Entity-Services plus alle Services der Domain deiner gewählten Wallbox-Integration), ein optionales Ziel-Entity und ein JSON-Feld für die übrigen Parameter, mit "{value}" als Platzhalter für die berechnete Phasen-/Amperezahl. Neuer Endpoint GET /services listet die Kandidaten inkl. ihrer deklarierten Feldnamen

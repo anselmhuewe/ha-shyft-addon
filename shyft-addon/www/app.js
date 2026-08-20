@@ -314,6 +314,34 @@ const NOTIFICATION_TYPES = {
     'device_status_deviation': 'Geräteverhalten abweichend von Shyft-Steuerung'
 };
 
+// Which device section (see INTEGRATION_SECTIONS) each shyft-power "Action Name" belongs to -
+// used only to look up that section's selected integration for its brand icon (getActionIconUrl).
+const ACTION_NAME_TO_SECTION_KEY = {
+    'PV: Einspeisung begrenzen': 'wechselrichter',
+    'Verbrauch begrenzen (§14a)': 'wechselrichter',
+    'Batterie-Laden verschieben (PV-Überschuss)': 'batterie',
+    'Batterie-Entladen verschieben': 'batterie',
+    'Batterie netzladen': 'batterie',
+    'Warmwasser': 'waermepumpe',
+    'Heizung Soll-Temperatur': 'waermepumpe',
+    'Auto laden': 'wallbox',
+    'Verbraucher an': 'sonstiger_verbraucher',
+};
+
+// Home Assistant's public, unauthenticated brand-icon CDN - the same one HA's own frontend uses
+// for integration logos in Settings -> Devices & Services, no call to the user's instance needed.
+function getActionIconUrl(actionName) {
+    const sectionKey = ACTION_NAME_TO_SECTION_KEY[actionName];
+    if (!sectionKey) return null;
+    const selectedIds = currentIntegrationSelections[sectionKey] || [];
+    if (selectedIds.length === 0) return null;
+    const integration = integrationsData.integrations.find(i => i.id === selectedIds[0]);
+    if (!integration) return null;
+    const match = integration.name.match(/\(([^)]+)\)$/);
+    if (!match) return null;
+    return `https://brands.home-assistant.io/_/${match[1]}/icon.png`;
+}
+
 let currentIntegrationSelections = {};
 
 async function saveConfigurationNow() {
@@ -1053,7 +1081,7 @@ function getWallboxServiceDomains() {
 // (sent as entity_id), and free-form JSON data for whatever else the service needs. Everything
 // about the service (which fields it takes, whether it needs a target at all) varies by
 // manufacturer, so this stays generic rather than assuming a fixed shape.
-function buildRecipeStageFields(stageKey, label, tooltip, candidateServices, entityDatalistId, stageData) {
+function buildRecipeStageFields(stageKey, label, tooltip, candidateServices, entityDatalistId, stageData, placeholderExample) {
     const table = document.createElement('table');
     const tbody = document.createElement('tbody');
 
@@ -1079,7 +1107,7 @@ function buildRecipeStageFields(stageKey, label, tooltip, candidateServices, ent
     serviceInput.setAttribute('list', serviceDatalistId);
     serviceInput.setAttribute('class', 'sensorInput');
     serviceInput.setAttribute('autocomplete', 'off');
-    serviceInput.placeholder = 'z.B. easee.set_charger_phase_mode';
+    serviceInput.placeholder = placeholderExample;
     serviceValueCell.appendChild(serviceInput);
     serviceRow.appendChild(serviceLabelCell);
     serviceRow.appendChild(serviceValueCell);
@@ -1122,7 +1150,7 @@ function buildRecipeStageFields(stageKey, label, tooltip, candidateServices, ent
     const dataRow = document.createElement('tr');
     const dataLabelCell = document.createElement('td');
     dataLabelCell.textContent = 'Datenfelder (JSON)';
-    dataLabelCell.appendChild(buildTooltip('Zusätzliche Parameter für den Befehl als JSON, z.B. {"device_id": "...", "mode": "{value}"}. Schreibe "{value}" genau an die Stelle, an der die berechnete Phasen- bzw. Amperezahl eingesetzt werden soll.'));
+    dataLabelCell.appendChild(buildTooltip('Zusätzliche Parameter für den Befehl als JSON, z.B. {"device_id": "...", "mode": "{value}"}. Schreibe "{value}" genau an die Stelle, an der die berechnete Phasen- bzw. Amperezahl eingesetzt werden soll. Erwartet das Feld stattdessen einen festen Text für den berechneten Wert (z.B. "1_phase" statt 1), schreibe stattdessen {"$map": {"1": "1_phase", "3": "3_phase"}}.'));
     const dataValueCell = document.createElement('td');
     const dataTextarea = document.createElement('textarea');
     dataTextarea.id = 'car_charge_' + stageKey + '_data';
@@ -1135,18 +1163,63 @@ function buildRecipeStageFields(stageKey, label, tooltip, candidateServices, ent
     const fieldHint = document.createElement('div');
     fieldHint.className = 'serviceFieldHint';
     dataValueCell.appendChild(fieldHint);
+    const fieldPickers = document.createElement('div');
+    fieldPickers.className = 'serviceFieldPickers';
+    dataValueCell.appendChild(fieldPickers);
     dataRow.appendChild(dataLabelCell);
     dataRow.appendChild(dataValueCell);
     tbody.appendChild(dataRow);
 
+    // writes fieldName: value into the JSON textarea (parsing what's there, or starting fresh if
+    // it's empty/invalid) - so picking a dropdown option never requires hand-editing the JSON
+    function insertFieldValue(fieldName, value) {
+        let data = {};
+        try {
+            data = dataTextarea.value.trim() ? JSON.parse(dataTextarea.value) : {};
+        } catch (err) {
+            data = {};
+        }
+        data[fieldName] = value;
+        dataTextarea.value = JSON.stringify(data, null, 2);
+        dataTextarea.dispatchEvent(new Event('change'));
+    }
+
     function updateFieldHint() {
+        fieldHint.textContent = '';
+        fieldPickers.innerHTML = '';
         const match = allServiceOptions.find(s => s.service === serviceInput.value);
-        if (match && match.fields.length > 0) {
-            fieldHint.textContent = 'Felder dieses Befehls: ' + match.fields.join(', ');
-        } else if (match) {
+        if (!match) return;
+        if (match.fields.length === 0) {
             fieldHint.textContent = 'Dieser Befehl braucht keine zusätzlichen Datenfelder.';
-        } else {
-            fieldHint.textContent = '';
+            return;
+        }
+        fieldHint.textContent = 'Felder dieses Befehls: ' + match.fields.map(f => f.name).join(', ');
+
+        // for fields with a fixed set of choices (a Home Assistant "select" selector, the same
+        // info HA's own Developer Tools -> Actions editor uses), offer a dropdown instead of
+        // requiring the exact string to be typed by hand
+        for (const field of match.fields) {
+            if (field.options.length === 0) continue;
+            const row = document.createElement('div');
+            row.className = 'serviceFieldPickerRow';
+            const fieldLabel = document.createElement('span');
+            fieldLabel.textContent = field.label + ':';
+            const optionSelect = document.createElement('select');
+            optionSelect.className = 'sensorInput';
+            for (const opt of field.options) {
+                const optionEl = document.createElement('option');
+                optionEl.value = opt.value;
+                optionEl.textContent = String(opt.label) === String(opt.value) ? opt.label : `${opt.label} (${opt.value})`;
+                optionSelect.appendChild(optionEl);
+            }
+            const insertButton = document.createElement('button');
+            insertButton.type = 'button';
+            insertButton.textContent = 'Einfügen';
+            insertButton.addEventListener('click', () => insertFieldValue(field.name, optionSelect.value));
+            row.appendChild(fieldLabel);
+            row.appendChild(optionSelect);
+            row.appendChild(insertButton);
+            fieldPickers.appendChild(row);
         }
     }
     serviceInput.addEventListener('change', () => {
@@ -1219,12 +1292,12 @@ function buildCarChargeControl(candidateEntities) {
     wrapper.appendChild(recipeTable);
 
     const stagesWrapper = document.createElement('div');
-    stagesWrapper.appendChild(buildRecipeStageFields('phaseCount', 'Phasenzahl setzen',
+    stagesWrapper.appendChild(buildRecipeStageFields('phaseCount', '1. Phasenanzahl setzen',
         'Befehl, mit dem die Phasenzahl an deiner Wallbox eingestellt wird.',
-        candidateServices, entityDatalistId, phaseCountStage));
-    stagesWrapper.appendChild(buildRecipeStageFields('start', 'Ladevorgang starten',
+        candidateServices, entityDatalistId, phaseCountStage, 'z.B. set_charger_phase_mode'));
+    stagesWrapper.appendChild(buildRecipeStageFields('start', '2. Ladevorgang starten',
         'Befehl, mit dem der Ladevorgang gestartet wird.',
-        candidateServices, entityDatalistId, startStage));
+        candidateServices, entityDatalistId, startStage, 'z.B. action_command'));
     stagesWrapper.style.display = recipeSelect.value === 'two_stage' ? '' : 'none';
     wrapper.appendChild(stagesWrapper);
 
@@ -1243,18 +1316,6 @@ function buildCarChargeControl(candidateEntities) {
     const wallboxStatusDisplay = document.createElement('span');
     wallboxStatusDisplay.className = 'autoActionValue';
 
-    const phaseTestInput = document.createElement('input');
-    phaseTestInput.type = 'number';
-    phaseTestInput.value = '1';
-    phaseTestInput.min = '1';
-    phaseTestInput.max = '3';
-    phaseTestInput.title = 'Test-Phasenzahl';
-    phaseTestInput.className = 'testPhaseInput';
-
-    const testStartButton = document.createElement('button');
-    testStartButton.type = 'button';
-    testStartButton.textContent = 'Test: Laden starten';
-
     function refreshWallboxStatus() {
         const wallboxEntity = (configData['sensorMappings'] || {})['wallbox_plugged'] || '';
         if (!wallboxEntity) {
@@ -1265,37 +1326,46 @@ function buildCarChargeControl(candidateEntities) {
         wallboxStatusDisplay.textContent = 'Wallbox-Status: ' + (match ? match.state : '–');
     }
 
-    testStartButton.addEventListener('click', async () => {
-        testStartButton.disabled = true;
-        status.textContent = 'Teste...';
-        status.className = 'autoActionStatus';
-        try {
-            const response = await fetch(insideHomeAssistant + '/actions/car_charge_start/test', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({phaseCount: parseInt(phaseTestInput.value, 10) || 1})
-            });
-            const result = await response.json();
-            if (result.success) {
-                status.textContent = `Gesendet: ${result.phaseCount} Phase(n), ${result.amps} A (prüfe Wallbox-Status...)`;
-                status.className = 'autoActionStatus status-ok';
-                setTimeout(refreshWallboxStatus, 4000);
-            } else {
-                status.textContent = 'Fehler: ' + (result.message || 'unbekannt');
+    // 2,3 kW and 6,9 kW deliberately picked so the resulting Amperezahl has no decimals (10 A in
+    // both cases - 2,3 kW at 1 Phase, 6,9 kW at 3 Phasen), covering both branches of
+    // compute_charging_phases_and_amps with a single click each.
+    const testButtons = [];
+    for (const targetKw of [2.3, 6.9]) {
+        const testButton = document.createElement('button');
+        testButton.type = 'button';
+        testButton.textContent = `Test: mit ${targetKw.toFixed(1).replace('.', ',')} kW laden`;
+        testButton.addEventListener('click', async () => {
+            for (const b of testButtons) b.disabled = true;
+            status.textContent = 'Teste...';
+            status.className = 'autoActionStatus';
+            try {
+                const response = await fetch(insideHomeAssistant + '/actions/car_charge_start/test', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({targetKw})
+                });
+                const result = await response.json();
+                if (result.success) {
+                    status.textContent = `Gesendet: ${result.phaseCount} Phase(n), ${result.amps} A (prüfe Wallbox-Status...)`;
+                    status.className = 'autoActionStatus status-ok';
+                    setTimeout(refreshWallboxStatus, 4000);
+                } else {
+                    status.textContent = 'Fehler: ' + (result.message || 'unbekannt');
+                    status.className = 'autoActionStatus status-error';
+                }
+            } catch (err) {
+                console.log(err);
+                status.textContent = 'Fehler beim Testen';
                 status.className = 'autoActionStatus status-error';
+            } finally {
+                for (const b of testButtons) b.disabled = false;
             }
-        } catch (err) {
-            console.log(err);
-            status.textContent = 'Fehler beim Testen';
-            status.className = 'autoActionStatus status-error';
-        } finally {
-            testStartButton.disabled = false;
-        }
-    });
+        });
+        testButtons.push(testButton);
+    }
 
     controlsRow.appendChild(wallboxStatusDisplay);
-    controlsRow.appendChild(phaseTestInput);
-    controlsRow.appendChild(testStartButton);
+    for (const b of testButtons) controlsRow.appendChild(b);
     wrapper.appendChild(controlsRow);
 
     const stopHeading = document.createElement('div');
@@ -1306,7 +1376,7 @@ function buildCarChargeControl(candidateEntities) {
     const stopWrapper = document.createElement('div');
     stopWrapper.appendChild(buildRecipeStageFields('stop', 'Auto laden beenden',
         'Befehl, mit dem der Ladevorgang beendet wird - unabhängig von der gewählten Start-Variante, da das herstellerübergreifend meist eine einzelne Aktion ist.',
-        candidateServices, entityDatalistId, stopStage));
+        candidateServices, entityDatalistId, stopStage, 'z.B. action_command'));
     wrapper.appendChild(stopWrapper);
 
     const stopControlsRow = document.createElement('div');
@@ -1525,6 +1595,17 @@ function buildShyftActionCard(action) {
     time.appendChild(endLine);
     card.appendChild(time);
 
+    const iconUrl = getActionIconUrl(action['Action Name']);
+    if (iconUrl) {
+        const icon = document.createElement('img');
+        icon.className = 'shyftActionIcon';
+        icon.src = iconUrl;
+        icon.alt = '';
+        icon.loading = 'lazy';
+        icon.addEventListener('error', () => { icon.style.display = 'none'; });
+        card.appendChild(icon);
+    }
+
     const main = document.createElement('div');
     main.className = 'shyftActionMain';
     const nameEl = document.createElement('div');
@@ -1648,14 +1729,14 @@ function setupTabs() {
     }
 }
 
+// loadShyftActions waits for loadConfiguration so the action cards' brand icons (getActionIconUrl)
+// have integrationsData/currentIntegrationSelections available on the very first render
 if (document.readyState === 'complete') {
-    loadConfiguration();
-    loadShyftActions();
+    loadConfiguration().then(loadShyftActions);
     setupTabs();
 } else {
     window.addEventListener('load', () => {
-        loadConfiguration();
-        loadShyftActions();
+        loadConfiguration().then(loadShyftActions);
         setupTabs();
     });
 }

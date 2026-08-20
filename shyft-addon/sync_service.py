@@ -28,6 +28,46 @@ LIST_OF_SENSORS = {
     "wallbox_plugged": "WB - Plugged"
 }
 
+# The unit shyft-power expects for each sensor (see the "(in kW)" etc. hints in each sensor's
+# tooltip in www/app.js's helpinformation) - sensors without a numeric unit (modes, on/off) are
+# intentionally absent here and pass through unconverted.
+EXPECTED_UNITS = {
+    "photovoltaic_powerflow_pv": "kW",
+    "photovoltaic_powerflow_load": "kW",
+    "photovoltaic_powerflow_grid": "kW",
+    "photovoltaic_powerflow_battery": "kW",
+    "battery_state_of_charge": "%",
+    "battery_charge_limit_current": "kW",
+    "battery_discharge_limit_current": "kW",
+    "heatpump_dhw_tank_temp": "°C",
+    "heatpump_heating_target_temp_normal": "°C",
+    "heatpump_current_power_elect": "kW",
+    "heatpump_supply_temp_hp": "°C",
+    "heatpump_temp_indoor_measured": "°C",
+    "electronicvehicle_state_of_charge": "%",
+    "wallbox_current_charging_power": "kW",
+}
+
+# Known (from_unit, to_unit) conversions - extend as new mismatches turn up.
+UNIT_CONVERSIONS = {
+    ("W", "kW"): lambda value: value / 1000,
+    ("Wh", "kWh"): lambda value: value / 1000,
+}
+
+
+def convert_to_expected_unit(key, state, unit):
+    "Converts state to the unit shyft-power expects for this sensor (EXPECTED_UNITS), if Home Assistant reports a different, known-convertible unit. Passes through unchanged otherwise."
+    expected_unit = EXPECTED_UNITS.get(key)
+    if not expected_unit or not unit or unit == expected_unit:
+        return state, unit
+    convert = UNIT_CONVERSIONS.get((unit, expected_unit))
+    if not convert:
+        return state, unit
+    try:
+        return convert(float(state)), expected_unit
+    except (TypeError, ValueError):
+        return state, unit
+
 # does the mapping between homeassistant and shyft/ bubble
 class SyncService:
 
@@ -65,10 +105,11 @@ class SyncService:
         sensorId = data["sensorMappings"][key]
         try:
             sensorValue = self.homeassistant_adapter.load_entity_state(sensorId)
+            state, unit = convert_to_expected_unit(key, sensorValue.state, sensorValue.unit)
             return {
                 "entity_id": sensorId,
-                "state": sensorValue.state,
-                "unit": sensorValue.unit,
+                "state": state,
+                "unit": unit,
                 "sensor": bubbleSensorIdentifier
             }
         except:
