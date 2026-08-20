@@ -221,21 +221,6 @@ def execute_auto_managed_action(control_key, phase, target_value):
         homeassistant_adapter.call_service("homeassistant", service, {"entity_id": entity_id})
 
 
-def call_entity_action(entity_id, value=None, turn_off=False):
-    "Calls the Home Assistant service matching entity_id's domain - number/select need a value, button/switch are simple triggers."
-    domain = entity_id.split(".")[0]
-    if domain == "number":
-        homeassistant_adapter.call_service("number", "set_value", {"entity_id": entity_id, "value": value})
-    elif domain == "select":
-        homeassistant_adapter.call_service("select", "select_option", {"entity_id": entity_id, "option": str(value)})
-    elif domain == "button":
-        homeassistant_adapter.call_service("button", "press", {"entity_id": entity_id})
-    elif domain == "switch":
-        homeassistant_adapter.call_service("switch", "turn_off" if turn_off else "turn_on", {"entity_id": entity_id})
-    else:
-        raise Exception(f"Nicht unterstuetzte Entity-Domain fuer '{entity_id}'")
-
-
 # Assumptions behind the kW -> Phasen/Ampere conversion for "Auto laden" (not yet configurable):
 # 230V per phase (standard German residential connection), a 16A single-phase ceiling before
 # switching to 3-phase, and the IEC 61851 6A EV charging minimum. shyft-power's own wallbox power
@@ -256,27 +241,80 @@ def compute_charging_phases_and_amps(target_kw):
     return 3, max(CHARGING_MIN_AMPS, three_phase_amps)
 
 
+def resolve_service_data(data_template, value):
+    "Recursively substitutes the literal string '{value}' anywhere in a service-call data dict with the computed number (phase count or Ampere) for this stage."
+    if isinstance(data_template, dict):
+        return {k: resolve_service_data(v, value) for k, v in data_template.items()}
+    if isinstance(data_template, str) and data_template.strip() == "{value}":
+        return value
+    return data_template
+
+
+def call_recipe_stage(stage, value=None):
+    """Calls one configured 'Auto laden' recipe stage: a Home Assistant service (any domain -
+    generic entity services like number.set_value/button.press, or an integration-specific one
+    like easee.set_charger_phase_mode), an optional target entity, and free-form JSON data fields
+    (their exact names are whatever the chosen service declares - shown as a hint in the UI).
+    '{value}' anywhere in the data is replaced with the computed phase count/Ampere at call time.
+    """
+    service = (stage or {}).get("service", "")
+    if not service or "." not in service:
+        raise Exception("Kein Befehl (Service) konfiguriert")
+    domain, service_name = service.split(".", 1)
+
+    raw_data = stage.get("data", "")
+    data = {}
+    if raw_data:
+        try:
+            data = json.loads(raw_data)
+        except Exception as e:
+            raise Exception(f"Datenfelder sind kein gueltiges JSON: {e}")
+    data = resolve_service_data(data, value)
+
+    target_entity = stage.get("targetEntity", "")
+    if target_entity:
+        data["entity_id"] = target_entity
+
+    homeassistant_adapter.call_service(domain, service_name, data)
+
+
 def execute_car_charge_start(target_kw):
     config = _read_current_config()
     recipe = config.get("carChargeRecipe", {})
     if recipe.get("type") != "two_stage":
         raise Exception("Kein Lade-Rezept konfiguriert")
-    phase_entity = recipe.get("phaseCountEntity", "")
-    start_entity = recipe.get("startEntity", "")
-    if not phase_entity or not start_entity:
-        raise Exception("Nicht alle Entities fuer das Lade-Rezept zugeordnet")
 
     phases, amps = compute_charging_phases_and_amps(target_kw)
-    call_entity_action(phase_entity, value=phases)
-    call_entity_action(start_entity, value=amps)
+    call_recipe_stage(recipe.get("phaseCount", {}), value=phases)
+    call_recipe_stage(recipe.get("start", {}), value=amps)
 
 
 def execute_car_charge_stop():
     config = _read_current_config()
-    stop_entity = config.get("carChargeRecipe", {}).get("stopEntity", "")
-    if not stop_entity:
-        raise Exception("Keine Entity fuer 'Auto laden beenden' zugeordnet")
-    call_entity_action(stop_entity, turn_off=True)
+    recipe = config.get("carChargeRecipe", {})
+    call_recipe_stage(recipe.get("stop", {}))
+
+
+@app.route("/services", methods=["GET"])
+def readServices():
+    "Flat list of all Home Assistant services with their declared field names - used to build the 'Auto laden' Befehl-Auswahl (see buildCarChargeControl in app.js)"
+    try:
+        services_response = homeassistant_adapter.get_from_homeassistant("/api/services")
+    except Exception as e:
+        print("Failed to load services:", repr(e))
+        return jsonify([])
+
+    result = []
+    for domain_entry in services_response:
+        domain = domain_entry.get("domain")
+        for service_name, service_info in (domain_entry.get("services") or {}).items():
+            result.append({
+                "service": f"{domain}.{service_name}",
+                "label": service_info.get("name") or f"{domain}.{service_name}",
+                "fields": list((service_info.get("fields") or {}).keys()),
+            })
+    result.sort(key=lambda s: s["service"])
+    return jsonify(result)
 
 
 @app.route("/actions/car_charge_start/test", methods=["POST"])
@@ -284,18 +322,14 @@ def testCarChargeStart():
     config = _read_current_config()
     recipe = config.get("carChargeRecipe", {})
     if recipe.get("type") != "two_stage":
-        return jsonify({"success": False, "message": "Kein Rezept ausgewählt"}), 400
-    phase_entity = recipe.get("phaseCountEntity", "")
-    start_entity = recipe.get("startEntity", "")
-    if not phase_entity or not start_entity:
-        return jsonify({"success": False, "message": "Nicht alle Entities zugeordnet"}), 400
+        return jsonify({"success": False, "message": "Keine Variante ausgewählt"}), 400
 
     body = request.get_json(force=True, silent=True) or {}
     phase_count = body.get("phaseCount", 1)
     amps = body.get("amps", CHARGING_MIN_AMPS)
     try:
-        call_entity_action(phase_entity, value=phase_count)
-        call_entity_action(start_entity, value=amps)
+        call_recipe_stage(recipe.get("phaseCount", {}), value=phase_count)
+        call_recipe_stage(recipe.get("start", {}), value=amps)
         return jsonify({"success": True, "phaseCount": phase_count, "amps": amps})
     except Exception as e:
         return jsonify({"success": False, "message": str(e)}), 500
@@ -304,11 +338,9 @@ def testCarChargeStart():
 @app.route("/actions/car_charge_stop/test", methods=["POST"])
 def testCarChargeStop():
     config = _read_current_config()
-    stop_entity = config.get("carChargeRecipe", {}).get("stopEntity", "")
-    if not stop_entity:
-        return jsonify({"success": False, "message": "Keine Entity zugeordnet"}), 400
+    recipe = config.get("carChargeRecipe", {})
     try:
-        call_entity_action(stop_entity, turn_off=True)
+        call_recipe_stage(recipe.get("stop", {}))
         return jsonify({"success": True})
     except Exception as e:
         return jsonify({"success": False, "message": str(e)}), 500

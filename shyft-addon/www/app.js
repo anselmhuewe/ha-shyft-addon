@@ -5,9 +5,11 @@ const sensorIdsUri = insideHomeAssistant + "/sensorids";
 const integrationsUri = insideHomeAssistant + "/integrations";
 const shyftActionsUri = insideHomeAssistant + "/shyft/actions";
 const notificationTargetsUri = insideHomeAssistant + "/notification-targets";
+const servicesUri = insideHomeAssistant + "/services";
 let configData = {}
 let integrationsData = {integrations: [], entityMap: {}};
 let allSensorIdOptions = [];
+let allServiceOptions = [];
 let notificationTargetOptions = [];
 
 const helpinformation = {
@@ -366,17 +368,18 @@ async function saveConfigurationNow() {
     if (recipeTypeElement) {
         carChargeRecipe.type = recipeTypeElement.value;
     }
-    const phaseEntityElement = document.getElementById('car_charge_phase_entity');
-    if (phaseEntityElement) {
-        carChargeRecipe.phaseCountEntity = phaseEntityElement.value;
-    }
-    const startEntityElement = document.getElementById('car_charge_start_entity');
-    if (startEntityElement) {
-        carChargeRecipe.startEntity = startEntityElement.value;
-    }
-    const stopEntityElement = document.getElementById('car_charge_stop_entity');
-    if (stopEntityElement) {
-        carChargeRecipe.stopEntity = stopEntityElement.value;
+    for (const stageKey of ['phaseCount', 'start', 'stop']) {
+        const serviceElement = document.getElementById('car_charge_' + stageKey + '_service');
+        if (!serviceElement) continue;
+        const stage = {...(carChargeRecipe[stageKey] || {})};
+        stage.service = serviceElement.value;
+        const targetElement = document.getElementById('car_charge_' + stageKey + '_target');
+        // extracted client-side: the backend's generic display-format stripping only reaches one
+        // level of nesting, and carChargeRecipe's stages are nested two levels deep
+        if (targetElement) stage.targetEntity = extractEntityId(targetElement.value);
+        const dataElement = document.getElementById('car_charge_' + stageKey + '_data');
+        if (dataElement) stage.data = dataElement.value;
+        carChargeRecipe[stageKey] = stage;
     }
 
     const toBeWritten = {
@@ -438,6 +441,12 @@ const loadConfiguration = async (event) => {
         } catch (err) {
             console.log(err);
             notificationTargetOptions = [];
+        }
+        try {
+            allServiceOptions = await getJson(servicesUri);
+        } catch (err) {
+            console.log(err);
+            allServiceOptions = [];
         }
 
         const allEntityOptionsElement = document.getElementById('allEntityOptions');
@@ -1021,49 +1030,135 @@ function buildAutoManagedSwitchControl(control) {
     return wrapper;
 }
 
-function buildEntityPickerRow(id, label, tooltip, datalistId, currentValue, onChange) {
-    const row = document.createElement('tr');
-    const keyCell = document.createElement('td');
-    keyCell.textContent = label;
-    if (tooltip) keyCell.appendChild(buildTooltip(tooltip));
+// "Auto laden" doesn't fit the uniform AUTO_MANAGED_CONTROLS shape: it's a manufacturer-varying
+// command sequence (currently one recipe, "Zweistufig": set phase count, then start charging) plus
+// an independent single-action "Laden beenden". Kept separate from AUTO_MANAGED_CONTROLS since the
+// concrete kW->Phasen/Ampere math lives entirely server-side (see compute_charging_phases_and_amps).
+// Domains eligible as an "Auto laden" Befehl: generic controllable-entity domains, plus whatever
+// domain(s) the currently selected Wallbox-Integration(s) belong to (e.g. 'easee') - so
+// integration-specific services like easee.set_charger_phase_mode show up as candidates too.
+function getWallboxServiceDomains() {
+    const domains = new Set(['number', 'select', 'button', 'switch']);
+    const selectedIds = currentIntegrationSelections['wallbox'] || [];
+    for (const integration of integrationsData.integrations) {
+        if (selectedIds.includes(integration.id)) {
+            const match = integration.name.match(/\(([^)]+)\)$/);
+            if (match) domains.add(match[1]);
+        }
+    }
+    return domains;
+}
 
-    const inputWrapper = document.createElement('div');
-    inputWrapper.className = 'clearableInput';
-    const input = document.createElement('input');
-    input.id = id;
-    input.value = formatEntityDisplay(currentValue);
-    input.setAttribute('list', datalistId);
-    input.setAttribute('class', 'sensorInput');
-    input.setAttribute('autocomplete', 'off');
-    input.addEventListener('change', () => {
-        input.value = formatEntityDisplay(extractEntityId(input.value));
-        onChange();
+// One row set for a recipe stage: which Home Assistant service to call, an optional target entity
+// (sent as entity_id), and free-form JSON data for whatever else the service needs. Everything
+// about the service (which fields it takes, whether it needs a target at all) varies by
+// manufacturer, so this stays generic rather than assuming a fixed shape.
+function buildRecipeStageFields(stageKey, label, tooltip, candidateServices, entityDatalistId, stageData) {
+    const table = document.createElement('table');
+    const tbody = document.createElement('tbody');
+
+    const serviceDatalistId = 'carChargeServiceOptions_' + stageKey;
+    const serviceDatalist = document.createElement('datalist');
+    serviceDatalist.id = serviceDatalistId;
+    for (const s of candidateServices) {
+        const option = document.createElement('option');
+        option.value = s.service;
+        option.textContent = s.label;
+        serviceDatalist.appendChild(option);
+    }
+    table.appendChild(serviceDatalist);
+
+    const serviceRow = document.createElement('tr');
+    const serviceLabelCell = document.createElement('td');
+    serviceLabelCell.textContent = label;
+    serviceLabelCell.appendChild(buildTooltip(tooltip));
+    const serviceValueCell = document.createElement('td');
+    const serviceInput = document.createElement('input');
+    serviceInput.id = 'car_charge_' + stageKey + '_service';
+    serviceInput.value = stageData.service || '';
+    serviceInput.setAttribute('list', serviceDatalistId);
+    serviceInput.setAttribute('class', 'sensorInput');
+    serviceInput.setAttribute('autocomplete', 'off');
+    serviceInput.placeholder = 'z.B. easee.set_charger_phase_mode';
+    serviceValueCell.appendChild(serviceInput);
+    serviceRow.appendChild(serviceLabelCell);
+    serviceRow.appendChild(serviceValueCell);
+    tbody.appendChild(serviceRow);
+
+    const targetRow = document.createElement('tr');
+    const targetLabelCell = document.createElement('td');
+    targetLabelCell.textContent = 'Ziel-Entity (optional)';
+    targetLabelCell.appendChild(buildTooltip('Falls der Befehl eine Entity als Ziel braucht (z.B. number.set_value), wird sie hier als entity_id mitgeschickt. Manche Integrationen (z.B. Easee) erwarten stattdessen eine device_id als Datenfeld - dann hier leer lassen und die device_id unten eintragen.'));
+    const targetValueCell = document.createElement('td');
+    const targetInputWrapper = document.createElement('div');
+    targetInputWrapper.className = 'clearableInput';
+    const targetInput = document.createElement('input');
+    targetInput.id = 'car_charge_' + stageKey + '_target';
+    targetInput.value = formatEntityDisplay(stageData.targetEntity || '');
+    targetInput.setAttribute('list', entityDatalistId);
+    targetInput.setAttribute('class', 'sensorInput');
+    targetInput.setAttribute('autocomplete', 'off');
+    targetInput.addEventListener('change', () => {
+        targetInput.value = formatEntityDisplay(extractEntityId(targetInput.value));
+        autoSave();
     });
-    inputWrapper.appendChild(input);
-
+    targetInputWrapper.appendChild(targetInput);
     const clearButton = document.createElement('button');
     clearButton.type = 'button';
     clearButton.className = 'clearInputButton';
     clearButton.textContent = '×';
     clearButton.setAttribute('aria-label', 'Eingabe löschen');
     clearButton.addEventListener('click', () => {
-        input.value = '';
-        input.dispatchEvent(new Event('change'));
-        input.focus();
+        targetInput.value = '';
+        targetInput.dispatchEvent(new Event('change'));
+        targetInput.focus();
     });
-    inputWrapper.appendChild(clearButton);
+    targetInputWrapper.appendChild(clearButton);
+    targetValueCell.appendChild(targetInputWrapper);
+    targetRow.appendChild(targetLabelCell);
+    targetRow.appendChild(targetValueCell);
+    tbody.appendChild(targetRow);
 
-    const valueCell = document.createElement('td');
-    valueCell.appendChild(inputWrapper);
-    row.appendChild(keyCell);
-    row.appendChild(valueCell);
-    return row;
+    const dataRow = document.createElement('tr');
+    const dataLabelCell = document.createElement('td');
+    dataLabelCell.textContent = 'Datenfelder (JSON)';
+    dataLabelCell.appendChild(buildTooltip('Zusätzliche Parameter für den Befehl als JSON, z.B. {"device_id": "...", "mode": "{value}"}. Schreibe "{value}" genau an die Stelle, an der die berechnete Phasen- bzw. Amperezahl eingesetzt werden soll.'));
+    const dataValueCell = document.createElement('td');
+    const dataTextarea = document.createElement('textarea');
+    dataTextarea.id = 'car_charge_' + stageKey + '_data';
+    dataTextarea.className = 'sensorInput';
+    dataTextarea.rows = 2;
+    dataTextarea.value = stageData.data || '';
+    dataTextarea.placeholder = '{}';
+    dataTextarea.addEventListener('change', autoSave);
+    dataValueCell.appendChild(dataTextarea);
+    const fieldHint = document.createElement('div');
+    fieldHint.className = 'serviceFieldHint';
+    dataValueCell.appendChild(fieldHint);
+    dataRow.appendChild(dataLabelCell);
+    dataRow.appendChild(dataValueCell);
+    tbody.appendChild(dataRow);
+
+    function updateFieldHint() {
+        const match = allServiceOptions.find(s => s.service === serviceInput.value);
+        if (match && match.fields.length > 0) {
+            fieldHint.textContent = 'Felder dieses Befehls: ' + match.fields.join(', ');
+        } else if (match) {
+            fieldHint.textContent = 'Dieser Befehl braucht keine zusätzlichen Datenfelder.';
+        } else {
+            fieldHint.textContent = '';
+        }
+    }
+    serviceInput.addEventListener('change', () => {
+        updateFieldHint();
+        autoSave();
+    });
+    updateFieldHint();
+
+    table.appendChild(tbody);
+    return table;
 }
 
-// "Auto laden" doesn't fit the uniform AUTO_MANAGED_CONTROLS shape: it's a manufacturer-varying
-// command sequence (currently one recipe, "Zweistufig": set phase count, then start charging) plus
-// an independent single-action "Laden beenden". Kept separate from AUTO_MANAGED_CONTROLS since the
-// concrete kW->Phasen/Ampere math lives entirely server-side (see compute_charging_phases_and_amps).
 function buildCarChargeControl(candidateEntities) {
     const wrapper = document.createElement('div');
     wrapper.className = 'autoActionControl';
@@ -1072,34 +1167,36 @@ function buildCarChargeControl(candidateEntities) {
     wrapper.appendChild(title);
 
     const recipe = configData['carChargeRecipe'] || {};
-    const stopEntity = recipe.stopEntity || '';
-    checkmark.hidden = !(recipe.type === 'two_stage' && recipe.phaseCountEntity && recipe.startEntity && stopEntity);
+    const phaseCountStage = recipe.phaseCount || {};
+    const startStage = recipe.start || {};
+    const stopStage = recipe.stop || {};
+    checkmark.hidden = !(recipe.type === 'two_stage' && phaseCountStage.service && startStage.service && stopStage.service);
 
-    // phase-count needs a value-carrying entity; start/stop just need to be triggerable (or, for
-    // some wallboxes, also value-carrying) - broad enough to cover number/select/button/switch
     const controlDomains = ['number', 'select', 'button', 'switch'];
-    const datalistId = 'carChargeEntityOptions';
-    const datalist = document.createElement('datalist');
-    datalist.id = datalistId;
+    const entityDatalistId = 'carChargeEntityOptions';
+    const entityDatalist = document.createElement('datalist');
+    entityDatalist.id = entityDatalistId;
     for (const entity of candidateEntities) {
         if (entityMatchesSensorFilter(entity, {type: 'domain', values: controlDomains})) {
             const option = document.createElement('option');
             option.value = entity.label;
-            datalist.appendChild(option);
+            entityDatalist.appendChild(option);
         }
     }
-    wrapper.appendChild(datalist);
+    wrapper.appendChild(entityDatalist);
 
-    const recipeHeading = document.createElement('div');
-    recipeHeading.className = 'sectionSubHeading';
-    recipeHeading.textContent = 'Lade-Rezept';
-    wrapper.appendChild(recipeHeading);
+    const candidateServices = allServiceOptions.filter(s => getWallboxServiceDomains().has(s.service.split('.')[0]));
+
+    const variantsHeading = document.createElement('div');
+    variantsHeading.className = 'sectionSubHeading';
+    variantsHeading.textContent = 'Auto laden';
+    wrapper.appendChild(variantsHeading);
 
     const recipeTable = document.createElement('table');
     const recipeTbody = document.createElement('tbody');
     const recipeRow = document.createElement('tr');
     const recipeLabelCell = document.createElement('td');
-    recipeLabelCell.textContent = 'Rezept';
+    recipeLabelCell.textContent = 'Varianten';
     recipeLabelCell.appendChild(buildTooltip('Wie das Addon deine Wallbox ansteuert, um einen Ladevorgang zu starten. "Zweistufig" setzt zuerst die Phasenzahl, dann startet es den Ladevorgang.'));
     const recipeValueCell = document.createElement('td');
     const recipeSelect = document.createElement('select');
@@ -1107,7 +1204,7 @@ function buildCarChargeControl(candidateEntities) {
     recipeSelect.className = 'sensorInput';
     const noRecipeOption = document.createElement('option');
     noRecipeOption.value = '';
-    noRecipeOption.textContent = '– kein Rezept ausgewählt –';
+    noRecipeOption.textContent = '– keine Variante ausgewählt –';
     recipeSelect.appendChild(noRecipeOption);
     const twoStageOption = document.createElement('option');
     twoStageOption.value = 'two_stage';
@@ -1121,20 +1218,18 @@ function buildCarChargeControl(candidateEntities) {
     recipeTable.appendChild(recipeTbody);
     wrapper.appendChild(recipeTable);
 
-    const stagesTable = document.createElement('table');
-    const stagesTbody = document.createElement('tbody');
-    stagesTbody.appendChild(buildEntityPickerRow('car_charge_phase_entity', 'Phasenzahl setzen',
-        'Home-Assistant-Entity (number oder select), über die die Phasenzahl an deiner Wallbox eingestellt wird.',
-        datalistId, recipe.phaseCountEntity || '', autoSave));
-    stagesTbody.appendChild(buildEntityPickerRow('car_charge_start_entity', 'Ladevorgang starten',
-        'Home-Assistant-Entity, über die der Ladevorgang gestartet wird (button/switch als reiner Trigger, number/select falls deine Wallbox dabei auch die Stromstärke entgegennimmt).',
-        datalistId, recipe.startEntity || '', autoSave));
-    stagesTable.appendChild(stagesTbody);
-    stagesTable.style.display = recipeSelect.value === 'two_stage' ? '' : 'none';
-    wrapper.appendChild(stagesTable);
+    const stagesWrapper = document.createElement('div');
+    stagesWrapper.appendChild(buildRecipeStageFields('phaseCount', 'Phasenzahl setzen',
+        'Befehl, mit dem die Phasenzahl an deiner Wallbox eingestellt wird.',
+        candidateServices, entityDatalistId, phaseCountStage));
+    stagesWrapper.appendChild(buildRecipeStageFields('start', 'Ladevorgang starten',
+        'Befehl, mit dem der Ladevorgang gestartet wird.',
+        candidateServices, entityDatalistId, startStage));
+    stagesWrapper.style.display = recipeSelect.value === 'two_stage' ? '' : 'none';
+    wrapper.appendChild(stagesWrapper);
 
     recipeSelect.addEventListener('change', () => {
-        stagesTable.style.display = recipeSelect.value === 'two_stage' ? '' : 'none';
+        stagesWrapper.style.display = recipeSelect.value === 'two_stage' ? '' : 'none';
         autoSave();
     });
 
@@ -1208,13 +1303,11 @@ function buildCarChargeControl(candidateEntities) {
     stopHeading.textContent = 'Laden beenden';
     wrapper.appendChild(stopHeading);
 
-    const stopTable = document.createElement('table');
-    const stopTbody = document.createElement('tbody');
-    stopTbody.appendChild(buildEntityPickerRow('car_charge_stop_entity', 'Auto laden beenden',
-        'Home-Assistant-Entity (i.d.R. button oder switch), über die der Ladevorgang beendet wird - unabhängig vom gewählten Start-Rezept, da das herstellerübergreifend meist eine einzelne Aktion ist.',
-        datalistId, stopEntity, autoSave));
-    stopTable.appendChild(stopTbody);
-    wrapper.appendChild(stopTable);
+    const stopWrapper = document.createElement('div');
+    stopWrapper.appendChild(buildRecipeStageFields('stop', 'Auto laden beenden',
+        'Befehl, mit dem der Ladevorgang beendet wird - unabhängig von der gewählten Start-Variante, da das herstellerübergreifend meist eine einzelne Aktion ist.',
+        candidateServices, entityDatalistId, stopStage));
+    wrapper.appendChild(stopWrapper);
 
     const stopControlsRow = document.createElement('div');
     stopControlsRow.className = 'autoActionButtons';

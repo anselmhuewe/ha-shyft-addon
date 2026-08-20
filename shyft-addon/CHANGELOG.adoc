@@ -1,3 +1,8 @@
+== 0.0.22.0
+
+* "Auto laden" ruft jetzt echte Home-Assistant-Befehle (Services) statt nur Entities auf - nötig, weil manche Wallbox-Integrationen (z.B. Easee) Phasenwahl/Start/Stopp über eigene Services wie easee.set_charger_phase_mode oder easee.action_command abbilden, nicht über number/button-Entities. Jede Stufe bekommt eine Service-Auswahl (vorgeschlagen werden generische Entity-Services plus alle Services der Domain deiner gewählten Wallbox-Integration), ein optionales Ziel-Entity und ein JSON-Feld für die übrigen Parameter, mit "{value}" als Platzhalter für die berechnete Phasen-/Amperezahl. Neuer Endpoint GET /services listet die Kandidaten inkl. ihrer deklarierten Feldnamen
+* "Auto laden"-Überschrift vereinfacht: "Auto laden" statt "Lade-Rezept", Feldbezeichnung "Varianten" statt "Rezept"
+
 == 0.0.21.0
 
 * "Auto laden" bekommt ein Lade-Rezept in der Konfiguration, ohne dass der Nutzer merkt, dass technisch eine Befehlskette läuft: Dropdown "Rezept" (aktuell nur "Zweistufig"), das bei Auswahl zwei Entity-Zuordnungen einblendet - "Phasenzahl setzen" und "Ladevorgang starten" (number/select/button/switch, gefiltert auf diese Domains, Befehl wird passend zur Entity-Domain abgeleitet). Test-Button testet beide Stufen und zeigt danach den Wallbox-Status-Sensor als Erfolgskontrolle. "Laden beenden" ist eine eigene, vom Rezept unabhängige einzelne Entity-Zuordnung (mit eigenem Test-Button), da das herstellerübergreifend meist eine einzelne Aktion ist
