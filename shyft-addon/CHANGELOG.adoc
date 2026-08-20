@@ -1,3 +1,10 @@
+== 0.0.20.0
+
+* Drei weitere Aktionen sind jetzt auto-managed (Entity direkt steuerbar, keine eigene Automation nötig), mit Test-Button/-Toggle, Checkmark und Live-Status/-Wert in der Konfiguration - wie bisher schon bei "Heizung Soll-Temperatur": "PV: Einspeisung begrenzen" und "Verbrauch begrenzen (§14a)" (jeweils number/climate-Entity, Test ±1), sowie "Sonstiger Verbraucher" (switch-Entity, Test-Toggle An/Aus statt Buttons)
+* Neue Sensor-Zuordnungsfelder dafür: "PV: Einspeisung begrenzen (aktuell)", "Verbrauch begrenzen §14a (aktuell)" unter Wechselrichter, "Sonstiger Verbraucher (aktuell)" unter Sonstiger Verbraucher
+* Gerätesteuerung ist jetzt scharf: für diese vier Aktionstypen führt das Addon Start/Ende bei einer shyft-power-Aktion wirklich aus (Entity setzen bzw. ein-/ausschalten), sofern der jeweilige Aktionstyp-Toggle an ist (Default: an) - vorher war das überall nur simuliert/geloggt. Alle anderen Aktionstypen bleiben bis auf Weiteres Platzhalter
+* Auto-managed Scripts werden jetzt auch beim Addon-Start neu synchronisiert (nicht nur beim Speichern der Konfiguration), damit ein Neustart oder ein versehentlich gelöschtes Script sich von selbst repariert
+
 == 0.0.19.2
 
 * Benachrichtigungstyp umbenannt: "Geräteverhalten abweichend von Shyft-Steuerung" statt "Gerätestatus..."

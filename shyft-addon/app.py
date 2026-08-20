@@ -138,52 +138,85 @@ def mapToResponse(response):
     return jsonify(result)
 
 
-def build_heating_target_temp_script_config(entity_id):
-    "Builds a script that sets entity_id to a target_temperature passed in at call time - mirrors blueprints/heizung_soll_temperatur.yaml"
+def build_number_script_config(entity_id, control):
+    "Builds a script that sets entity_id to a target_value passed in at call time - mirrors blueprints/heizung_soll_temperatur.yaml"
     domain = entity_id.split(".")[0]
     if domain == "number":
         action = {
             "action": "number.set_value",
             "target": {"entity_id": entity_id},
-            "data": {"value": "{{ target_temperature }}"}
+            "data": {"value": "{{ target_value }}"}
         }
     elif domain == "climate":
         action = {
             "action": "climate.set_temperature",
             "target": {"entity_id": entity_id},
-            "data": {"temperature": "{{ target_temperature }}"}
+            "data": {"temperature": "{{ target_value }}"}
         }
     else:
         return None
 
     return {
-        "alias": "Shyft: Heizung Soll-Temperatur",
+        "alias": control["script_alias"],
         "fields": {
-            "target_temperature": {
-                "name": "Zieltemperatur",
-                "description": "Die von Shyft berechnete Soll-Temperatur in °C.",
-                "selector": {"number": {"min": 0, "max": 100, "step": 0.5}}
+            "target_value": {
+                "name": control["field_label"],
+                "description": control["field_description"],
+                "selector": {"number": {"min": control["min"], "max": control["max"], "step": control["step"]}}
             }
         },
         "sequence": [action]
     }
 
 
-def sync_heating_target_temp_script(entity_id):
-    "Creates/updates or removes the auto-managed script so it always targets the currently mapped entity. Returns the resulting actorMappings value."
+def sync_number_script(control_key, entity_id):
+    "Creates/updates or removes an auto-managed control's script so it always targets the currently mapped entity. Returns the resulting actorMappings value."
+    control = AUTO_MANAGED_CONTROLS[control_key]
+    script_id = control["script_id"]
     if not entity_id:
-        homeassistant_adapter.delete_script_config(HEATING_TARGET_TEMP_SCRIPT_ID)
+        homeassistant_adapter.delete_script_config(script_id)
         homeassistant_adapter.call_service("script", "reload")
         return ""
 
-    config = build_heating_target_temp_script_config(entity_id)
+    config = build_number_script_config(entity_id, control)
     if config is None:
         raise Exception(f"Entity {entity_id} ist weder eine number- noch eine climate-Entity")
 
-    homeassistant_adapter.put_script_config(HEATING_TARGET_TEMP_SCRIPT_ID, config)
+    homeassistant_adapter.put_script_config(script_id, config)
     # writing the config alone doesn't make HA (re-)register the script entity - it needs an explicit reload
     homeassistant_adapter.call_service("script", "reload")
-    return f"script.{HEATING_TARGET_TEMP_SCRIPT_ID}"
+    return f"script.{script_id}"
+
+
+def sync_all_auto_managed_scripts():
+    "Re-creates every number-type auto-managed script against its currently mapped entity - run at startup so a HA restart or a manually deleted script self-heals without needing a config save."
+    config = _read_current_config()
+    sensor_mappings = config.get("sensorMappings", {})
+    for control_key, control in AUTO_MANAGED_CONTROLS.items():
+        if control["type"] != "number":
+            continue
+        try:
+            sync_number_script(control_key, sensor_mappings.get(control["sensor_field"], ""))
+        except Exception as e:
+            print(f"[Shyft] Startup-Sync fuer '{control_key}' fehlgeschlagen:", repr(e))
+
+
+def execute_auto_managed_action(control_key, phase, target_value):
+    "Executes the concrete Start/Ende-Verhalten for a direct-entity-control Aktionstyp (see AUTO_MANAGED_CONTROLS)."
+    control = AUTO_MANAGED_CONTROLS[control_key]
+    entity_id = _read_current_config().get("sensorMappings", {}).get(control["sensor_field"], "")
+    if not entity_id:
+        raise Exception(f"Keine Entity fuer '{control_key}' zugeordnet")
+
+    if control["type"] == "number":
+        if phase != "start":
+            return  # no Ende-Verhalten defined yet for direct-value controls - a later step may add one
+        if target_value is None:
+            raise Exception("Aktion enthaelt keinen Zielwert (Target Value)")
+        homeassistant_adapter.call_service("script", control["script_id"], {"target_value": target_value})
+    elif control["type"] == "switch":
+        service = "turn_on" if phase == "start" else "turn_off"
+        homeassistant_adapter.call_service("homeassistant", service, {"entity_id": entity_id})
 
 
 @app.route("/config", methods=["PUT"])
@@ -208,14 +241,17 @@ def writeConfig():
     data.update(incoming)
 
     script_sync_errors = {}
-    heating_entity = data.get("sensorMappings", {}).get("heatpump_heating_target_temp_normal", "")
-    try:
-        script_entity_id = sync_heating_target_temp_script(heating_entity)
-        if "actorMappings" in data:
-            data["actorMappings"]["heating_target_temp"] = script_entity_id
-    except Exception as e:
-        print("Failed to sync heating_target_temp script:", repr(e))
-        script_sync_errors["heating_target_temp"] = str(e)
+    for control_key, control in AUTO_MANAGED_CONTROLS.items():
+        if control["type"] != "number":
+            continue
+        entity_id = data.get("sensorMappings", {}).get(control["sensor_field"], "")
+        try:
+            script_entity_id = sync_number_script(control_key, entity_id)
+            if "actorMappings" in data:
+                data["actorMappings"][control["actor_key"]] = script_entity_id
+        except Exception as e:
+            print(f"Failed to sync {control_key} script:", repr(e))
+            script_sync_errors[control_key] = str(e)
 
     if "actionTypeEnabled" in incoming:
         try:
@@ -230,49 +266,73 @@ def writeConfig():
     return jsonify(response_data)
 
 
-@app.route("/actions/heating_target_temp/status", methods=["GET"])
-def statusHeatingTargetTemp():
-    entity_id = _read_current_config().get("sensorMappings", {}).get("heatpump_heating_target_temp_normal", "")
+@app.route("/actions/<control_key>/status", methods=["GET"])
+def statusAutoManagedControl(control_key):
+    control = AUTO_MANAGED_CONTROLS.get(control_key)
+    if not control:
+        return jsonify({"error": "unbekannte Steuerung"}), 404
+
+    entity_id = _read_current_config().get("sensorMappings", {}).get(control["sensor_field"], "")
     if not entity_id:
         return jsonify({"configured": False})
 
-    script_entity_id = f"script.{HEATING_TARGET_TEMP_SCRIPT_ID}"
-    script_state = homeassistant_adapter.get_from_homeassistant(f"/api/states/{script_entity_id}")
-    if not isinstance(script_state, dict) or "state" not in script_state:
-        return jsonify({
-            "configured": True,
-            "entity_id": entity_id,
-            "value": None,
-            "error": f"{script_entity_id} wurde noch nicht angelegt. Speichere die Zieltemperatur-Entity erneut oder prüfe die Addon-Logs."
-        })
+    if control["type"] == "number":
+        script_entity_id = f"script.{control['script_id']}"
+        script_state = homeassistant_adapter.get_from_homeassistant(f"/api/states/{script_entity_id}")
+        if not isinstance(script_state, dict) or "state" not in script_state:
+            return jsonify({
+                "configured": True,
+                "entity_id": entity_id,
+                "value": None,
+                "error": f"{script_entity_id} wurde noch nicht angelegt. Speichere die Entity erneut oder prüfe die Addon-Logs."
+            })
+        try:
+            value = homeassistant_adapter.read_entity_numeric_value(entity_id)
+            return jsonify({"configured": True, "entity_id": entity_id, "value": value})
+        except Exception as e:
+            return jsonify({"configured": True, "entity_id": entity_id, "value": None, "error": str(e)})
+    else:  # switch
+        try:
+            state = homeassistant_adapter.get_from_homeassistant(f"/api/states/{entity_id}")
+            if not isinstance(state, dict) or "state" not in state:
+                raise Exception(f"{entity_id} liefert keinen Status")
+            return jsonify({"configured": True, "entity_id": entity_id, "value": state["state"]})
+        except Exception as e:
+            return jsonify({"configured": True, "entity_id": entity_id, "value": None, "error": str(e)})
 
-    try:
-        value = homeassistant_adapter.read_entity_numeric_value(entity_id)
-        return jsonify({"configured": True, "entity_id": entity_id, "value": value})
-    except Exception as e:
-        return jsonify({"configured": True, "entity_id": entity_id, "value": None, "error": str(e)})
 
+@app.route("/actions/<control_key>/test", methods=["POST"])
+def testAutoManagedControl(control_key):
+    control = AUTO_MANAGED_CONTROLS.get(control_key)
+    if not control:
+        return jsonify({"success": False, "message": "unbekannte Steuerung"}), 404
 
-@app.route("/actions/heating_target_temp/test", methods=["POST"])
-def testHeatingTargetTemp():
-    body = request.get_json(force=True, silent=True) or {}
-    delta = body.get("delta", 0)
-
-    entity_id = _read_current_config().get("sensorMappings", {}).get("heatpump_heating_target_temp_normal", "")
+    entity_id = _read_current_config().get("sensorMappings", {}).get(control["sensor_field"], "")
     if not entity_id:
-        return jsonify({"success": False, "message": "Keine Zieltemperatur-Entity zugeordnet"}), 400
+        return jsonify({"success": False, "message": "Keine Entity zugeordnet"}), 400
 
-    try:
-        current_value = homeassistant_adapter.read_entity_numeric_value(entity_id)
-        new_value = current_value + delta
-        homeassistant_adapter.call_service("script", HEATING_TARGET_TEMP_SCRIPT_ID, {"target_temperature": new_value})
-        # Cloud-connected devices (e.g. a heat pump reachable only via the manufacturer's
-        # cloud API) can take much longer than a second or two to actually report the new
-        # value back, so we return the optimistic value immediately instead of blocking
-        # here and risking showing the stale one. The frontend re-checks shortly after.
-        return jsonify({"success": True, "value": new_value, "confirmed": False})
-    except Exception as e:
-        return jsonify({"success": False, "message": str(e)}), 500
+    body = request.get_json(force=True, silent=True) or {}
+
+    if control["type"] == "number":
+        delta = body.get("delta", 0)
+        try:
+            current_value = homeassistant_adapter.read_entity_numeric_value(entity_id)
+            new_value = current_value + delta
+            homeassistant_adapter.call_service("script", control["script_id"], {"target_value": new_value})
+            # Cloud-connected devices (e.g. a heat pump reachable only via the manufacturer's
+            # cloud API) can take much longer than a second or two to actually report the new
+            # value back, so we return the optimistic value immediately instead of blocking
+            # here and risking showing the stale one. The frontend re-checks shortly after.
+            return jsonify({"success": True, "value": new_value, "confirmed": False})
+        except Exception as e:
+            return jsonify({"success": False, "message": str(e)}), 500
+    else:  # switch
+        turn_on = body.get("on", True)
+        try:
+            homeassistant_adapter.call_service("homeassistant", "turn_on" if turn_on else "turn_off", {"entity_id": entity_id})
+            return jsonify({"success": True, "value": "on" if turn_on else "off", "confirmed": False})
+        except Exception as e:
+            return jsonify({"success": False, "message": str(e)}), 500
 
 
 def _read_current_config():
@@ -310,6 +370,65 @@ NOTIFICATION_TYPES = {
     "device_status_deviation": "Geräteverhalten abweichend von Shyft-Steuerung",
 }
 
+# Aktionstypen the addon controls directly (writes the mapped entity itself), no user-side
+# automation needed - mirrors AUTO_MANAGED_CONTROLS in www/app.js. "number" controls go through
+# an auto-managed script (like a Home Assistant blueprint, but generated and kept in sync by the
+# addon); "switch" controls are turned on/off directly, no script involved.
+AUTO_MANAGED_CONTROLS = {
+    "heating_target_temp": {
+        "type": "number",
+        "sensor_field": "heatpump_heating_target_temp_normal",
+        "actor_key": "heating_target_temp",
+        "script_id": HEATING_TARGET_TEMP_SCRIPT_ID,
+        "script_alias": "Shyft: Heizung Soll-Temperatur",
+        "field_label": "Zieltemperatur",
+        "field_description": "Die von Shyft berechnete Soll-Temperatur in °C.",
+        "min": 0, "max": 100, "step": 0.5,
+    },
+    "pv_feed_in_limit": {
+        "type": "number",
+        "sensor_field": "photovoltaic_feed_in_limit_entity",
+        "actor_key": "pv_feed_in_limit",
+        "script_id": "shyft_pv_feed_in_limit",
+        "script_alias": "Shyft: PV-Einspeisung begrenzen",
+        "field_label": "Einspeiselimit",
+        "field_description": "Das von Shyft berechnete Einspeiselimit.",
+        "min": 0, "max": 100000, "step": 1,
+    },
+    "consumption_limit_14a": {
+        "type": "number",
+        "sensor_field": "photovoltaic_consumption_limit_entity",
+        "actor_key": "consumption_limit_14a",
+        "script_id": "shyft_consumption_limit_14a",
+        "script_alias": "Shyft: Verbrauch begrenzen (§14a)",
+        "field_label": "Verbrauchslimit",
+        "field_description": "Das von Shyft berechnete Verbrauchslimit gemäß §14a EnWG.",
+        "min": 0, "max": 100000, "step": 1,
+    },
+    "consumer_on_off": {
+        "type": "switch",
+        "sensor_field": "sonstiger_verbraucher_switch_entity",
+        "actor_keys": ["consumer_on", "consumer_off"],
+    },
+}
+
+# Reverse lookup from shyft-power's "Action Name" to the auto-managed control that handles it,
+# derived from ACTION_TYPE_TOGGLE_KEYS so the Action Name string lives in exactly one place.
+# consumer_off is intentionally absent from ACTION_TYPE_TOGGLE_KEYS (see there), so it's covered
+# implicitly: "Verbraucher an" is the single Action Name shyft-power uses for the whole lifecycle
+# of that Aktionstyp, start and end alike (see process_shyft_actions).
+def _build_action_name_to_control_key():
+    result = {}
+    for control_key, control in AUTO_MANAGED_CONTROLS.items():
+        for actor_key in control.get("actor_keys") or [control.get("actor_key")]:
+            action_name = ACTION_TYPE_TOGGLE_KEYS.get(actor_key)
+            if action_name:
+                result[action_name] = control_key
+    return result
+
+
+ACTION_NAME_TO_CONTROL_KEY = _build_action_name_to_control_key()
+
 
 def is_action_type_enabled(config, action_name):
     "Addon-side replacement for shyft-power's own '(deaktiviert)' status suffix - the per-Aktionstyp toggle decides, not shyft-power."
@@ -345,23 +464,41 @@ def check_device_status_deviation(action, config):
 
 
 def handle_shyft_action_start(action, actions_enabled, config):
-    "Placeholder - the concrete start behaviour per action is defined in a later step"
+    "For direct-entity-control Aktionstypen (see AUTO_MANAGED_CONTROLS) this really executes; everything else is still a placeholder pending a later step."
     label = action.get("Action Name", "?")
     target = action.get("Target Value")
-    if actions_enabled:
-        print(f"[Shyft] Start faellig fuer '{label}' (Ziel: {target}) - Ausfuehrung pro Aktion noch nicht implementiert.")
-    else:
+    control_key = ACTION_NAME_TO_CONTROL_KEY.get(label)
+
+    if not actions_enabled:
         print(f"[Shyft] Start faellig fuer '{label}' (Ziel: {target}) - Aktionstyp ist deaktiviert, nur simuliert.")
+    elif control_key:
+        try:
+            execute_auto_managed_action(control_key, "start", target)
+            print(f"[Shyft] Start ausgefuehrt fuer '{label}' (Ziel: {target}).")
+        except Exception as e:
+            print(f"[Shyft] Start fuer '{label}' fehlgeschlagen: {e!r}")
+    else:
+        print(f"[Shyft] Start faellig fuer '{label}' (Ziel: {target}) - Ausfuehrung pro Aktion noch nicht implementiert.")
+
     notify_action_event(config, action, "gestartet" if actions_enabled else "gestartet (nur simuliert)")
 
 
 def handle_shyft_action_end(action, actions_enabled, config):
-    "Placeholder - the concrete end behaviour per action is defined in a later step"
+    "For direct-entity-control Aktionstypen (see AUTO_MANAGED_CONTROLS) this really executes; everything else is still a placeholder pending a later step."
     label = action.get("Action Name", "?")
-    if actions_enabled:
-        print(f"[Shyft] Ende faellig fuer '{label}' - Ausfuehrung pro Aktion noch nicht implementiert.")
-    else:
+    control_key = ACTION_NAME_TO_CONTROL_KEY.get(label)
+
+    if not actions_enabled:
         print(f"[Shyft] Ende faellig fuer '{label}' - Aktionstyp ist deaktiviert, nur simuliert.")
+    elif control_key:
+        try:
+            execute_auto_managed_action(control_key, "end", None)
+            print(f"[Shyft] Ende ausgefuehrt fuer '{label}'.")
+        except Exception as e:
+            print(f"[Shyft] Ende fuer '{label}' fehlgeschlagen: {e!r}")
+    else:
+        print(f"[Shyft] Ende faellig fuer '{label}' - Ausfuehrung pro Aktion noch nicht implementiert.")
+
     notify_action_event(config, action, "beendet" if actions_enabled else "beendet (nur simuliert)")
 
 
@@ -536,5 +673,10 @@ if __name__ == "__main__":
     print("TOKEN FOR HAOS_API", mask_secret(SUPERVISOR_TOKEN))
     print("Loaded SHYFT_ACCESS_KEY:", mask_secret(SHYFT_ACCESS_KEY))
     print("Detailed logging:", DETAILED_LOGGING)
+
+    try:
+        sync_all_auto_managed_scripts()
+    except Exception as e:
+        print("Failed to sync auto-managed scripts at startup:", repr(e))
 
     app.run(host="0.0.0.0", port=8080)

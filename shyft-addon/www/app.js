@@ -95,6 +95,18 @@ const helpinformation = {
         label: 'Wallbox: Auto verbunden?',
         description: 'Ja / Nein, je nachdem ob der Ladestecker deiner Wallbox im Auto eingesteckt ist oder nicht.'
     },
+    'photovoltaic_feed_in_limit_entity': {
+        label: 'PV: Einspeisung begrenzen (aktuell)',
+        description: 'Die Home-Assistant-Entity (number), über die shyft-power die Einspeiseleistung deiner PV-Anlage direkt begrenzt - keine eigene Automation nötig.'
+    },
+    'photovoltaic_consumption_limit_entity': {
+        label: 'Verbrauch begrenzen §14a (aktuell)',
+        description: 'Die Home-Assistant-Entity (number), über die shyft-power deinen Verbrauch im Rahmen von §14a EnWG direkt begrenzt - keine eigene Automation nötig.'
+    },
+    'sonstiger_verbraucher_switch_entity': {
+        label: 'Sonstiger Verbraucher (aktuell)',
+        description: 'Die Home-Assistant-Entity (switch), über die shyft-power den sonstigen Verbraucher direkt ein-/ausschaltet - keine eigene Automation nötig.'
+    },
 
 }
 
@@ -174,13 +186,16 @@ const SENSOR_ENTITY_FILTERS = {
     'electronicvehicle_state_of_charge': {type: 'device_class', value: 'battery'},
     'wallbox_current_charging_power': {type: 'device_class', value: 'power'},
     'wallbox_plugged': {type: 'none'},
+    'photovoltaic_feed_in_limit_entity': {type: 'none'},
+    'photovoltaic_consumption_limit_entity': {type: 'none'},
+    'sonstiger_verbraucher_switch_entity': {type: 'state_on_off'},
 }
 
 const INTEGRATION_SECTIONS = [
     {
         key: 'wechselrichter',
         label: 'Wechselrichter',
-        sensors: ['photovoltaic_powerflow_pv', 'photovoltaic_powerflow_load', 'photovoltaic_powerflow_grid', 'photovoltaic_powerflow_battery'],
+        sensors: ['photovoltaic_powerflow_pv', 'photovoltaic_powerflow_load', 'photovoltaic_powerflow_grid', 'photovoltaic_powerflow_battery', 'photovoltaic_feed_in_limit_entity', 'photovoltaic_consumption_limit_entity'],
         actions: ['pv_feed_in_limit', 'consumption_limit_14a'],
         requiresDeviceClass: 'power'
     },
@@ -220,7 +235,7 @@ const INTEGRATION_SECTIONS = [
     {
         key: 'sonstiger_verbraucher',
         label: 'Sonstiger Verbraucher',
-        sensors: [],
+        sensors: ['sonstiger_verbraucher_switch_entity'],
         actions: ['consumer_on', 'consumer_off']
     },
 ]
@@ -276,7 +291,15 @@ const ACTION_TOGGLE_POSTFIX = "_toggle";
 
 // Actions the addon sets up and calls itself (via a generated script), rather than
 // asking the user to paste an automation/script entity id.
-const AUTO_MANAGED_ACTIONS = new Set(['heating_target_temp']);
+// Actions the addon controls directly (writes the entity itself), no user-side automation needed -
+// mirrors the Home Assistant entity domains handled in AUTO_MANAGED_CONTROLS in app.py.
+const AUTO_MANAGED_CONTROLS = [
+    {key: 'heating_target_temp', type: 'number', sensorField: 'heatpump_heating_target_temp_normal', actionKeys: ['heating_target_temp'], titleLabel: 'Heizung Soll-Temperatur (aktuell)', unit: '°C', step: 1},
+    {key: 'pv_feed_in_limit', type: 'number', sensorField: 'photovoltaic_feed_in_limit_entity', actionKeys: ['pv_feed_in_limit'], titleLabel: 'PV: Einspeisung begrenzen (aktuell)', unit: '', step: 1},
+    {key: 'consumption_limit_14a', type: 'number', sensorField: 'photovoltaic_consumption_limit_entity', actionKeys: ['consumption_limit_14a'], titleLabel: 'Verbrauch begrenzen §14a (aktuell)', unit: '', step: 1},
+    {key: 'consumer_on_off', type: 'switch', sensorField: 'sonstiger_verbraucher_switch_entity', actionKeys: ['consumer_on', 'consumer_off'], titleLabel: 'Sonstiger Verbraucher (aktuell)'},
+];
+const AUTO_MANAGED_ACTION_KEYS = new Set(AUTO_MANAGED_CONTROLS.flatMap(c => c.actionKeys));
 
 // actorMappings keys that get an on/off "nur simulieren" toggle. battery_action_stop/car_charge_stop
 // are shared stop-actors for an already-toggled type and don't get their own toggle.
@@ -291,7 +314,6 @@ const NOTIFICATION_TYPES = {
 };
 
 let currentIntegrationSelections = {};
-let refreshHeatingTargetTempStatus = null;
 
 async function saveConfigurationNow() {
     const sensorValues = {...(configData["sensorMappings"] || {})};
@@ -319,9 +341,12 @@ async function saveConfigurationNow() {
             }
         }
     }
-    const heatingToggle = document.getElementById('heating_target_temp' + ACTION_TOGGLE_POSTFIX);
-    if (heatingToggle) {
-        actionTypeEnabled['heating_target_temp'] = heatingToggle.checked;
+    for (const control of AUTO_MANAGED_CONTROLS) {
+        const toggleKey = control.actionKeys[0];
+        const toggleElement = document.getElementById(toggleKey + ACTION_TOGGLE_POSTFIX);
+        if (toggleElement) {
+            actionTypeEnabled[toggleKey] = toggleElement.checked;
+        }
     }
 
     const notificationTargets = {...(configData["notificationTargets"] || {})};
@@ -347,8 +372,10 @@ async function saveConfigurationNow() {
     };
     const response = await putJson(configUri, toBeWritten);
     configData = response;
-    if (refreshHeatingTargetTempStatus) {
-        refreshHeatingTargetTempStatus();
+    for (const control of document.querySelectorAll('.autoActionControl')) {
+        if (control.__refresh) {
+            control.__refresh();
+        }
     }
 }
 
@@ -739,10 +766,10 @@ function renderSectionBody(bodyDiv, section, entryIds) {
         bodyDiv.appendChild(buildMappingTable(section.sensors, configData["sensorMappings"] || {}, helpinformation, VALUE_POSTFIX, key => sensorDatalistIds[key], true));
     }
 
-    const manualActions = section.actions.filter(key => !AUTO_MANAGED_ACTIONS.has(key));
-    const hasAutoManagedAction = section.actions.some(key => AUTO_MANAGED_ACTIONS.has(key));
+    const manualActions = section.actions.filter(key => !AUTO_MANAGED_ACTION_KEYS.has(key));
+    const sectionControls = AUTO_MANAGED_CONTROLS.filter(c => c.actionKeys.some(k => section.actions.includes(k)));
 
-    if (manualActions.length > 0 || hasAutoManagedAction) {
+    if (manualActions.length > 0 || sectionControls.length > 0) {
         const controlHeading = document.createElement('div');
         controlHeading.className = 'sectionSubHeading controlSectionHeading';
         controlHeading.textContent = 'Steuerung';
@@ -753,27 +780,32 @@ function renderSectionBody(bodyDiv, section, entryIds) {
         bodyDiv.appendChild(buildMappingTable(manualActions, configData["actorMappings"] || {}, actorHelpInformation, ACTOR_VALUE_POSTFIX, () => 'allEntityOptions', false, configData["actionTypeEnabled"] || {}));
     }
 
-    if (hasAutoManagedAction) {
-        bodyDiv.appendChild(buildHeatingTargetTempControl());
+    for (const control of sectionControls) {
+        bodyDiv.appendChild(control.type === 'switch' ? buildAutoManagedSwitchControl(control) : buildAutoManagedNumberControl(control));
     }
 }
 
-function buildHeatingTargetTempControl() {
-    const wrapper = document.createElement('div');
-    wrapper.className = 'autoActionControl';
-
+function buildAutoActionTitle(control, toggleKey) {
     const title = document.createElement('div');
     title.className = 'autoActionTitle';
     const titleText = document.createElement('span');
-    titleText.textContent = actorHelpInformation['heating_target_temp'].label;
+    titleText.textContent = control.titleLabel;
     title.appendChild(titleText);
     const checkmark = document.createElement('span');
     checkmark.className = 'autoActionCheckmark';
     checkmark.textContent = ' ✓';
     checkmark.hidden = true;
     title.appendChild(checkmark);
-    const toggleChecked = (configData["actionTypeEnabled"] || {})['heating_target_temp'] !== false;
-    title.appendChild(buildToggleSwitch('heating_target_temp' + ACTION_TOGGLE_POSTFIX, toggleChecked));
+    const toggleChecked = (configData["actionTypeEnabled"] || {})[toggleKey] !== false;
+    title.appendChild(buildToggleSwitch(toggleKey + ACTION_TOGGLE_POSTFIX, toggleChecked));
+    return {title, checkmark};
+}
+
+function buildAutoManagedNumberControl(control) {
+    const wrapper = document.createElement('div');
+    wrapper.className = 'autoActionControl';
+
+    const {title, checkmark} = buildAutoActionTitle(control, control.actionKeys[0]);
     wrapper.appendChild(title);
 
     const status = document.createElement('div');
@@ -784,13 +816,14 @@ function buildHeatingTargetTempControl() {
     const controls = document.createElement('div');
     controls.className = 'autoActionButtons';
 
+    const unitSuffix = control.unit ? ' ' + control.unit : '';
     const minusButton = document.createElement('button');
     minusButton.type = 'button';
-    minusButton.textContent = 'Test: -1 °C';
+    minusButton.textContent = `Test: -${control.step}${unitSuffix}`;
 
     const plusButton = document.createElement('button');
     plusButton.type = 'button';
-    plusButton.textContent = 'Test: +1 °C';
+    plusButton.textContent = `Test: +${control.step}${unitSuffix}`;
 
     const valueDisplay = document.createElement('span');
     valueDisplay.className = 'autoActionValue';
@@ -798,9 +831,9 @@ function buildHeatingTargetTempControl() {
 
     async function refreshStatus() {
         try {
-            const result = await getJson(insideHomeAssistant + '/actions/heating_target_temp/status');
+            const result = await getJson(insideHomeAssistant + '/actions/' + control.key + '/status');
             if (!result.configured) {
-                status.textContent = 'Befülle die "Heizung Soll-Temperatur (aktuell)"';
+                status.textContent = 'Befülle die "' + control.titleLabel + '"';
                 status.className = 'autoActionStatus status-missing';
                 checkmark.hidden = true;
                 minusButton.disabled = true;
@@ -819,7 +852,7 @@ function buildHeatingTargetTempControl() {
                 status.textContent = '';
                 status.className = 'autoActionStatus status-ok';
                 checkmark.hidden = false;
-                valueDisplay.textContent = 'Aktueller Wert: ' + result.value + ' °C';
+                valueDisplay.textContent = 'Aktueller Wert: ' + result.value + unitSuffix;
             }
         } catch (err) {
             console.log(err);
@@ -835,7 +868,7 @@ function buildHeatingTargetTempControl() {
         plusButton.disabled = true;
         valueDisplay.textContent = 'Teste...';
         try {
-            const response = await fetch(insideHomeAssistant + '/actions/heating_target_temp/test', {
+            const response = await fetch(insideHomeAssistant + '/actions/' + control.key + '/test', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({delta})
@@ -844,7 +877,7 @@ function buildHeatingTargetTempControl() {
             if (result.success) {
                 // devices reachable only via a manufacturer cloud API can take a while to
                 // report the new value back, so show what we sent right away, then confirm
-                valueDisplay.textContent = 'Gesendet: ' + result.value + ' °C (prüfe...)';
+                valueDisplay.textContent = 'Gesendet: ' + result.value + unitSuffix + ' (prüfe...)';
                 setTimeout(refreshStatus, 4000);
             } else {
                 valueDisplay.textContent = 'Fehler: ' + (result.message || 'unbekannt');
@@ -858,15 +891,106 @@ function buildHeatingTargetTempControl() {
         }
     }
 
-    minusButton.addEventListener('click', () => runTest(-1));
-    plusButton.addEventListener('click', () => runTest(1));
+    minusButton.addEventListener('click', () => runTest(-control.step));
+    plusButton.addEventListener('click', () => runTest(control.step));
 
     controls.appendChild(valueDisplay);
     controls.appendChild(minusButton);
     controls.appendChild(plusButton);
     wrapper.appendChild(controls);
 
-    refreshHeatingTargetTempStatus = refreshStatus;
+    wrapper.__refresh = refreshStatus;
+    refreshStatus();
+
+    return wrapper;
+}
+
+function buildAutoManagedSwitchControl(control) {
+    const wrapper = document.createElement('div');
+    wrapper.className = 'autoActionControl';
+
+    const {title, checkmark} = buildAutoActionTitle(control, control.actionKeys[0]);
+    wrapper.appendChild(title);
+
+    const status = document.createElement('div');
+    status.className = 'autoActionStatus';
+    status.textContent = 'Lade Status...';
+    wrapper.appendChild(status);
+
+    const controlsRow = document.createElement('div');
+    controlsRow.className = 'autoActionButtons';
+
+    const valueDisplay = document.createElement('span');
+    valueDisplay.className = 'autoActionValue';
+    valueDisplay.textContent = 'Aktueller Status: –';
+
+    const testToggleLabel = buildBareToggleSwitch(false);
+    const testToggleInput = testToggleLabel.querySelector('input');
+
+    async function refreshStatus() {
+        try {
+            const result = await getJson(insideHomeAssistant + '/actions/' + control.key + '/status');
+            if (!result.configured) {
+                status.textContent = 'Befülle die "' + control.titleLabel + '"';
+                status.className = 'autoActionStatus status-missing';
+                checkmark.hidden = true;
+                testToggleInput.disabled = true;
+                valueDisplay.textContent = 'Aktueller Status: –';
+                return;
+            }
+            testToggleInput.disabled = false;
+            if (result.error) {
+                status.textContent = 'Eingerichtet, aktueller Status aber nicht lesbar: ' + result.error;
+                status.className = 'autoActionStatus status-error';
+                checkmark.hidden = true;
+                valueDisplay.textContent = 'Aktueller Status: –';
+            } else {
+                status.textContent = '';
+                status.className = 'autoActionStatus status-ok';
+                checkmark.hidden = false;
+                const isOn = result.value === 'on';
+                valueDisplay.textContent = 'Aktueller Status: ' + (isOn ? 'An' : 'Aus');
+                testToggleInput.checked = isOn;
+            }
+        } catch (err) {
+            console.log(err);
+            status.textContent = 'Status konnte nicht geladen werden.';
+            status.className = 'autoActionStatus status-error';
+            checkmark.hidden = true;
+            valueDisplay.textContent = 'Aktueller Status: –';
+        }
+    }
+
+    testToggleInput.addEventListener('change', async () => {
+        const turnOn = testToggleInput.checked;
+        testToggleInput.disabled = true;
+        valueDisplay.textContent = 'Teste...';
+        try {
+            const response = await fetch(insideHomeAssistant + '/actions/' + control.key + '/test', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({on: turnOn})
+            });
+            const result = await response.json();
+            if (result.success) {
+                valueDisplay.textContent = 'Gesendet: ' + (turnOn ? 'An' : 'Aus') + ' (prüfe...)';
+                setTimeout(refreshStatus, 4000);
+            } else {
+                valueDisplay.textContent = 'Fehler: ' + (result.message || 'unbekannt');
+            }
+        } catch (err) {
+            console.log(err);
+            valueDisplay.textContent = 'Fehler beim Testen';
+        } finally {
+            testToggleInput.disabled = false;
+        }
+    });
+
+    controlsRow.appendChild(valueDisplay);
+    controlsRow.appendChild(testToggleLabel);
+    wrapper.appendChild(controlsRow);
+
+    wrapper.__refresh = refreshStatus;
     refreshStatus();
 
     return wrapper;
@@ -885,18 +1009,24 @@ function buildMappingTable(keys, mappingData, helpInfo, valuePostfix, getDatalis
     return table;
 }
 
-function buildToggleSwitch(id, checked) {
+function buildBareToggleSwitch(checked) {
     const label = document.createElement('label');
     label.className = 'toggleSwitch';
     const input = document.createElement('input');
     input.type = 'checkbox';
-    input.id = id;
     input.checked = checked;
-    input.addEventListener('change', autoSave);
     const slider = document.createElement('span');
     slider.className = 'toggleSlider';
     label.appendChild(input);
     label.appendChild(slider);
+    return label;
+}
+
+function buildToggleSwitch(id, checked) {
+    const label = buildBareToggleSwitch(checked);
+    const input = label.querySelector('input');
+    input.id = id;
+    input.addEventListener('change', autoSave);
     return label;
 }
 
