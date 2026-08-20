@@ -16,7 +16,6 @@
     "heatpump_current_power_elect": "sensor.heatpump_mock_the_sensor_mock",
     "heatpump_on_off": "sensor.heatpump_mock_the_sensor_mock",
     "heatpump_temp_indoor_measured": "sensor.heatpump_mock_the_sensor_mock",
-    "electronicvehicle_plugged": "sensor.heatpump_mock_the_sensor_mock",
     "electronicvehicle_state_of_charge": "sensor.heatpump_mock_the_sensor_mock",
     "wallbox_current_charging_power": "sensor.heatpump_mock_the_sensor_mock"
   },
