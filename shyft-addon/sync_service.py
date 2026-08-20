@@ -23,7 +23,6 @@ LIST_OF_SENSORS = {
     "heatpump_supply_temp_hp": "HP - Supply Temp HP",
     "heatpump_on_off": "HP - On/Off",
     "heatpump_temp_indoor_measured": "HP - Temp Indoor measured",
-    "electronicvehicle_plugged": "EV - Plugged",
     "electronicvehicle_state_of_charge": "EV - SOC",
     "wallbox_current_charging_power": "WB - Current Charging Power",
     "wallbox_plugged": "WB - Plugged"

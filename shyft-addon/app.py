@@ -5,6 +5,7 @@ from shyft_adapter import ShyftAdapter
 import os
 from flask import Flask, send_from_directory, jsonify, request, Response
 import json
+import math
 import re
 import shutil
 import time
@@ -134,6 +135,7 @@ def mapToResponse(response):
             "label": item["entity_id"] + " (" + item["state"] + " " + unitOfMeasurement + ")",
             "device_class": attributes.get("device_class", ""),
             "state": item["state"],
+            "unit": unitOfMeasurement,
         })
     return jsonify(result)
 
@@ -217,6 +219,99 @@ def execute_auto_managed_action(control_key, phase, target_value):
     elif control["type"] == "switch":
         service = "turn_on" if phase == "start" else "turn_off"
         homeassistant_adapter.call_service("homeassistant", service, {"entity_id": entity_id})
+
+
+def call_entity_action(entity_id, value=None, turn_off=False):
+    "Calls the Home Assistant service matching entity_id's domain - number/select need a value, button/switch are simple triggers."
+    domain = entity_id.split(".")[0]
+    if domain == "number":
+        homeassistant_adapter.call_service("number", "set_value", {"entity_id": entity_id, "value": value})
+    elif domain == "select":
+        homeassistant_adapter.call_service("select", "select_option", {"entity_id": entity_id, "option": str(value)})
+    elif domain == "button":
+        homeassistant_adapter.call_service("button", "press", {"entity_id": entity_id})
+    elif domain == "switch":
+        homeassistant_adapter.call_service("switch", "turn_off" if turn_off else "turn_on", {"entity_id": entity_id})
+    else:
+        raise Exception(f"Nicht unterstuetzte Entity-Domain fuer '{entity_id}'")
+
+
+# Assumptions behind the kW -> Phasen/Ampere conversion for "Auto laden" (not yet configurable):
+# 230V per phase (standard German residential connection), a 16A single-phase ceiling before
+# switching to 3-phase, and the IEC 61851 6A EV charging minimum. shyft-power's own wallbox power
+# constraints (e.g. max charging power) aren't transmitted to the addon yet - a later step.
+CHARGING_PHASE_VOLTAGE = 230
+CHARGING_MIN_AMPS = 6
+CHARGING_SINGLE_PHASE_MAX_AMPS = 16
+
+
+def compute_charging_phases_and_amps(target_kw):
+    "Converts shyft-power's kW Target Value for 'Auto laden' into a phase count + Ampere for the wallbox. Always rounds up so the result never falls below the 6A EV charging minimum."
+    if target_kw is None:
+        raise Exception("Aktion enthaelt keinen Zielwert (Target Value)")
+    single_phase_amps = math.ceil(target_kw * 1000 / CHARGING_PHASE_VOLTAGE)
+    if single_phase_amps <= CHARGING_SINGLE_PHASE_MAX_AMPS:
+        return 1, max(CHARGING_MIN_AMPS, single_phase_amps)
+    three_phase_amps = math.ceil(target_kw * 1000 / (3 * CHARGING_PHASE_VOLTAGE))
+    return 3, max(CHARGING_MIN_AMPS, three_phase_amps)
+
+
+def execute_car_charge_start(target_kw):
+    config = _read_current_config()
+    recipe = config.get("carChargeRecipe", {})
+    if recipe.get("type") != "two_stage":
+        raise Exception("Kein Lade-Rezept konfiguriert")
+    phase_entity = recipe.get("phaseCountEntity", "")
+    start_entity = recipe.get("startEntity", "")
+    if not phase_entity or not start_entity:
+        raise Exception("Nicht alle Entities fuer das Lade-Rezept zugeordnet")
+
+    phases, amps = compute_charging_phases_and_amps(target_kw)
+    call_entity_action(phase_entity, value=phases)
+    call_entity_action(start_entity, value=amps)
+
+
+def execute_car_charge_stop():
+    config = _read_current_config()
+    stop_entity = config.get("carChargeRecipe", {}).get("stopEntity", "")
+    if not stop_entity:
+        raise Exception("Keine Entity fuer 'Auto laden beenden' zugeordnet")
+    call_entity_action(stop_entity, turn_off=True)
+
+
+@app.route("/actions/car_charge_start/test", methods=["POST"])
+def testCarChargeStart():
+    config = _read_current_config()
+    recipe = config.get("carChargeRecipe", {})
+    if recipe.get("type") != "two_stage":
+        return jsonify({"success": False, "message": "Kein Rezept ausgewählt"}), 400
+    phase_entity = recipe.get("phaseCountEntity", "")
+    start_entity = recipe.get("startEntity", "")
+    if not phase_entity or not start_entity:
+        return jsonify({"success": False, "message": "Nicht alle Entities zugeordnet"}), 400
+
+    body = request.get_json(force=True, silent=True) or {}
+    phase_count = body.get("phaseCount", 1)
+    amps = body.get("amps", CHARGING_MIN_AMPS)
+    try:
+        call_entity_action(phase_entity, value=phase_count)
+        call_entity_action(start_entity, value=amps)
+        return jsonify({"success": True, "phaseCount": phase_count, "amps": amps})
+    except Exception as e:
+        return jsonify({"success": False, "message": str(e)}), 500
+
+
+@app.route("/actions/car_charge_stop/test", methods=["POST"])
+def testCarChargeStop():
+    config = _read_current_config()
+    stop_entity = config.get("carChargeRecipe", {}).get("stopEntity", "")
+    if not stop_entity:
+        return jsonify({"success": False, "message": "Keine Entity zugeordnet"}), 400
+    try:
+        call_entity_action(stop_entity, turn_off=True)
+        return jsonify({"success": True})
+    except Exception as e:
+        return jsonify({"success": False, "message": str(e)}), 500
 
 
 @app.route("/config", methods=["PUT"])
@@ -471,6 +566,12 @@ def handle_shyft_action_start(action, actions_enabled, config):
 
     if not actions_enabled:
         print(f"[Shyft] Start faellig fuer '{label}' (Ziel: {target}) - Aktionstyp ist deaktiviert, nur simuliert.")
+    elif label == "Auto laden":
+        try:
+            execute_car_charge_start(target)
+            print(f"[Shyft] Start ausgefuehrt fuer '{label}' (Ziel: {target} kW).")
+        except Exception as e:
+            print(f"[Shyft] Start fuer '{label}' fehlgeschlagen: {e!r}")
     elif control_key:
         try:
             execute_auto_managed_action(control_key, "start", target)
@@ -490,6 +591,12 @@ def handle_shyft_action_end(action, actions_enabled, config):
 
     if not actions_enabled:
         print(f"[Shyft] Ende faellig fuer '{label}' - Aktionstyp ist deaktiviert, nur simuliert.")
+    elif label == "Auto laden":
+        try:
+            execute_car_charge_stop()
+            print(f"[Shyft] Ende ausgefuehrt fuer '{label}'.")
+        except Exception as e:
+            print(f"[Shyft] Ende fuer '{label}' fehlgeschlagen: {e!r}")
     elif control_key:
         try:
             execute_auto_managed_action(control_key, "end", None)

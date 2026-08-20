@@ -45,7 +45,6 @@
     "heatpump_supply_temp_hp" : "",
     "heatpump_temp_indoor_measured": "",
     "electronicvehicle_state_of_charge": "",
-    "electronicvehicle_plugged": "",
     "wallbox_current_charging_power": "",
     "wallbox_plugged": ""
   },

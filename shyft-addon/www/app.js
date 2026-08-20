@@ -79,10 +79,6 @@ const helpinformation = {
         label: 'Vorlauftemperatur Wärmepumpe',
         description: 'Die Vorlauftemperatur deiner Wärmepumpe'
     },
-    'electronicvehicle_plugged': {
-        label: 'Auto verbunden?',
-        description: 'Ja / Nein, je nachdem ob dein Auto eine Verbindung mit der Wallbox meldet oder nicht.'
-    },
     'electronicvehicle_state_of_charge': {
         label: 'Auto - Ladestand',
         description: ' Ladestand deines Autos (in %)'
@@ -182,10 +178,9 @@ const SENSOR_ENTITY_FILTERS = {
     'heatpump_on_off': {type: 'state_on_off'},
     'heatpump_supply_temp_hp': {type: 'device_class', value: 'temperature'},
     'heatpump_temp_indoor_measured': {type: 'device_class', value: 'temperature'},
-    'electronicvehicle_plugged': {type: 'none'},
     'electronicvehicle_state_of_charge': {type: 'device_class', value: 'battery'},
     'wallbox_current_charging_power': {type: 'device_class', value: 'power'},
-    'wallbox_plugged': {type: 'none'},
+    'wallbox_plugged': {type: 'exclude_units', values: ['kWh', 'kW', 'W', 'A', 'V', '°C', '%', 'Wh']},
     'photovoltaic_feed_in_limit_entity': {type: 'none'},
     'photovoltaic_consumption_limit_entity': {type: 'none'},
     'sonstiger_verbraucher_switch_entity': {type: 'state_on_off'},
@@ -216,7 +211,7 @@ const INTEGRATION_SECTIONS = [
     {
         key: 'auto',
         label: 'Auto',
-        sensors: ['electronicvehicle_state_of_charge', 'electronicvehicle_plugged'],
+        sensors: ['electronicvehicle_state_of_charge'],
         actions: []
     },
     {
@@ -301,6 +296,10 @@ const AUTO_MANAGED_CONTROLS = [
 ];
 const AUTO_MANAGED_ACTION_KEYS = new Set(AUTO_MANAGED_CONTROLS.flatMap(c => c.actionKeys));
 
+// "Auto laden" gets its own bespoke recipe UI (buildCarChargeControl) instead of the uniform
+// AUTO_MANAGED_CONTROLS shape, since it's a multi-stage, manufacturer-varying command sequence.
+const CAR_CHARGE_ACTION_KEYS = new Set(['car_charge_start', 'car_charge_stop']);
+
 // actorMappings keys that get an on/off "nur simulieren" toggle. battery_action_stop/car_charge_stop
 // are shared stop-actors for an already-toggled type and don't get their own toggle.
 const ACTION_TYPE_TOGGLE_KEYS = new Set([
@@ -362,11 +361,30 @@ async function saveConfigurationNow() {
         }
     }
 
+    const carChargeRecipe = {...(configData["carChargeRecipe"] || {})};
+    const recipeTypeElement = document.getElementById('car_charge_recipe_type');
+    if (recipeTypeElement) {
+        carChargeRecipe.type = recipeTypeElement.value;
+    }
+    const phaseEntityElement = document.getElementById('car_charge_phase_entity');
+    if (phaseEntityElement) {
+        carChargeRecipe.phaseCountEntity = phaseEntityElement.value;
+    }
+    const startEntityElement = document.getElementById('car_charge_start_entity');
+    if (startEntityElement) {
+        carChargeRecipe.startEntity = startEntityElement.value;
+    }
+    const stopEntityElement = document.getElementById('car_charge_stop_entity');
+    if (stopEntityElement) {
+        carChargeRecipe.stopEntity = stopEntityElement.value;
+    }
+
     const toBeWritten = {
         "sensorMappings": sensorValues,
         "actorMappings": actorValues,
         "integrationMappings": integrationValues,
         "actionTypeEnabled": actionTypeEnabled,
+        "carChargeRecipe": carChargeRecipe,
         "notificationTargets": notificationTargets,
         "notificationsEnabled": notificationsEnabled
     };
@@ -457,6 +475,8 @@ function entityMatchesSensorFilter(entity, filter) {
     if (!filter || filter.type === 'none') return true;
     if (filter.type === 'device_class') return matchesDeviceClass(entity, filter.value);
     if (filter.type === 'state_on_off') return matchesOnOffState(entity);
+    if (filter.type === 'exclude_units') return !filter.values.includes(entity.unit);
+    if (filter.type === 'domain') return filter.values.includes(entity.entity_id.split('.')[0]);
     return true;
 }
 
@@ -732,15 +752,15 @@ function buildIntegrationPicker(section, currentIds, onChange) {
 function renderSectionBody(bodyDiv, section, entryIds) {
     bodyDiv.innerHTML = '';
 
-    if (section.sensors.length > 0) {
-        const integrationEntityIds = new Set();
-        for (const entryId of entryIds) {
-            for (const entityId of (integrationsData.entityMap[entryId] || [])) {
-                integrationEntityIds.add(entityId);
-            }
+    const integrationEntityIds = new Set();
+    for (const entryId of entryIds) {
+        for (const entityId of (integrationsData.entityMap[entryId] || [])) {
+            integrationEntityIds.add(entityId);
         }
-        const candidateEntities = allSensorIdOptions.filter(entity => integrationEntityIds.has(entity.entity_id));
+    }
+    const candidateEntities = allSensorIdOptions.filter(entity => integrationEntityIds.has(entity.entity_id));
 
+    if (section.sensors.length > 0) {
         const sensorDatalistIds = {};
         for (const key of section.sensors) {
             const datalistId = 'entityOptions_' + section.key + '_' + key;
@@ -766,10 +786,11 @@ function renderSectionBody(bodyDiv, section, entryIds) {
         bodyDiv.appendChild(buildMappingTable(section.sensors, configData["sensorMappings"] || {}, helpinformation, VALUE_POSTFIX, key => sensorDatalistIds[key], true));
     }
 
-    const manualActions = section.actions.filter(key => !AUTO_MANAGED_ACTION_KEYS.has(key));
+    const manualActions = section.actions.filter(key => !AUTO_MANAGED_ACTION_KEYS.has(key) && !CAR_CHARGE_ACTION_KEYS.has(key));
     const sectionControls = AUTO_MANAGED_CONTROLS.filter(c => c.actionKeys.some(k => section.actions.includes(k)));
+    const hasCarCharge = section.actions.some(k => CAR_CHARGE_ACTION_KEYS.has(k));
 
-    if (manualActions.length > 0 || sectionControls.length > 0) {
+    if (manualActions.length > 0 || sectionControls.length > 0 || hasCarCharge) {
         const controlHeading = document.createElement('div');
         controlHeading.className = 'sectionSubHeading controlSectionHeading';
         controlHeading.textContent = 'Steuerung';
@@ -782,6 +803,10 @@ function renderSectionBody(bodyDiv, section, entryIds) {
 
     for (const control of sectionControls) {
         bodyDiv.appendChild(control.type === 'switch' ? buildAutoManagedSwitchControl(control) : buildAutoManagedNumberControl(control));
+    }
+
+    if (hasCarCharge) {
+        bodyDiv.appendChild(buildCarChargeControl(candidateEntities));
     }
 }
 
@@ -992,6 +1017,239 @@ function buildAutoManagedSwitchControl(control) {
 
     wrapper.__refresh = refreshStatus;
     refreshStatus();
+
+    return wrapper;
+}
+
+function buildEntityPickerRow(id, label, tooltip, datalistId, currentValue, onChange) {
+    const row = document.createElement('tr');
+    const keyCell = document.createElement('td');
+    keyCell.textContent = label;
+    if (tooltip) keyCell.appendChild(buildTooltip(tooltip));
+
+    const inputWrapper = document.createElement('div');
+    inputWrapper.className = 'clearableInput';
+    const input = document.createElement('input');
+    input.id = id;
+    input.value = formatEntityDisplay(currentValue);
+    input.setAttribute('list', datalistId);
+    input.setAttribute('class', 'sensorInput');
+    input.setAttribute('autocomplete', 'off');
+    input.addEventListener('change', () => {
+        input.value = formatEntityDisplay(extractEntityId(input.value));
+        onChange();
+    });
+    inputWrapper.appendChild(input);
+
+    const clearButton = document.createElement('button');
+    clearButton.type = 'button';
+    clearButton.className = 'clearInputButton';
+    clearButton.textContent = '×';
+    clearButton.setAttribute('aria-label', 'Eingabe löschen');
+    clearButton.addEventListener('click', () => {
+        input.value = '';
+        input.dispatchEvent(new Event('change'));
+        input.focus();
+    });
+    inputWrapper.appendChild(clearButton);
+
+    const valueCell = document.createElement('td');
+    valueCell.appendChild(inputWrapper);
+    row.appendChild(keyCell);
+    row.appendChild(valueCell);
+    return row;
+}
+
+// "Auto laden" doesn't fit the uniform AUTO_MANAGED_CONTROLS shape: it's a manufacturer-varying
+// command sequence (currently one recipe, "Zweistufig": set phase count, then start charging) plus
+// an independent single-action "Laden beenden". Kept separate from AUTO_MANAGED_CONTROLS since the
+// concrete kW->Phasen/Ampere math lives entirely server-side (see compute_charging_phases_and_amps).
+function buildCarChargeControl(candidateEntities) {
+    const wrapper = document.createElement('div');
+    wrapper.className = 'autoActionControl';
+
+    const {title, checkmark} = buildAutoActionTitle({titleLabel: 'Auto laden'}, 'car_charge_start');
+    wrapper.appendChild(title);
+
+    const recipe = configData['carChargeRecipe'] || {};
+    const stopEntity = recipe.stopEntity || '';
+    checkmark.hidden = !(recipe.type === 'two_stage' && recipe.phaseCountEntity && recipe.startEntity && stopEntity);
+
+    // phase-count needs a value-carrying entity; start/stop just need to be triggerable (or, for
+    // some wallboxes, also value-carrying) - broad enough to cover number/select/button/switch
+    const controlDomains = ['number', 'select', 'button', 'switch'];
+    const datalistId = 'carChargeEntityOptions';
+    const datalist = document.createElement('datalist');
+    datalist.id = datalistId;
+    for (const entity of candidateEntities) {
+        if (entityMatchesSensorFilter(entity, {type: 'domain', values: controlDomains})) {
+            const option = document.createElement('option');
+            option.value = entity.label;
+            datalist.appendChild(option);
+        }
+    }
+    wrapper.appendChild(datalist);
+
+    const recipeHeading = document.createElement('div');
+    recipeHeading.className = 'sectionSubHeading';
+    recipeHeading.textContent = 'Lade-Rezept';
+    wrapper.appendChild(recipeHeading);
+
+    const recipeTable = document.createElement('table');
+    const recipeTbody = document.createElement('tbody');
+    const recipeRow = document.createElement('tr');
+    const recipeLabelCell = document.createElement('td');
+    recipeLabelCell.textContent = 'Rezept';
+    recipeLabelCell.appendChild(buildTooltip('Wie das Addon deine Wallbox ansteuert, um einen Ladevorgang zu starten. "Zweistufig" setzt zuerst die Phasenzahl, dann startet es den Ladevorgang.'));
+    const recipeValueCell = document.createElement('td');
+    const recipeSelect = document.createElement('select');
+    recipeSelect.id = 'car_charge_recipe_type';
+    recipeSelect.className = 'sensorInput';
+    const noRecipeOption = document.createElement('option');
+    noRecipeOption.value = '';
+    noRecipeOption.textContent = '– kein Rezept ausgewählt –';
+    recipeSelect.appendChild(noRecipeOption);
+    const twoStageOption = document.createElement('option');
+    twoStageOption.value = 'two_stage';
+    twoStageOption.textContent = 'Zweistufig';
+    recipeSelect.appendChild(twoStageOption);
+    recipeSelect.value = recipe.type || '';
+    recipeValueCell.appendChild(recipeSelect);
+    recipeRow.appendChild(recipeLabelCell);
+    recipeRow.appendChild(recipeValueCell);
+    recipeTbody.appendChild(recipeRow);
+    recipeTable.appendChild(recipeTbody);
+    wrapper.appendChild(recipeTable);
+
+    const stagesTable = document.createElement('table');
+    const stagesTbody = document.createElement('tbody');
+    stagesTbody.appendChild(buildEntityPickerRow('car_charge_phase_entity', 'Phasenzahl setzen',
+        'Home-Assistant-Entity (number oder select), über die die Phasenzahl an deiner Wallbox eingestellt wird.',
+        datalistId, recipe.phaseCountEntity || '', autoSave));
+    stagesTbody.appendChild(buildEntityPickerRow('car_charge_start_entity', 'Ladevorgang starten',
+        'Home-Assistant-Entity, über die der Ladevorgang gestartet wird (button/switch als reiner Trigger, number/select falls deine Wallbox dabei auch die Stromstärke entgegennimmt).',
+        datalistId, recipe.startEntity || '', autoSave));
+    stagesTable.appendChild(stagesTbody);
+    stagesTable.style.display = recipeSelect.value === 'two_stage' ? '' : 'none';
+    wrapper.appendChild(stagesTable);
+
+    recipeSelect.addEventListener('change', () => {
+        stagesTable.style.display = recipeSelect.value === 'two_stage' ? '' : 'none';
+        autoSave();
+    });
+
+    const status = document.createElement('div');
+    status.className = 'autoActionStatus';
+    wrapper.appendChild(status);
+
+    const controlsRow = document.createElement('div');
+    controlsRow.className = 'autoActionButtons';
+
+    const wallboxStatusDisplay = document.createElement('span');
+    wallboxStatusDisplay.className = 'autoActionValue';
+
+    const phaseTestInput = document.createElement('input');
+    phaseTestInput.type = 'number';
+    phaseTestInput.value = '1';
+    phaseTestInput.min = '1';
+    phaseTestInput.max = '3';
+    phaseTestInput.title = 'Test-Phasenzahl';
+    phaseTestInput.className = 'testPhaseInput';
+
+    const testStartButton = document.createElement('button');
+    testStartButton.type = 'button';
+    testStartButton.textContent = 'Test: Laden starten';
+
+    function refreshWallboxStatus() {
+        const wallboxEntity = (configData['sensorMappings'] || {})['wallbox_plugged'] || '';
+        if (!wallboxEntity) {
+            wallboxStatusDisplay.textContent = 'Wallbox-Status: – (kein Sensor zugeordnet)';
+            return;
+        }
+        const match = allSensorIdOptions.find(e => e.entity_id === wallboxEntity);
+        wallboxStatusDisplay.textContent = 'Wallbox-Status: ' + (match ? match.state : '–');
+    }
+
+    testStartButton.addEventListener('click', async () => {
+        testStartButton.disabled = true;
+        status.textContent = 'Teste...';
+        status.className = 'autoActionStatus';
+        try {
+            const response = await fetch(insideHomeAssistant + '/actions/car_charge_start/test', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({phaseCount: parseInt(phaseTestInput.value, 10) || 1})
+            });
+            const result = await response.json();
+            if (result.success) {
+                status.textContent = `Gesendet: ${result.phaseCount} Phase(n), ${result.amps} A (prüfe Wallbox-Status...)`;
+                status.className = 'autoActionStatus status-ok';
+                setTimeout(refreshWallboxStatus, 4000);
+            } else {
+                status.textContent = 'Fehler: ' + (result.message || 'unbekannt');
+                status.className = 'autoActionStatus status-error';
+            }
+        } catch (err) {
+            console.log(err);
+            status.textContent = 'Fehler beim Testen';
+            status.className = 'autoActionStatus status-error';
+        } finally {
+            testStartButton.disabled = false;
+        }
+    });
+
+    controlsRow.appendChild(wallboxStatusDisplay);
+    controlsRow.appendChild(phaseTestInput);
+    controlsRow.appendChild(testStartButton);
+    wrapper.appendChild(controlsRow);
+
+    const stopHeading = document.createElement('div');
+    stopHeading.className = 'sectionSubHeading';
+    stopHeading.textContent = 'Laden beenden';
+    wrapper.appendChild(stopHeading);
+
+    const stopTable = document.createElement('table');
+    const stopTbody = document.createElement('tbody');
+    stopTbody.appendChild(buildEntityPickerRow('car_charge_stop_entity', 'Auto laden beenden',
+        'Home-Assistant-Entity (i.d.R. button oder switch), über die der Ladevorgang beendet wird - unabhängig vom gewählten Start-Rezept, da das herstellerübergreifend meist eine einzelne Aktion ist.',
+        datalistId, stopEntity, autoSave));
+    stopTable.appendChild(stopTbody);
+    wrapper.appendChild(stopTable);
+
+    const stopControlsRow = document.createElement('div');
+    stopControlsRow.className = 'autoActionButtons';
+    const stopStatus = document.createElement('span');
+    stopStatus.className = 'autoActionValue';
+    const testStopButton = document.createElement('button');
+    testStopButton.type = 'button';
+    testStopButton.textContent = 'Test: Laden beenden';
+
+    testStopButton.addEventListener('click', async () => {
+        testStopButton.disabled = true;
+        stopStatus.textContent = 'Teste...';
+        try {
+            const response = await fetch(insideHomeAssistant + '/actions/car_charge_stop/test', {method: 'POST'});
+            const result = await response.json();
+            if (result.success) {
+                stopStatus.textContent = 'Gesendet (prüfe Wallbox-Status...)';
+                setTimeout(refreshWallboxStatus, 4000);
+            } else {
+                stopStatus.textContent = 'Fehler: ' + (result.message || 'unbekannt');
+            }
+        } catch (err) {
+            console.log(err);
+            stopStatus.textContent = 'Fehler beim Testen';
+        } finally {
+            testStopButton.disabled = false;
+        }
+    });
+
+    stopControlsRow.appendChild(stopStatus);
+    stopControlsRow.appendChild(testStopButton);
+    wrapper.appendChild(stopControlsRow);
+
+    wrapper.__refresh = refreshWallboxStatus;
+    refreshWallboxStatus();
 
     return wrapper;
 }

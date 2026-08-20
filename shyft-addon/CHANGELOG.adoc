@@ -1,3 +1,10 @@
+== 0.0.21.0
+
+* "Auto laden" bekommt ein Lade-Rezept in der Konfiguration, ohne dass der Nutzer merkt, dass technisch eine Befehlskette läuft: Dropdown "Rezept" (aktuell nur "Zweistufig"), das bei Auswahl zwei Entity-Zuordnungen einblendet - "Phasenzahl setzen" und "Ladevorgang starten" (number/select/button/switch, gefiltert auf diese Domains, Befehl wird passend zur Entity-Domain abgeleitet). Test-Button testet beide Stufen und zeigt danach den Wallbox-Status-Sensor als Erfolgskontrolle. "Laden beenden" ist eine eigene, vom Rezept unabhängige einzelne Entity-Zuordnung (mit eigenem Test-Button), da das herstellerübergreifend meist eine einzelne Aktion ist
+* Gerätesteuerung für "Auto laden" ist jetzt ebenfalls scharf: das Addon berechnet aus dem kW-Zielwert einer shyft-power-Aktion die passende Phasenzahl und Amperezahl (230V/Phase, 16A Einphasen-Grenze, Aufrunden auf mind. 6A - noch nicht konfigurierbar, shyft-powers eigene Leistungsgrenzen werden noch nicht ans Addon übermittelt) und ruft dann Phasenzahl- und Start-Entity auf; "Beenden" ruft die Stop-Entity
+* Fix: "Auto verbunden?" am Auto entfernt (redundant zum Sensor an der Wallbox, der dieselbe Information liefert) - inklusive des zugehörigen Datenpunkts im stündlichen Sync an shyft-power
+* Fix: "Wallbox: Auto verbunden?" filterte Entities nicht mehr nach Einheit - jetzt werden Entities mit kWh/kW/W/A/V/°C/%/Wh ausgeblendet, Text-/Zahl-/Boolean-Zustände bleiben wählbar
+
 == 0.0.20.0
 
 * Drei weitere Aktionen sind jetzt auto-managed (Entity direkt steuerbar, keine eigene Automation nötig), mit Test-Button/-Toggle, Checkmark und Live-Status/-Wert in der Konfiguration - wie bisher schon bei "Heizung Soll-Temperatur": "PV: Einspeisung begrenzen" und "Verbrauch begrenzen (§14a)" (jeweils number/climate-Entity, Test ±1), sowie "Sonstiger Verbraucher" (switch-Entity, Test-Toggle An/Aus statt Buttons)
