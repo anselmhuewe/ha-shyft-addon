@@ -1,3 +1,7 @@
+== 0.0.19.2
+
+* Benachrichtigungstyp umbenannt: "Geräteverhalten abweichend von Shyft-Steuerung" statt "Gerätestatus..."
+
 == 0.0.19.1
 
 * Handy-Auswahl unter "Benachrichtigungen" ist jetzt ein Dropdown statt Freitext, auf Handys beschränkt (Home Assistant Mobile-App-Integration, per notify-Service - keine Entity nötig). Ein zuvor gespeichertes, aktuell nicht gemeldetes Handy bleibt als Option erhalten ("nicht gefunden"), statt beim nächsten Speichern stillschweigend verloren zu gehen

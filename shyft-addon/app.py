@@ -307,7 +307,7 @@ ACTION_NAME_TO_ACTOR_KEY = {name: key for key, name in ACTION_TYPE_TOGGLE_KEYS.i
 # dict as new types are added, the frontend renders one toggle row per entry.
 NOTIFICATION_TYPES = {
     "action_start_end": "Aktionen starten / beenden",
-    "device_status_deviation": "Gerätestatus abweichend von Shyft-Steuerung",
+    "device_status_deviation": "Geräteverhalten abweichend von Shyft-Steuerung",
 }
 
 

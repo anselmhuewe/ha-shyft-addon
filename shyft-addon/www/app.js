@@ -287,7 +287,7 @@ const ACTION_TYPE_TOGGLE_KEYS = new Set([
 
 const NOTIFICATION_TYPES = {
     'action_start_end': 'Aktionen starten / beenden',
-    'device_status_deviation': 'Gerätestatus abweichend von Shyft-Steuerung'
+    'device_status_deviation': 'Geräteverhalten abweichend von Shyft-Steuerung'
 };
 
 let currentIntegrationSelections = {};
