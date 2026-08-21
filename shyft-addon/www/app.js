@@ -305,7 +305,7 @@ const CAR_CHARGE_ACTION_KEYS = new Set(['car_charge_start', 'car_charge_stop']);
 // The branches each "Auto laden" recipe stage splits its enum fields into (see
 // buildBranchedStageFields) - phaseCount by computed phase count, control by start vs. stop.
 // amperage has no branches: its Ampere value is always the same computed number regardless of
-// outcome, so it gets exactly one auto-filled field instead (see amountField).
+// outcome, so it gets one or more auto-filled fields instead (see amountFields).
 const CAR_CHARGE_STAGE_BRANCHES = {
     phaseCount: {keys: ['1', '3'], labels: ['Mit 1 Phase laden', 'Mit 3 Phasen laden']},
     amperage: {keys: [], labels: []},
@@ -409,7 +409,7 @@ async function saveConfigurationNow() {
     for (const stageKey of Object.keys(CAR_CHARGE_STAGE_BRANCHES)) {
         const serviceElement = document.getElementById('car_charge_' + stageKey + '_service');
         if (!serviceElement) continue;
-        const stage = {service: serviceElement.value, sharedFields: {}, branchFields: {}};
+        const stage = {service: serviceElement.value, sharedFields: {}, branchFields: {}, amountFields: []};
         const match = allServiceOptions.find(s => s.service === serviceElement.value);
         if (match) {
             for (const field of match.fields) {
@@ -421,11 +421,17 @@ async function saveConfigurationNow() {
                         continue;
                     }
                     if (field.isNumber) {
-                        // never shown in the UI either - this is the field the amperage stage
-                        // sends the freshly computed Ampere value into at call time (see
-                        // amountField/call_recipe_stage in app.py), never a value typed here
-                        stage.amountField = field.name;
-                        continue;
+                        // a service can have more than one number field, not all of them meaning
+                        // "current" (e.g. Easee's set_charger_dynamic_limit also has an unrelated
+                        // time_to_live) - the user marks which one(s) via the checkbox rendered in
+                        // buildBranchedStageFields; only those get the computed Ampere value at
+                        // call time (see call_recipe_stage in app.py), any other stays a normal,
+                        // manually-entered field
+                        const autoCheckbox = document.getElementById('car_charge_' + stageKey + '_field_' + field.name + '_auto');
+                        if (autoCheckbox && autoCheckbox.checked) {
+                            stage.amountFields.push(field.name);
+                            continue;
+                        }
                     }
                     const el = document.getElementById('car_charge_' + stageKey + '_field_' + field.name);
                     if (el) stage.sharedFields[field.name] = el.value;
@@ -602,7 +608,7 @@ function isSectionComplete(section, currentIds) {
         const recipe = configData['carChargeRecipe'] || {};
         const amperageStage = recipe.amperage || {};
         if (!(recipe.type === 'three_stage' && (recipe.phaseCount || {}).service
-            && amperageStage.service && amperageStage.amountField && (recipe.control || {}).service)) {
+            && amperageStage.service && (amperageStage.amountFields || []).length > 0 && (recipe.control || {}).service)) {
             return false;
         }
     }
@@ -1262,17 +1268,7 @@ function buildBranchedStageFields(stageKey, label, tooltip, candidateServices, s
         // device-selector fields (e.g. device_id) are never shown at all - there's exactly one
         // device to mean (the already-selected Wallbox's own), so saveConfigurationNow fills it
         // in directly from getWallboxDevices() rather than rendering anything the user could pick.
-        // Number-selector fields (e.g. "value" on number.set_value) aren't shown either - the
-        // amperage stage sends the freshly computed Ampere value into that field itself instead.
-        const visibleStaticFields = staticFields.filter(f => !f.isDevice && !f.isNumber);
-        const numberField = staticFields.find(f => f.isNumber);
-
-        if (numberField) {
-            const hint = document.createElement('p');
-            hint.className = 'fieldHint';
-            hint.textContent = `Feld "${numberField.label}" wird beim Laden automatisch mit der berechneten Amperezahl befüllt - kein Eingabefeld nötig.`;
-            fieldsContainer.appendChild(hint);
-        }
+        const visibleStaticFields = staticFields.filter(f => !f.isDevice);
 
         if (visibleStaticFields.length > 0) {
             const staticTable = document.createElement('table');
@@ -1282,36 +1278,69 @@ function buildBranchedStageFields(stageKey, label, tooltip, candidateServices, s
                 const keyCell = document.createElement('td');
                 keyCell.textContent = field.label;
                 const valueCell = document.createElement('td');
-                const input = document.createElement('input');
-                input.id = 'car_charge_' + stageKey + '_field_' + field.name;
-                input.className = 'sensorInput';
-                input.setAttribute('autocomplete', 'off');
-                input.value = (stageData.sharedFields || {})[field.name] || '';
-                if (field.isEntity) {
-                    // an "entity_id" target selector (e.g. number.set_value) has no fixed choices
-                    // of its own - offer a searchable dropdown of known entities instead of asking
-                    // the user to type an id by hand, narrowed to the relevant unit where given
-                    // (e.g. "A" for the amperage stage, so only Ladestrom-Entitäten show up)
-                    const entityDatalistId = 'carChargeEntityOptions_' + stageKey + '_' + field.name;
-                    const entityDatalist = document.createElement('datalist');
-                    entityDatalist.id = entityDatalistId;
-                    const candidates = entityUnitFilter
-                        ? allSensorIdOptions.filter(e => e.unit === entityUnitFilter)
-                        : allSensorIdOptions;
-                    for (const entity of candidates) {
-                        const option = document.createElement('option');
-                        option.value = entity.entity_id;
-                        option.textContent = entity.label;
-                        entityDatalist.appendChild(option);
+
+                if (field.isNumber) {
+                    // a service can have more than one number field (e.g. Easee's
+                    // set_charger_dynamic_limit has both "current" and an unrelated
+                    // "time_to_live") - only the user knows which one(s), if any, should track
+                    // the computed Ampere value, so ask explicitly rather than guessing
+                    const isAuto = (stageData.amountFields || []).includes(field.name);
+                    const toggleLabel = document.createElement('label');
+                    toggleLabel.className = 'amountFieldToggle';
+                    const checkbox = document.createElement('input');
+                    checkbox.type = 'checkbox';
+                    checkbox.id = 'car_charge_' + stageKey + '_field_' + field.name + '_auto';
+                    checkbox.checked = isAuto;
+                    toggleLabel.appendChild(checkbox);
+                    toggleLabel.appendChild(document.createTextNode(' automatisch aus berechneter Amperezahl'));
+                    valueCell.appendChild(toggleLabel);
+
+                    const manualInput = document.createElement('input');
+                    manualInput.id = 'car_charge_' + stageKey + '_field_' + field.name;
+                    manualInput.className = 'sensorInput';
+                    manualInput.setAttribute('autocomplete', 'off');
+                    manualInput.value = (stageData.sharedFields || {})[field.name] || '';
+                    manualInput.style.display = isAuto ? 'none' : '';
+                    manualInput.addEventListener('change', autoSave);
+                    valueCell.appendChild(manualInput);
+
+                    checkbox.addEventListener('change', () => {
+                        manualInput.style.display = checkbox.checked ? 'none' : '';
+                        autoSave();
+                    });
+                } else {
+                    const input = document.createElement('input');
+                    input.id = 'car_charge_' + stageKey + '_field_' + field.name;
+                    input.className = 'sensorInput';
+                    input.setAttribute('autocomplete', 'off');
+                    input.value = (stageData.sharedFields || {})[field.name] || '';
+                    if (field.isEntity) {
+                        // an "entity_id" target selector (e.g. number.set_value) has no fixed
+                        // choices of its own - offer a searchable dropdown of known entities
+                        // instead of asking the user to type an id by hand, narrowed to the
+                        // relevant unit where given (e.g. "A" for the amperage stage, so only
+                        // Ladestrom-Entitäten show up)
+                        const entityDatalistId = 'carChargeEntityOptions_' + stageKey + '_' + field.name;
+                        const entityDatalist = document.createElement('datalist');
+                        entityDatalist.id = entityDatalistId;
+                        const candidates = entityUnitFilter
+                            ? allSensorIdOptions.filter(e => e.unit === entityUnitFilter)
+                            : allSensorIdOptions;
+                        for (const entity of candidates) {
+                            const option = document.createElement('option');
+                            option.value = entity.entity_id;
+                            option.textContent = entity.label;
+                            entityDatalist.appendChild(option);
+                        }
+                        fieldsContainer.appendChild(entityDatalist);
+                        input.setAttribute('list', entityDatalistId);
+                        input.placeholder = entityUnitFilter
+                            ? `z.B. number.wallbox_ladestrom (gefiltert nach Einheit "${entityUnitFilter}")`
+                            : 'z.B. number.wallbox_ladestrom';
                     }
-                    fieldsContainer.appendChild(entityDatalist);
-                    input.setAttribute('list', entityDatalistId);
-                    input.placeholder = entityUnitFilter
-                        ? `z.B. number.wallbox_ladestrom (gefiltert nach Einheit "${entityUnitFilter}")`
-                        : 'z.B. number.wallbox_ladestrom';
+                    input.addEventListener('change', autoSave);
+                    valueCell.appendChild(input);
                 }
-                input.addEventListener('change', autoSave);
-                valueCell.appendChild(input);
                 row.appendChild(keyCell);
                 row.appendChild(valueCell);
                 staticTbody.appendChild(row);
@@ -1380,7 +1409,7 @@ function buildCarChargeControl() {
     const amperageStage = recipe.amperage || {};
     const controlStage = recipe.control || {};
     checkmark.hidden = !(recipe.type === 'three_stage' && phaseCountStage.service
-        && amperageStage.service && amperageStage.amountField && controlStage.service);
+        && amperageStage.service && (amperageStage.amountFields || []).length > 0 && controlStage.service);
 
     const candidateServices = allServiceOptions.filter(s => getWallboxServiceDomains().has(s.service.split('.')[0]));
 
@@ -1479,7 +1508,9 @@ function buildCarChargeControl() {
         testButton.addEventListener('click', async () => {
             for (const b of testButtons) b.disabled = true;
             testStopButton.disabled = true;
-            status.textContent = 'Teste...';
+            // three sequential HA calls with a 10s pause between each (see CHARGING_STAGE_DELAY_SECONDS
+            // in app.py) add up to a noticeable wait - let the user know it's not stuck
+            status.textContent = 'Teste (ca. 30s...)';
             status.className = 'autoActionStatus';
             try {
                 const response = await fetch(insideHomeAssistant + '/actions/car_charge_start/test', {

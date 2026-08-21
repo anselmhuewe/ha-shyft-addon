@@ -313,7 +313,8 @@ def call_recipe_stage(stage, branch_key=None, extra_data=None):
     differs by branch, e.g. easee.action_command's action_command being "start" vs "stop"; static
     fields like device_id are the same in sharedFields regardless of branch. extra_data overrides
     on top of that - used by the amperage stage to inject the freshly computed Ampere value into
-    its configured amountField, since that field has no fixed choices and isn't part of any branch.
+    each of its configured amountFields, since a service can have more than one number field (e.g.
+    Easee's set_charger_dynamic_limit also has a time_to_live) and only some of them mean "current".
     """
     service = (stage or {}).get("service", "")
     if not service or "." not in service:
@@ -362,10 +363,10 @@ def execute_car_charge_start(target_kw):
     time.sleep(CHARGING_STAGE_DELAY_SECONDS)
 
     amperage_stage = recipe.get("amperage", {})
-    amount_field = amperage_stage.get("amountField")
-    if not amount_field:
+    amount_fields = amperage_stage.get("amountFields") or []
+    if not amount_fields:
         raise Exception("Kein Feld für die Amperezahl konfiguriert")
-    call_recipe_stage(amperage_stage, extra_data={amount_field: amps})
+    call_recipe_stage(amperage_stage, extra_data={f: amps for f in amount_fields})
     time.sleep(CHARGING_STAGE_DELAY_SECONDS)
 
     call_recipe_stage(recipe.get("control", {}), branch_key="start")
@@ -418,9 +419,10 @@ def readServices():
                 # instead of asking the user to type an id they have no way to look up themselves
                 is_device_field = bool((field_info.get("selector") or {}).get("device")) or field_name == "device_id"
                 # a "number" selector has no fixed choices to pick from - the "Amperezahl setzen"
-                # stage uses this to recognize which field should receive the computed Ampere
-                # value at call time instead of asking the user to type a fixed one (see
-                # CAR_CHARGE_STAGE_BRANCHES.amperage / amountField in app.js)
+                # stage offers each of these as a candidate the user can mark to receive the
+                # computed Ampere value at call time (see amountFields in buildBranchedStageFields
+                # in app.js) - a service can have more than one, and not all of them mean "current"
+                # (e.g. Easee's set_charger_dynamic_limit also has an unrelated time_to_live)
                 is_number_field = bool((field_info.get("selector") or {}).get("number"))
                 fields.append({
                     "name": field_name,
@@ -469,10 +471,10 @@ def testCarChargeStart():
         time.sleep(CHARGING_STAGE_DELAY_SECONDS)
 
         amperage_stage = recipe.get("amperage", {})
-        amount_field = amperage_stage.get("amountField")
-        if not amount_field:
+        amount_fields = amperage_stage.get("amountFields") or []
+        if not amount_fields:
             raise Exception("Kein Feld für die Amperezahl konfiguriert")
-        call_recipe_stage(amperage_stage, extra_data={amount_field: amps})
+        call_recipe_stage(amperage_stage, extra_data={f: amps for f in amount_fields})
         time.sleep(CHARGING_STAGE_DELAY_SECONDS)
 
         call_recipe_stage(recipe.get("control", {}), branch_key="start")

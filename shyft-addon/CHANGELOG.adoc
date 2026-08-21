@@ -1,3 +1,7 @@
+== 0.0.28.1
+
+* Fix: Bei "2. Amperezahl setzen" wurde die berechnete Amperezahl in das zuletzt durchlaufene Zahlenfeld des gewählten Befehls geschrieben, unabhängig davon, ob dieses Feld überhaupt für die Stromstärke gedacht war (z.B. bei easee.set_charger_dynamic_limit landete sie im "minutes"-Feld statt in "amps", "amps" blieb leer). Zahlenfelder bekommen jetzt eine eigene Checkbox "automatisch aus berechneter Amperezahl" - nur die dort markierten Felder werden befüllt, alle anderen (z.B. "minutes") bleiben normale, manuell einzutragende Felder
+
 == 0.0.28.0
 
 * "Auto laden" setzte bislang keine Amperezahl an der Wallbox, obwohl sie aus dem Ziel-kW-Wert berechnet wurde - die berechnete Amperezahl wird jetzt tatsächlich gesendet. Dafür neuer Zwischenschritt "2. Amperezahl setzen" (Variante heißt jetzt "Dreistufig" statt "Zweistufig"): Entität auswählen (Dropdown, gefiltert auf Entitäten mit Einheit "A"), das zugehörige Befehlsfeld wird automatisch mit dem berechneten Wert befüllt
