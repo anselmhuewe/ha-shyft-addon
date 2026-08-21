@@ -1,3 +1,9 @@
+== 0.0.28.0
+
+* "Auto laden" setzte bislang keine Amperezahl an der Wallbox, obwohl sie aus dem Ziel-kW-Wert berechnet wurde - die berechnete Amperezahl wird jetzt tatsächlich gesendet. Dafür neuer Zwischenschritt "2. Amperezahl setzen" (Variante heißt jetzt "Dreistufig" statt "Zweistufig"): Entität auswählen (Dropdown, gefiltert auf Entitäten mit Einheit "A"), das zugehörige Befehlsfeld wird automatisch mit dem berechneten Wert befüllt
+* Generische Home-Assistant-Befehle wie z.B. number.set_value (die ihre Entität nicht als eigenes Feld, sondern als "Ziel" deklarieren) bekommen jetzt ebenfalls ein Entity-Auswahlfeld angeboten - vorher gab es dafür gar keine Eingabemöglichkeit
+* Zwischen allen drei Schritten (Phasenanzahl, Amperezahl, Ladevorgang starten) liegen jetzt 10s Pause statt 5s nur zwischen Phasenanzahl und Start - ein Test hat gezeigt, dass die Phasenumschaltung bei zu eng getakteten Befehlen von der Wallbox nicht übernommen wurde
+
 == 0.0.27.0
 
 * Schlägt ein Test-Button (Sensor/Aktion-Kacheln, "Auto laden") fehl, meldet das Addon den Fehler jetzt zusätzlich an shyft-power (Nutzer, Kontext, Fehlertyp, Fehlermeldung, aufgerufener Befehl und gesendete Daten) - hilft beim Support, ohne dass Nutzer das Home-Assistant-Log selbst weiterreichen müssen

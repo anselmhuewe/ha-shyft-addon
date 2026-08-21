@@ -302,10 +302,13 @@ const AUTO_MANAGED_ACTION_KEYS = new Set(AUTO_MANAGED_CONTROLS.flatMap(c => c.ac
 // AUTO_MANAGED_CONTROLS shape, since it's a multi-stage, manufacturer-varying command sequence.
 const CAR_CHARGE_ACTION_KEYS = new Set(['car_charge_start', 'car_charge_stop']);
 
-// The two branches each "Auto laden" recipe stage splits its enum fields into (see
+// The branches each "Auto laden" recipe stage splits its enum fields into (see
 // buildBranchedStageFields) - phaseCount by computed phase count, control by start vs. stop.
+// amperage has no branches: its Ampere value is always the same computed number regardless of
+// outcome, so it gets exactly one auto-filled field instead (see amountField).
 const CAR_CHARGE_STAGE_BRANCHES = {
     phaseCount: {keys: ['1', '3'], labels: ['Mit 1 Phase laden', 'Mit 3 Phasen laden']},
+    amperage: {keys: [], labels: []},
     control: {keys: ['start', 'stop'], labels: ['Ladevorgang starten', 'Ladevorgang beenden']},
 };
 
@@ -415,6 +418,13 @@ async function saveConfigurationNow() {
                         // never shown in the UI - always the already-selected Wallbox's own device
                         const devices = getWallboxDevices();
                         if (devices.length > 0) stage.sharedFields[field.name] = devices[0].id;
+                        continue;
+                    }
+                    if (field.isNumber) {
+                        // never shown in the UI either - this is the field the amperage stage
+                        // sends the freshly computed Ampere value into at call time (see
+                        // amountField/call_recipe_stage in app.py), never a value typed here
+                        stage.amountField = field.name;
                         continue;
                     }
                     const el = document.getElementById('car_charge_' + stageKey + '_field_' + field.name);
@@ -590,7 +600,9 @@ function isSectionComplete(section, currentIds) {
 
     if (section.actions.some(k => CAR_CHARGE_ACTION_KEYS.has(k))) {
         const recipe = configData['carChargeRecipe'] || {};
-        if (!(recipe.type === 'two_stage' && (recipe.phaseCount || {}).service && (recipe.control || {}).service)) {
+        const amperageStage = recipe.amperage || {};
+        if (!(recipe.type === 'three_stage' && (recipe.phaseCount || {}).service
+            && amperageStage.service && amperageStage.amountField && (recipe.control || {}).service)) {
             return false;
         }
     }
@@ -1163,7 +1175,7 @@ function buildAutoManagedSwitchControl(control) {
 }
 
 // "Auto laden" doesn't fit the uniform AUTO_MANAGED_CONTROLS shape: it's a manufacturer-varying
-// command sequence (currently one recipe, "Zweistufig": set phase count, then start charging) plus
+// command sequence (currently one recipe, "Dreistufig": set phase count, then Ampere, then start charging) plus
 // an independent single-action "Laden beenden". Kept separate from AUTO_MANAGED_CONTROLS since the
 // concrete kW->Phasen/Ampere math lives entirely server-side (see compute_charging_phases_and_amps).
 // Domains eligible as an "Auto laden" Befehl: generic controllable-entity domains, plus whatever
@@ -1202,7 +1214,7 @@ function getWallboxDevices() {
 // exactly the kind of field that differs between the two - the user never has to know or type the
 // raw values, and the addon assembles the actual service-call data at runtime (see
 // call_recipe_stage in app.py).
-function buildBranchedStageFields(stageKey, label, tooltip, candidateServices, stageData, branchKeys, branchLabels, placeholderExample) {
+function buildBranchedStageFields(stageKey, label, tooltip, candidateServices, stageData, branchKeys, branchLabels, placeholderExample, entityUnitFilter) {
     const wrapper = document.createElement('div');
 
     const serviceDatalistId = 'carChargeServiceOptions_' + stageKey;
@@ -1249,8 +1261,18 @@ function buildBranchedStageFields(stageKey, label, tooltip, candidateServices, s
 
         // device-selector fields (e.g. device_id) are never shown at all - there's exactly one
         // device to mean (the already-selected Wallbox's own), so saveConfigurationNow fills it
-        // in directly from getWallboxDevices() rather than rendering anything the user could pick
-        const visibleStaticFields = staticFields.filter(f => !f.isDevice);
+        // in directly from getWallboxDevices() rather than rendering anything the user could pick.
+        // Number-selector fields (e.g. "value" on number.set_value) aren't shown either - the
+        // amperage stage sends the freshly computed Ampere value into that field itself instead.
+        const visibleStaticFields = staticFields.filter(f => !f.isDevice && !f.isNumber);
+        const numberField = staticFields.find(f => f.isNumber);
+
+        if (numberField) {
+            const hint = document.createElement('p');
+            hint.className = 'fieldHint';
+            hint.textContent = `Feld "${numberField.label}" wird beim Laden automatisch mit der berechneten Amperezahl befüllt - kein Eingabefeld nötig.`;
+            fieldsContainer.appendChild(hint);
+        }
 
         if (visibleStaticFields.length > 0) {
             const staticTable = document.createElement('table');
@@ -1263,7 +1285,31 @@ function buildBranchedStageFields(stageKey, label, tooltip, candidateServices, s
                 const input = document.createElement('input');
                 input.id = 'car_charge_' + stageKey + '_field_' + field.name;
                 input.className = 'sensorInput';
+                input.setAttribute('autocomplete', 'off');
                 input.value = (stageData.sharedFields || {})[field.name] || '';
+                if (field.isEntity) {
+                    // an "entity_id" target selector (e.g. number.set_value) has no fixed choices
+                    // of its own - offer a searchable dropdown of known entities instead of asking
+                    // the user to type an id by hand, narrowed to the relevant unit where given
+                    // (e.g. "A" for the amperage stage, so only Ladestrom-Entitäten show up)
+                    const entityDatalistId = 'carChargeEntityOptions_' + stageKey + '_' + field.name;
+                    const entityDatalist = document.createElement('datalist');
+                    entityDatalist.id = entityDatalistId;
+                    const candidates = entityUnitFilter
+                        ? allSensorIdOptions.filter(e => e.unit === entityUnitFilter)
+                        : allSensorIdOptions;
+                    for (const entity of candidates) {
+                        const option = document.createElement('option');
+                        option.value = entity.entity_id;
+                        option.textContent = entity.label;
+                        entityDatalist.appendChild(option);
+                    }
+                    fieldsContainer.appendChild(entityDatalist);
+                    input.setAttribute('list', entityDatalistId);
+                    input.placeholder = entityUnitFilter
+                        ? `z.B. number.wallbox_ladestrom (gefiltert nach Einheit "${entityUnitFilter}")`
+                        : 'z.B. number.wallbox_ladestrom';
+                }
                 input.addEventListener('change', autoSave);
                 valueCell.appendChild(input);
                 row.appendChild(keyCell);
@@ -1331,8 +1377,10 @@ function buildCarChargeControl() {
 
     const recipe = configData['carChargeRecipe'] || {};
     const phaseCountStage = recipe.phaseCount || {};
+    const amperageStage = recipe.amperage || {};
     const controlStage = recipe.control || {};
-    checkmark.hidden = !(recipe.type === 'two_stage' && phaseCountStage.service && controlStage.service);
+    checkmark.hidden = !(recipe.type === 'three_stage' && phaseCountStage.service
+        && amperageStage.service && amperageStage.amountField && controlStage.service);
 
     const candidateServices = allServiceOptions.filter(s => getWallboxServiceDomains().has(s.service.split('.')[0]));
 
@@ -1346,7 +1394,7 @@ function buildCarChargeControl() {
     const recipeRow = document.createElement('tr');
     const recipeLabelCell = document.createElement('td');
     recipeLabelCell.textContent = 'Varianten';
-    recipeLabelCell.appendChild(buildTooltip('Wie das Addon deine Wallbox ansteuert, um einen Ladevorgang zu starten. "Zweistufig" setzt zuerst die Phasenzahl, dann startet es den Ladevorgang.'));
+    recipeLabelCell.appendChild(buildTooltip('Wie das Addon deine Wallbox ansteuert, um einen Ladevorgang zu starten. "Dreistufig" setzt zuerst die Phasenzahl, dann die Amperezahl, dann startet es den Ladevorgang.'));
     const recipeValueCell = document.createElement('td');
     const recipeSelect = document.createElement('select');
     recipeSelect.id = 'car_charge_recipe_type';
@@ -1355,10 +1403,10 @@ function buildCarChargeControl() {
     noRecipeOption.value = '';
     noRecipeOption.textContent = '– keine Variante ausgewählt –';
     recipeSelect.appendChild(noRecipeOption);
-    const twoStageOption = document.createElement('option');
-    twoStageOption.value = 'two_stage';
-    twoStageOption.textContent = 'Zweistufig';
-    recipeSelect.appendChild(twoStageOption);
+    const threeStageOption = document.createElement('option');
+    threeStageOption.value = 'three_stage';
+    threeStageOption.textContent = 'Dreistufig';
+    recipeSelect.appendChild(threeStageOption);
     recipeSelect.value = recipe.type || '';
     recipeValueCell.appendChild(recipeSelect);
     recipeRow.appendChild(recipeLabelCell);
@@ -1374,21 +1422,29 @@ function buildCarChargeControl() {
         candidateServices, phaseCountStage,
         CAR_CHARGE_STAGE_BRANCHES.phaseCount.keys, CAR_CHARGE_STAGE_BRANCHES.phaseCount.labels,
         'z.B. set_charger_phase_mode'));
-    // connects step 1 to step 2 without running alongside either numbered heading - starts below
-    // "1. Phasenanzahl setzen"'s own content, stops above "2. Ladevorgang steuern"
-    const stageConnector = document.createElement('div');
-    stageConnector.className = 'carChargeStageConnector';
-    stagesWrapper.appendChild(stageConnector);
-    stagesWrapper.appendChild(buildBranchedStageFields('control', '2. Ladevorgang steuern',
+    // connects one numbered step to the next without running alongside either heading itself -
+    // starts below a step's own content, stops above the next step's heading
+    const stageConnector1 = document.createElement('div');
+    stageConnector1.className = 'carChargeStageConnector';
+    stagesWrapper.appendChild(stageConnector1);
+    stagesWrapper.appendChild(buildBranchedStageFields('amperage', '2. Amperezahl setzen',
+        'Befehl, mit dem die Ladestromstärke (Ampere) an deiner Wallbox eingestellt wird. Wähle die Entität, die den Ladestrom entgegennimmt (meist eine number-Entität mit Einheit "A") - das Addon berechnet die passende Amperezahl aus dem Ziel-kW-Wert von shyft-power und sendet sie automatisch.',
+        candidateServices, amperageStage,
+        CAR_CHARGE_STAGE_BRANCHES.amperage.keys, CAR_CHARGE_STAGE_BRANCHES.amperage.labels,
+        'z.B. set_value', 'A'));
+    const stageConnector2 = document.createElement('div');
+    stageConnector2.className = 'carChargeStageConnector';
+    stagesWrapper.appendChild(stageConnector2);
+    stagesWrapper.appendChild(buildBranchedStageFields('control', '3. Ladevorgang steuern',
         'Befehl, mit dem der Ladevorgang gestartet bzw. beendet wird.',
         candidateServices, controlStage,
         CAR_CHARGE_STAGE_BRANCHES.control.keys, CAR_CHARGE_STAGE_BRANCHES.control.labels,
         'z.B. action_command'));
-    stagesWrapper.style.display = recipeSelect.value === 'two_stage' ? '' : 'none';
+    stagesWrapper.style.display = recipeSelect.value === 'three_stage' ? '' : 'none';
     wrapper.appendChild(stagesWrapper);
 
     recipeSelect.addEventListener('change', () => {
-        stagesWrapper.style.display = recipeSelect.value === 'two_stage' ? '' : 'none';
+        stagesWrapper.style.display = recipeSelect.value === 'three_stage' ? '' : 'none';
         autoSave();
     });
 

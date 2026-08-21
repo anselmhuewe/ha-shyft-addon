@@ -304,14 +304,16 @@ def log_error_to_shyft(context, error_type, error_message, service_called=None, 
         print("[Shyft] Fehlerreport an shyft-power fehlgeschlagen:", repr(e))
 
 
-def call_recipe_stage(stage, branch_key):
+def call_recipe_stage(stage, branch_key=None, extra_data=None):
     """Calls one configured 'Auto laden' recipe stage's Home Assistant service with its shared
     fields (the same for every call, e.g. device_id) plus whichever branch-specific fields apply
     for branch_key (e.g. phaseCount's "1"/"3", or control's "start"/"stop") - see
     buildBranchedStageFields in app.js for how these are configured. A field only needs a branch
     split at all if it has a fixed set of choices (a Home Assistant "select" selector) that
     differs by branch, e.g. easee.action_command's action_command being "start" vs "stop"; static
-    fields like device_id are the same in sharedFields regardless of branch.
+    fields like device_id are the same in sharedFields regardless of branch. extra_data overrides
+    on top of that - used by the amperage stage to inject the freshly computed Ampere value into
+    its configured amountField, since that field has no fixed choices and isn't part of any branch.
     """
     service = (stage or {}).get("service", "")
     if not service or "." not in service:
@@ -320,6 +322,8 @@ def call_recipe_stage(stage, branch_key):
 
     data = dict((stage.get("sharedFields") or {}))
     data.update((stage.get("branchFields") or {}).get(branch_key, {}))
+    if extra_data:
+        data.update(extra_data)
 
     # safety net: the frontend fills device_id in from the selected Wallbox's own device at save
     # time, but a config saved before that existed (or before a device was detectable) can still
@@ -341,20 +345,29 @@ def call_recipe_stage(stage, branch_key):
         raise RecipeCallError(str(e), service, data) from e
 
 
-# Gives the wallbox time to actually process the phase switch before the start command follows -
-# without this, "Ladevorgang starten" can race ahead of the phase change on some wallboxes.
-CHARGING_PHASE_SWITCH_DELAY_SECONDS = 5
+# Gives the wallbox time to actually process one step before the next follows - without this,
+# e.g. "Ladevorgang starten" can race ahead of the phase switch on some wallboxes (observed in a
+# real test where the phase switch was silently dropped when the calls came in back-to-back).
+CHARGING_STAGE_DELAY_SECONDS = 10
 
 
 def execute_car_charge_start(target_kw):
     config = _read_current_config()
     recipe = config.get("carChargeRecipe", {})
-    if recipe.get("type") != "two_stage":
+    if recipe.get("type") != "three_stage":
         raise Exception("Kein Lade-Rezept konfiguriert")
 
-    phases, _ = compute_charging_phases_and_amps(target_kw)
+    phases, amps = compute_charging_phases_and_amps(target_kw)
     call_recipe_stage(recipe.get("phaseCount", {}), branch_key=str(phases))
-    time.sleep(CHARGING_PHASE_SWITCH_DELAY_SECONDS)
+    time.sleep(CHARGING_STAGE_DELAY_SECONDS)
+
+    amperage_stage = recipe.get("amperage", {})
+    amount_field = amperage_stage.get("amountField")
+    if not amount_field:
+        raise Exception("Kein Feld für die Amperezahl konfiguriert")
+    call_recipe_stage(amperage_stage, extra_data={amount_field: amps})
+    time.sleep(CHARGING_STAGE_DELAY_SECONDS)
+
     call_recipe_stage(recipe.get("control", {}), branch_key="start")
 
 
@@ -404,11 +417,32 @@ def readServices():
                 # can be auto-filled from the already-selected Wallbox integration's own device(s)
                 # instead of asking the user to type an id they have no way to look up themselves
                 is_device_field = bool((field_info.get("selector") or {}).get("device")) or field_name == "device_id"
+                # a "number" selector has no fixed choices to pick from - the "Amperezahl setzen"
+                # stage uses this to recognize which field should receive the computed Ampere
+                # value at call time instead of asking the user to type a fixed one (see
+                # CAR_CHARGE_STAGE_BRANCHES.amperage / amountField in app.js)
+                is_number_field = bool((field_info.get("selector") or {}).get("number"))
                 fields.append({
                     "name": field_name,
                     "label": field_info.get("name") or field_name,
                     "options": extract_select_options(field_info),
                     "isDevice": is_device_field,
+                    "isNumber": is_number_field,
+                })
+
+            # Generic Home Assistant services (e.g. number.set_value) declare their entity as a
+            # "target" selector rather than a "field" - it never shows up in the loop above, so
+            # without this a service like that would offer no way at all to pick which entity to
+            # act on. Synthesize the same "entity_id" field custom integrations often declare
+            # explicitly, unless the service already has one.
+            if service_info.get("target", {}).get("entity") and not any(f["name"] == "entity_id" for f in fields):
+                fields.insert(0, {
+                    "name": "entity_id",
+                    "label": "Entity",
+                    "options": [],
+                    "isDevice": False,
+                    "isNumber": False,
+                    "isEntity": True,
                 })
             result.append({
                 "service": f"{domain}.{service_name}",
@@ -424,7 +458,7 @@ def testCarChargeStart():
     "Runs the exact same kW -> Phasen/Ampere pipeline as a real shyft-power action (see execute_car_charge_start), so this test is a faithful dry run rather than a simplified stand-in."
     config = _read_current_config()
     recipe = config.get("carChargeRecipe", {})
-    if recipe.get("type") != "two_stage":
+    if recipe.get("type") != "three_stage":
         return jsonify({"success": False, "message": "Keine Variante ausgewählt"}), 400
 
     body = request.get_json(force=True, silent=True) or {}
@@ -432,7 +466,15 @@ def testCarChargeStart():
     try:
         phase_count, amps = compute_charging_phases_and_amps(target_kw)
         call_recipe_stage(recipe.get("phaseCount", {}), branch_key=str(phase_count))
-        time.sleep(CHARGING_PHASE_SWITCH_DELAY_SECONDS)
+        time.sleep(CHARGING_STAGE_DELAY_SECONDS)
+
+        amperage_stage = recipe.get("amperage", {})
+        amount_field = amperage_stage.get("amountField")
+        if not amount_field:
+            raise Exception("Kein Feld für die Amperezahl konfiguriert")
+        call_recipe_stage(amperage_stage, extra_data={amount_field: amps})
+        time.sleep(CHARGING_STAGE_DELAY_SECONDS)
+
         call_recipe_stage(recipe.get("control", {}), branch_key="start")
         return jsonify({"success": True, "phaseCount": phase_count, "amps": amps})
     except RecipeCallError as e:
