@@ -241,6 +241,24 @@ def compute_charging_phases_and_amps(target_kw):
     return 3, max(CHARGING_MIN_AMPS, three_phase_amps)
 
 
+def get_wallbox_device_id():
+    "Best-effort device id of the currently selected Wallbox integration's own device - mirrors getWallboxDevices() in app.js, used server-side as a fallback when a stored device_id is missing."
+    config = _read_current_config()
+    selected_ids = config.get("integrationMappings", {}).get("wallbox", [])
+    if not selected_ids:
+        return None
+    try:
+        device_map = homeassistant_adapter.get_integrations_and_entities().get("deviceMap", {})
+    except Exception as e:
+        print("[Shyft] Konnte Wallbox-Geraet nicht ermitteln:", repr(e))
+        return None
+    for entry_id in selected_ids:
+        devices = device_map.get(entry_id) or []
+        if devices:
+            return devices[0]["id"]
+    return None
+
+
 def call_recipe_stage(stage, branch_key):
     """Calls one configured 'Auto laden' recipe stage's Home Assistant service with its shared
     fields (the same for every call, e.g. device_id) plus whichever branch-specific fields apply
@@ -257,6 +275,14 @@ def call_recipe_stage(stage, branch_key):
 
     data = dict((stage.get("sharedFields") or {}))
     data.update((stage.get("branchFields") or {}).get(branch_key, {}))
+
+    # safety net: the frontend fills device_id in from the selected Wallbox's own device at save
+    # time, but a config saved before that existed (or before a device was detectable) can still
+    # have it empty - re-derive it fresh here rather than depending on the user re-triggering a save
+    if not data.get("device_id"):
+        fallback_device_id = get_wallbox_device_id()
+        if fallback_device_id:
+            data["device_id"] = fallback_device_id
 
     print(f"[Shyft] Rufe {domain}.{service_name} auf mit Daten {data}")
     try:

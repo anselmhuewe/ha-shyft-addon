@@ -1,3 +1,7 @@
+== 0.0.26.1
+
+* Fix: "Auto laden" konnte device_id leer an Home Assistant senden, wenn der Wert schon vor der automatischen Befüllung gespeichert war (z.B. vor dem Update, oder solange noch kein Speichern ausgelöst wurde). Der Aufruf ergänzt device_id jetzt zusätzlich zur Laufzeit direkt aus dem aktuell ausgewählten Wallbox-Gerät, statt sich allein auf den zuletzt gespeicherten Konfigurationsstand zu verlassen
+
 == 0.0.26.0
 
 * Geräte-Kacheln in der Konfiguration sind jetzt ein-/ausklappbar (Pfeil vor der Überschrift). Beim Laden sind unvollständige Kacheln (leere Sensor-/Aktion-Zuordnung, unvollständige "Auto laden"-Variante) automatisch ausgeklappt, vollständige eingeklappt - Kacheln ohne ausgewählte Integration bleiben eingeklappt (nichts zum Anzeigen). Taucht später ein Fehler auf (z.B. eine zugeordnete Entity liefert keinen lesbaren Wert), klappt sich die betroffene Kachel automatisch auf
