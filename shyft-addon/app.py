@@ -241,47 +241,22 @@ def compute_charging_phases_and_amps(target_kw):
     return 3, max(CHARGING_MIN_AMPS, three_phase_amps)
 
 
-def resolve_service_data(data_template, value):
-    """Recursively resolves placeholders in a service-call data dict against the computed number
-    (phase count or Ampere) for this stage:
-    - the literal string '{value}' is replaced with the computed value as-is
-    - {"$map": {"1": "1_phase", "3": "3_phase"}} looks the computed value up in that mapping -
-      needed when a field expects an enum string that doesn't match the number directly, e.g.
-      easee.set_charger_phase_mode's "mode" field wants "1_phase"/"3_phase", not 1/3
-    """
-    if isinstance(data_template, dict):
-        if set(data_template.keys()) == {"$map"} and isinstance(data_template["$map"], dict):
-            return data_template["$map"].get(str(value), value)
-        return {k: resolve_service_data(v, value) for k, v in data_template.items()}
-    if isinstance(data_template, str) and data_template.strip() == "{value}":
-        return value
-    return data_template
-
-
-def call_recipe_stage(stage, value=None):
-    """Calls one configured 'Auto laden' recipe stage: a Home Assistant service (any domain -
-    generic entity services like number.set_value/button.press, or an integration-specific one
-    like easee.set_charger_phase_mode), an optional target entity, and free-form JSON data fields
-    (their exact names are whatever the chosen service declares - shown as a hint in the UI).
-    '{value}' anywhere in the data is replaced with the computed phase count/Ampere at call time.
+def call_recipe_stage(stage, branch_key):
+    """Calls one configured 'Auto laden' recipe stage's Home Assistant service with its shared
+    fields (the same for every call, e.g. device_id) plus whichever branch-specific fields apply
+    for branch_key (e.g. phaseCount's "1"/"3", or control's "start"/"stop") - see
+    buildBranchedStageFields in app.js for how these are configured. A field only needs a branch
+    split at all if it has a fixed set of choices (a Home Assistant "select" selector) that
+    differs by branch, e.g. easee.action_command's action_command being "start" vs "stop"; static
+    fields like device_id are the same in sharedFields regardless of branch.
     """
     service = (stage or {}).get("service", "")
     if not service or "." not in service:
         raise Exception("Kein Befehl (Service) konfiguriert")
     domain, service_name = service.split(".", 1)
 
-    raw_data = stage.get("data", "")
-    data = {}
-    if raw_data:
-        try:
-            data = json.loads(raw_data)
-        except Exception as e:
-            raise Exception(f"Datenfelder sind kein gueltiges JSON: {e}")
-    data = resolve_service_data(data, value)
-
-    target_entity = stage.get("targetEntity", "")
-    if target_entity:
-        data["entity_id"] = target_entity
+    data = dict((stage.get("sharedFields") or {}))
+    data.update((stage.get("branchFields") or {}).get(branch_key, {}))
 
     homeassistant_adapter.call_service(domain, service_name, data)
 
@@ -297,16 +272,16 @@ def execute_car_charge_start(target_kw):
     if recipe.get("type") != "two_stage":
         raise Exception("Kein Lade-Rezept konfiguriert")
 
-    phases, amps = compute_charging_phases_and_amps(target_kw)
-    call_recipe_stage(recipe.get("phaseCount", {}), value=phases)
+    phases, _ = compute_charging_phases_and_amps(target_kw)
+    call_recipe_stage(recipe.get("phaseCount", {}), branch_key=str(phases))
     time.sleep(CHARGING_PHASE_SWITCH_DELAY_SECONDS)
-    call_recipe_stage(recipe.get("start", {}), value=amps)
+    call_recipe_stage(recipe.get("control", {}), branch_key="start")
 
 
 def execute_car_charge_stop():
     config = _read_current_config()
     recipe = config.get("carChargeRecipe", {})
-    call_recipe_stage(recipe.get("stop", {}))
+    call_recipe_stage(recipe.get("control", {}), branch_key="stop")
 
 
 def extract_select_options(field_info):
@@ -370,9 +345,9 @@ def testCarChargeStart():
     target_kw = body.get("targetKw")
     try:
         phase_count, amps = compute_charging_phases_and_amps(target_kw)
-        call_recipe_stage(recipe.get("phaseCount", {}), value=phase_count)
+        call_recipe_stage(recipe.get("phaseCount", {}), branch_key=str(phase_count))
         time.sleep(CHARGING_PHASE_SWITCH_DELAY_SECONDS)
-        call_recipe_stage(recipe.get("start", {}), value=amps)
+        call_recipe_stage(recipe.get("control", {}), branch_key="start")
         return jsonify({"success": True, "phaseCount": phase_count, "amps": amps})
     except Exception as e:
         return jsonify({"success": False, "message": str(e)}), 500
@@ -383,7 +358,7 @@ def testCarChargeStop():
     config = _read_current_config()
     recipe = config.get("carChargeRecipe", {})
     try:
-        call_recipe_stage(recipe.get("stop", {}))
+        call_recipe_stage(recipe.get("control", {}), branch_key="stop")
         return jsonify({"success": True})
     except Exception as e:
         return jsonify({"success": False, "message": str(e)}), 500

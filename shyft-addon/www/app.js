@@ -302,6 +302,13 @@ const AUTO_MANAGED_ACTION_KEYS = new Set(AUTO_MANAGED_CONTROLS.flatMap(c => c.ac
 // AUTO_MANAGED_CONTROLS shape, since it's a multi-stage, manufacturer-varying command sequence.
 const CAR_CHARGE_ACTION_KEYS = new Set(['car_charge_start', 'car_charge_stop']);
 
+// The two branches each "Auto laden" recipe stage splits its enum fields into (see
+// buildBranchedStageFields) - phaseCount by computed phase count, control by start vs. stop.
+const CAR_CHARGE_STAGE_BRANCHES = {
+    phaseCount: {keys: ['1', '3'], labels: ['Wert für 1 Phase', 'Wert für 3 Phasen']},
+    control: {keys: ['start', 'stop'], labels: ['Ladevorgang starten', 'Ladevorgang beenden']},
+};
+
 // actorMappings keys that get an on/off "nur simulieren" toggle. battery_action_stop/car_charge_stop
 // are shared stop-actors for an already-toggled type and don't get their own toggle.
 const ACTION_TYPE_TOGGLE_KEYS = new Set([
@@ -396,17 +403,27 @@ async function saveConfigurationNow() {
     if (recipeTypeElement) {
         carChargeRecipe.type = recipeTypeElement.value;
     }
-    for (const stageKey of ['phaseCount', 'start', 'stop']) {
+    for (const stageKey of Object.keys(CAR_CHARGE_STAGE_BRANCHES)) {
         const serviceElement = document.getElementById('car_charge_' + stageKey + '_service');
         if (!serviceElement) continue;
-        const stage = {...(carChargeRecipe[stageKey] || {})};
-        stage.service = serviceElement.value;
-        const targetElement = document.getElementById('car_charge_' + stageKey + '_target');
-        // extracted client-side: the backend's generic display-format stripping only reaches one
-        // level of nesting, and carChargeRecipe's stages are nested two levels deep
-        if (targetElement) stage.targetEntity = extractEntityId(targetElement.value);
-        const dataElement = document.getElementById('car_charge_' + stageKey + '_data');
-        if (dataElement) stage.data = dataElement.value;
+        const stage = {service: serviceElement.value, sharedFields: {}, branchFields: {}};
+        const match = allServiceOptions.find(s => s.service === serviceElement.value);
+        if (match) {
+            for (const field of match.fields) {
+                if (field.options.length === 0) {
+                    const el = document.getElementById('car_charge_' + stageKey + '_field_' + field.name);
+                    if (el) stage.sharedFields[field.name] = el.value;
+                } else {
+                    for (const branchKey of CAR_CHARGE_STAGE_BRANCHES[stageKey].keys) {
+                        const el = document.getElementById('car_charge_' + stageKey + '_branch_' + branchKey + '_field_' + field.name);
+                        if (el) {
+                            stage.branchFields[branchKey] = stage.branchFields[branchKey] || {};
+                            stage.branchFields[branchKey][field.name] = el.value;
+                        }
+                    }
+                }
+            }
+        }
         carChargeRecipe[stageKey] = stage;
     }
 
@@ -843,7 +860,7 @@ function renderSectionBody(bodyDiv, section, entryIds) {
     }
 
     if (hasCarCharge) {
-        bodyDiv.appendChild(buildCarChargeControl(candidateEntities));
+        bodyDiv.appendChild(buildCarChargeControl());
     }
 }
 
@@ -1077,13 +1094,15 @@ function getWallboxServiceDomains() {
     return domains;
 }
 
-// One row set for a recipe stage: which Home Assistant service to call, an optional target entity
-// (sent as entity_id), and free-form JSON data for whatever else the service needs. Everything
-// about the service (which fields it takes, whether it needs a target at all) varies by
-// manufacturer, so this stays generic rather than assuming a fixed shape.
-function buildRecipeStageFields(stageKey, label, tooltip, candidateServices, entityDatalistId, stageData, placeholderExample) {
-    const table = document.createElement('table');
-    const tbody = document.createElement('tbody');
+// One field-set for a recipe stage's Home Assistant service: static fields (no fixed choices,
+// e.g. device_id) get a single input shared across both branches; fields with a fixed set of
+// choices (a "select" selector, e.g. easee.action_command's action_command) get one dropdown per
+// branch (e.g. one under "Ladevorgang starten", one under "Ladevorgang beenden") since that's
+// exactly the kind of field that differs between the two - the user never has to know or type the
+// raw values, and the addon assembles the actual service-call data at runtime (see
+// call_recipe_stage in app.py).
+function buildBranchedStageFields(stageKey, label, tooltip, candidateServices, stageData, branchKeys, branchLabels, placeholderExample) {
+    const wrapper = document.createElement('div');
 
     const serviceDatalistId = 'carChargeServiceOptions_' + stageKey;
     const serviceDatalist = document.createElement('datalist');
@@ -1094,8 +1113,10 @@ function buildRecipeStageFields(stageKey, label, tooltip, candidateServices, ent
         option.textContent = s.label;
         serviceDatalist.appendChild(option);
     }
-    table.appendChild(serviceDatalist);
+    wrapper.appendChild(serviceDatalist);
 
+    const serviceTable = document.createElement('table');
+    const serviceTbody = document.createElement('tbody');
     const serviceRow = document.createElement('tr');
     const serviceLabelCell = document.createElement('td');
     serviceLabelCell.textContent = label;
@@ -1111,128 +1132,88 @@ function buildRecipeStageFields(stageKey, label, tooltip, candidateServices, ent
     serviceValueCell.appendChild(serviceInput);
     serviceRow.appendChild(serviceLabelCell);
     serviceRow.appendChild(serviceValueCell);
-    tbody.appendChild(serviceRow);
+    serviceTbody.appendChild(serviceRow);
+    serviceTable.appendChild(serviceTbody);
+    wrapper.appendChild(serviceTable);
 
-    const targetRow = document.createElement('tr');
-    const targetLabelCell = document.createElement('td');
-    targetLabelCell.textContent = 'Ziel-Entity (optional)';
-    targetLabelCell.appendChild(buildTooltip('Falls der Befehl eine Entity als Ziel braucht (z.B. number.set_value), wird sie hier als entity_id mitgeschickt. Manche Integrationen (z.B. Easee) erwarten stattdessen eine device_id als Datenfeld - dann hier leer lassen und die device_id unten eintragen.'));
-    const targetValueCell = document.createElement('td');
-    const targetInputWrapper = document.createElement('div');
-    targetInputWrapper.className = 'clearableInput';
-    const targetInput = document.createElement('input');
-    targetInput.id = 'car_charge_' + stageKey + '_target';
-    targetInput.value = formatEntityDisplay(stageData.targetEntity || '');
-    targetInput.setAttribute('list', entityDatalistId);
-    targetInput.setAttribute('class', 'sensorInput');
-    targetInput.setAttribute('autocomplete', 'off');
-    targetInput.addEventListener('change', () => {
-        targetInput.value = formatEntityDisplay(extractEntityId(targetInput.value));
-        autoSave();
-    });
-    targetInputWrapper.appendChild(targetInput);
-    const clearButton = document.createElement('button');
-    clearButton.type = 'button';
-    clearButton.className = 'clearInputButton';
-    clearButton.textContent = '×';
-    clearButton.setAttribute('aria-label', 'Eingabe löschen');
-    clearButton.addEventListener('click', () => {
-        targetInput.value = '';
-        targetInput.dispatchEvent(new Event('change'));
-        targetInput.focus();
-    });
-    targetInputWrapper.appendChild(clearButton);
-    targetValueCell.appendChild(targetInputWrapper);
-    targetRow.appendChild(targetLabelCell);
-    targetRow.appendChild(targetValueCell);
-    tbody.appendChild(targetRow);
+    const fieldsContainer = document.createElement('div');
+    wrapper.appendChild(fieldsContainer);
 
-    const dataRow = document.createElement('tr');
-    const dataLabelCell = document.createElement('td');
-    dataLabelCell.textContent = 'Datenfelder (JSON)';
-    dataLabelCell.appendChild(buildTooltip('Zusätzliche Parameter für den Befehl als JSON, z.B. {"device_id": "...", "mode": "{value}"}. Schreibe "{value}" genau an die Stelle, an der die berechnete Phasen- bzw. Amperezahl eingesetzt werden soll. Erwartet das Feld stattdessen einen festen Text für den berechneten Wert (z.B. "1_phase" statt 1), schreibe stattdessen {"$map": {"1": "1_phase", "3": "3_phase"}}.'));
-    const dataValueCell = document.createElement('td');
-    const dataTextarea = document.createElement('textarea');
-    dataTextarea.id = 'car_charge_' + stageKey + '_data';
-    dataTextarea.className = 'sensorInput';
-    dataTextarea.rows = 2;
-    dataTextarea.value = stageData.data || '';
-    dataTextarea.placeholder = '{}';
-    dataTextarea.addEventListener('change', autoSave);
-    dataValueCell.appendChild(dataTextarea);
-    const fieldHint = document.createElement('div');
-    fieldHint.className = 'serviceFieldHint';
-    dataValueCell.appendChild(fieldHint);
-    const fieldPickers = document.createElement('div');
-    fieldPickers.className = 'serviceFieldPickers';
-    dataValueCell.appendChild(fieldPickers);
-    dataRow.appendChild(dataLabelCell);
-    dataRow.appendChild(dataValueCell);
-    tbody.appendChild(dataRow);
-
-    // writes fieldName: value into the JSON textarea (parsing what's there, or starting fresh if
-    // it's empty/invalid) - so picking a dropdown option never requires hand-editing the JSON
-    function insertFieldValue(fieldName, value) {
-        let data = {};
-        try {
-            data = dataTextarea.value.trim() ? JSON.parse(dataTextarea.value) : {};
-        } catch (err) {
-            data = {};
-        }
-        data[fieldName] = value;
-        dataTextarea.value = JSON.stringify(data, null, 2);
-        dataTextarea.dispatchEvent(new Event('change'));
-    }
-
-    function updateFieldHint() {
-        fieldHint.textContent = '';
-        fieldPickers.innerHTML = '';
+    function renderFields() {
+        fieldsContainer.innerHTML = '';
         const match = allServiceOptions.find(s => s.service === serviceInput.value);
         if (!match) return;
-        if (match.fields.length === 0) {
-            fieldHint.textContent = 'Dieser Befehl braucht keine zusätzlichen Datenfelder.';
-            return;
-        }
-        fieldHint.textContent = 'Felder dieses Befehls: ' + match.fields.map(f => f.name).join(', ');
+        const staticFields = match.fields.filter(f => f.options.length === 0);
+        const enumFields = match.fields.filter(f => f.options.length > 0);
 
-        // for fields with a fixed set of choices (a Home Assistant "select" selector, the same
-        // info HA's own Developer Tools -> Actions editor uses), offer a dropdown instead of
-        // requiring the exact string to be typed by hand
-        for (const field of match.fields) {
-            if (field.options.length === 0) continue;
-            const row = document.createElement('div');
-            row.className = 'serviceFieldPickerRow';
-            const fieldLabel = document.createElement('span');
-            fieldLabel.textContent = field.label + ':';
-            const optionSelect = document.createElement('select');
-            optionSelect.className = 'sensorInput';
-            for (const opt of field.options) {
-                const optionEl = document.createElement('option');
-                optionEl.value = opt.value;
-                optionEl.textContent = String(opt.label) === String(opt.value) ? opt.label : `${opt.label} (${opt.value})`;
-                optionSelect.appendChild(optionEl);
+        if (staticFields.length > 0) {
+            const staticTable = document.createElement('table');
+            const staticTbody = document.createElement('tbody');
+            for (const field of staticFields) {
+                const row = document.createElement('tr');
+                const keyCell = document.createElement('td');
+                keyCell.textContent = field.label;
+                const valueCell = document.createElement('td');
+                const input = document.createElement('input');
+                input.id = 'car_charge_' + stageKey + '_field_' + field.name;
+                input.className = 'sensorInput';
+                input.value = (stageData.sharedFields || {})[field.name] || '';
+                input.addEventListener('change', autoSave);
+                valueCell.appendChild(input);
+                row.appendChild(keyCell);
+                row.appendChild(valueCell);
+                staticTbody.appendChild(row);
             }
-            const insertButton = document.createElement('button');
-            insertButton.type = 'button';
-            insertButton.textContent = 'Einfügen';
-            insertButton.addEventListener('click', () => insertFieldValue(field.name, optionSelect.value));
-            row.appendChild(fieldLabel);
-            row.appendChild(optionSelect);
-            row.appendChild(insertButton);
-            fieldPickers.appendChild(row);
+            staticTable.appendChild(staticTbody);
+            fieldsContainer.appendChild(staticTable);
+        }
+
+        for (let i = 0; i < branchKeys.length && enumFields.length > 0; i++) {
+            const branchKey = branchKeys[i];
+            const branchHeading = document.createElement('div');
+            branchHeading.className = 'branchFieldsHeading';
+            branchHeading.textContent = branchLabels[i];
+            fieldsContainer.appendChild(branchHeading);
+
+            const branchTable = document.createElement('table');
+            const branchTbody = document.createElement('tbody');
+            for (const field of enumFields) {
+                const row = document.createElement('tr');
+                const keyCell = document.createElement('td');
+                keyCell.textContent = field.label;
+                const valueCell = document.createElement('td');
+                const select = document.createElement('select');
+                select.id = 'car_charge_' + stageKey + '_branch_' + branchKey + '_field_' + field.name;
+                select.className = 'sensorInput';
+                for (const opt of field.options) {
+                    const optionEl = document.createElement('option');
+                    optionEl.value = opt.value;
+                    optionEl.textContent = String(opt.label) === String(opt.value) ? opt.label : `${opt.label} (${opt.value})`;
+                    select.appendChild(optionEl);
+                }
+                const currentValue = ((stageData.branchFields || {})[branchKey] || {})[field.name];
+                if (currentValue !== undefined) select.value = currentValue;
+                select.addEventListener('change', autoSave);
+                valueCell.appendChild(select);
+                row.appendChild(keyCell);
+                row.appendChild(valueCell);
+                branchTbody.appendChild(row);
+            }
+            branchTable.appendChild(branchTbody);
+            fieldsContainer.appendChild(branchTable);
         }
     }
+
     serviceInput.addEventListener('change', () => {
-        updateFieldHint();
+        renderFields();
         autoSave();
     });
-    updateFieldHint();
+    renderFields();
 
-    table.appendChild(tbody);
-    return table;
+    return wrapper;
 }
 
-function buildCarChargeControl(candidateEntities) {
+function buildCarChargeControl() {
     const wrapper = document.createElement('div');
     wrapper.className = 'autoActionControl';
 
@@ -1241,22 +1222,8 @@ function buildCarChargeControl(candidateEntities) {
 
     const recipe = configData['carChargeRecipe'] || {};
     const phaseCountStage = recipe.phaseCount || {};
-    const startStage = recipe.start || {};
-    const stopStage = recipe.stop || {};
-    checkmark.hidden = !(recipe.type === 'two_stage' && phaseCountStage.service && startStage.service && stopStage.service);
-
-    const controlDomains = ['number', 'select', 'button', 'switch'];
-    const entityDatalistId = 'carChargeEntityOptions';
-    const entityDatalist = document.createElement('datalist');
-    entityDatalist.id = entityDatalistId;
-    for (const entity of candidateEntities) {
-        if (entityMatchesSensorFilter(entity, {type: 'domain', values: controlDomains})) {
-            const option = document.createElement('option');
-            option.value = entity.label;
-            entityDatalist.appendChild(option);
-        }
-    }
-    wrapper.appendChild(entityDatalist);
+    const controlStage = recipe.control || {};
+    checkmark.hidden = !(recipe.type === 'two_stage' && phaseCountStage.service && controlStage.service);
 
     const candidateServices = allServiceOptions.filter(s => getWallboxServiceDomains().has(s.service.split('.')[0]));
 
@@ -1292,12 +1259,16 @@ function buildCarChargeControl(candidateEntities) {
     wrapper.appendChild(recipeTable);
 
     const stagesWrapper = document.createElement('div');
-    stagesWrapper.appendChild(buildRecipeStageFields('phaseCount', '1. Phasenanzahl setzen',
+    stagesWrapper.appendChild(buildBranchedStageFields('phaseCount', '1. Phasenanzahl setzen',
         'Befehl, mit dem die Phasenzahl an deiner Wallbox eingestellt wird.',
-        candidateServices, entityDatalistId, phaseCountStage, 'z.B. set_charger_phase_mode'));
-    stagesWrapper.appendChild(buildRecipeStageFields('start', '2. Ladevorgang starten',
-        'Befehl, mit dem der Ladevorgang gestartet wird.',
-        candidateServices, entityDatalistId, startStage, 'z.B. action_command'));
+        candidateServices, phaseCountStage,
+        CAR_CHARGE_STAGE_BRANCHES.phaseCount.keys, CAR_CHARGE_STAGE_BRANCHES.phaseCount.labels,
+        'z.B. set_charger_phase_mode'));
+    stagesWrapper.appendChild(buildBranchedStageFields('control', '2. Ladevorgang steuern',
+        'Befehl, mit dem der Ladevorgang gestartet bzw. beendet wird.',
+        candidateServices, controlStage,
+        CAR_CHARGE_STAGE_BRANCHES.control.keys, CAR_CHARGE_STAGE_BRANCHES.control.labels,
+        'z.B. action_command'));
     stagesWrapper.style.display = recipeSelect.value === 'two_stage' ? '' : 'none';
     wrapper.appendChild(stagesWrapper);
 
@@ -1336,6 +1307,7 @@ function buildCarChargeControl(candidateEntities) {
         testButton.textContent = `Test: mit ${targetKw.toFixed(1).replace('.', ',')} kW laden`;
         testButton.addEventListener('click', async () => {
             for (const b of testButtons) b.disabled = true;
+            testStopButton.disabled = true;
             status.textContent = 'Teste...';
             status.className = 'autoActionStatus';
             try {
@@ -1346,7 +1318,7 @@ function buildCarChargeControl(candidateEntities) {
                 });
                 const result = await response.json();
                 if (result.success) {
-                    status.textContent = `Gesendet: ${result.phaseCount} Phase(n), ${result.amps} A (prüfe Wallbox-Status...)`;
+                    status.textContent = `Gesendet: ${result.phaseCount} Phase(n), Laden gestartet (prüfe Wallbox-Status...)`;
                     status.className = 'autoActionStatus status-ok';
                     setTimeout(refreshWallboxStatus, 4000);
                 } else {
@@ -1359,57 +1331,45 @@ function buildCarChargeControl(candidateEntities) {
                 status.className = 'autoActionStatus status-error';
             } finally {
                 for (const b of testButtons) b.disabled = false;
+                testStopButton.disabled = false;
             }
         });
         testButtons.push(testButton);
     }
 
-    controlsRow.appendChild(wallboxStatusDisplay);
-    for (const b of testButtons) controlsRow.appendChild(b);
-    wrapper.appendChild(controlsRow);
-
-    const stopHeading = document.createElement('div');
-    stopHeading.className = 'sectionSubHeading';
-    stopHeading.textContent = 'Laden beenden';
-    wrapper.appendChild(stopHeading);
-
-    const stopWrapper = document.createElement('div');
-    stopWrapper.appendChild(buildRecipeStageFields('stop', 'Auto laden beenden',
-        'Befehl, mit dem der Ladevorgang beendet wird - unabhängig von der gewählten Start-Variante, da das herstellerübergreifend meist eine einzelne Aktion ist.',
-        candidateServices, entityDatalistId, stopStage, 'z.B. action_command'));
-    wrapper.appendChild(stopWrapper);
-
-    const stopControlsRow = document.createElement('div');
-    stopControlsRow.className = 'autoActionButtons';
-    const stopStatus = document.createElement('span');
-    stopStatus.className = 'autoActionValue';
     const testStopButton = document.createElement('button');
     testStopButton.type = 'button';
     testStopButton.textContent = 'Test: Laden beenden';
-
     testStopButton.addEventListener('click', async () => {
+        for (const b of testButtons) b.disabled = true;
         testStopButton.disabled = true;
-        stopStatus.textContent = 'Teste...';
+        status.textContent = 'Teste...';
+        status.className = 'autoActionStatus';
         try {
             const response = await fetch(insideHomeAssistant + '/actions/car_charge_stop/test', {method: 'POST'});
             const result = await response.json();
             if (result.success) {
-                stopStatus.textContent = 'Gesendet (prüfe Wallbox-Status...)';
+                status.textContent = 'Gesendet: Laden beendet (prüfe Wallbox-Status...)';
+                status.className = 'autoActionStatus status-ok';
                 setTimeout(refreshWallboxStatus, 4000);
             } else {
-                stopStatus.textContent = 'Fehler: ' + (result.message || 'unbekannt');
+                status.textContent = 'Fehler: ' + (result.message || 'unbekannt');
+                status.className = 'autoActionStatus status-error';
             }
         } catch (err) {
             console.log(err);
-            stopStatus.textContent = 'Fehler beim Testen';
+            status.textContent = 'Fehler beim Testen';
+            status.className = 'autoActionStatus status-error';
         } finally {
+            for (const b of testButtons) b.disabled = false;
             testStopButton.disabled = false;
         }
     });
 
-    stopControlsRow.appendChild(stopStatus);
-    stopControlsRow.appendChild(testStopButton);
-    wrapper.appendChild(stopControlsRow);
+    controlsRow.appendChild(wallboxStatusDisplay);
+    for (const b of testButtons) controlsRow.appendChild(b);
+    controlsRow.appendChild(testStopButton);
+    wrapper.appendChild(controlsRow);
 
     wrapper.__refresh = refreshWallboxStatus;
     refreshWallboxStatus();

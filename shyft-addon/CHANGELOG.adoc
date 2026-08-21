@@ -1,3 +1,8 @@
+== 0.0.24.0
+
+* "Auto laden" braucht jetzt keine "Ziel-Entity" und keine "Datenfelder (JSON)" mehr. Stattdessen erzeugt das Addon automatisch ein Eingabefeld pro Parameter des gewählten Befehls: Parameter ohne feste Werte (z.B. device_id) bekommen ein einzelnes, gemeinsames Feld; Parameter mit festen Werten (z.B. mode bei easee.set_charger_phase_mode) bekommen ein Dropdown pro Fall - bei "Phasenanzahl setzen" je eins für "1 Phase" und "3 Phasen", bei "Ladevorgang steuern" je eins für "Ladevorgang starten" und "Ladevorgang beenden". Nutzer müssen die tatsächlichen Werte damit nirgends mehr selbst kennen oder eintippen
+* "2. Ladevorgang starten" umbenannt in "2. Ladevorgang steuern" und um die "Beenden"-Variante erweitert - der bisher eigenständige Abschnitt "Laden beenden" ist jetzt darin enthalten (ein Befehl, zwei Fälle), inklusive gemeinsamem Test-Button
+
 == 0.0.23.0
 
 * Sensordaten an shyft-power werden jetzt bei Bedarf in die erwartete Einheit umgerechnet (z.B. W → kW, ÷1000), statt die von Home Assistant gelieferte Einheit unverändert durchzureichen. Sensoren ohne numerische Einheit (Modi, An/Aus) bleiben unangetastet
