@@ -1,3 +1,8 @@
+== 0.0.27.0
+
+* Schlägt ein Test-Button (Sensor/Aktion-Kacheln, "Auto laden") fehl, meldet das Addon den Fehler jetzt zusätzlich an shyft-power (Nutzer, Kontext, Fehlertyp, Fehlermeldung, aufgerufener Befehl und gesendete Daten) - hilft beim Support, ohne dass Nutzer das Home-Assistant-Log selbst weiterreichen müssen
+* Der Text "(wird geprüft...)" nach einem gesendeten "Auto laden"-Befehl ist entfernt, da dafür kein Sensor für die tatsächliche Ladeleistung bekannt ist und sich der Text nie auflöste - das Addon zeigt nur noch, was gesendet wurde
+
 == 0.0.26.1
 
 * Fix: "Auto laden" konnte device_id leer an Home Assistant senden, wenn der Wert schon vor der automatischen Befüllung gespeichert war (z.B. vor dem Update, oder solange noch kein Speichern ausgelöst wurde). Der Aufruf ergänzt device_id jetzt zusätzlich zur Laufzeit direkt aus dem aktuell ausgewählten Wallbox-Gerät, statt sich allein auf den zuletzt gespeicherten Konfigurationsstand zu verlassen

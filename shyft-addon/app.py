@@ -9,6 +9,7 @@ import math
 import re
 import shutil
 import time
+from datetime import datetime, timezone
 from apscheduler.schedulers.background import BackgroundScheduler
 import logging
 import sys
@@ -259,6 +260,50 @@ def get_wallbox_device_id():
     return None
 
 
+class RecipeCallError(Exception):
+    "Raised when a configured 'Auto laden' service call itself fails, carrying what was actually sent (service + data) so log_error_to_shyft can report it precisely."
+    def __init__(self, message, service, data):
+        super().__init__(message)
+        self.service = service
+        self.data = data
+
+
+def classify_error(message):
+    "Best-effort categorization of an exception message into a fixed set of error_type values for log_error_to_shyft, based on the wording the addon's own exceptions consistently use."
+    lower = (message or "").lower()
+    if "konfiguriert" in lower or "zugeordnet" in lower or "ausgewählt" in lower:
+        return "not_configured"
+    if "nicht lesbar" in lower or "liefert keinen" in lower:
+        return "unreadable_value"
+    if "failed:" in lower or "service" in lower:
+        return "service_call_failed"
+    return "unexpected_error"
+
+
+def log_error_to_shyft(context, error_type, error_message, service_called=None, data_sent=None):
+    """Best-effort error report to shyft-power, sent whenever a Test-Button click in the addon
+    returns an error - lets shyft-power's team see integration failures across users without
+    needing addon log access. Never raises: a failed report shouldn't break the actual test
+    response the user is waiting on.
+    """
+    user_id = extract_shyft_user_id(shyft_adapter.bubble_token)
+    if not user_id:
+        return
+    meta = f"addon_version={VERSION}; context={context}; service_called={service_called or ''}; timestamp={datetime.now(timezone.utc).isoformat()}"
+    payload = {
+        "user": user_id,
+        "meta": meta,
+        "error_type": error_type,
+        "error_message": error_message,
+    }
+    if data_sent is not None:
+        payload["data_sent"] = data_sent
+    try:
+        shyft_adapter.send_error_log(payload)
+    except Exception as e:
+        print("[Shyft] Fehlerreport an shyft-power fehlgeschlagen:", repr(e))
+
+
 def call_recipe_stage(stage, branch_key):
     """Calls one configured 'Auto laden' recipe stage's Home Assistant service with its shared
     fields (the same for every call, e.g. device_id) plus whichever branch-specific fields apply
@@ -293,7 +338,7 @@ def call_recipe_stage(stage, branch_key):
         # Home Assistant Core's own log, not in the REST response) - logging what we actually sent
         # at least lets you cross-reference the two.
         print(f"[Shyft] {domain}.{service_name} fehlgeschlagen: {e!r}")
-        raise
+        raise RecipeCallError(str(e), service, data) from e
 
 
 # Gives the wallbox time to actually process the phase switch before the start command follows -
@@ -390,7 +435,11 @@ def testCarChargeStart():
         time.sleep(CHARGING_PHASE_SWITCH_DELAY_SECONDS)
         call_recipe_stage(recipe.get("control", {}), branch_key="start")
         return jsonify({"success": True, "phaseCount": phase_count, "amps": amps})
+    except RecipeCallError as e:
+        log_error_to_shyft("car_charge_start_test", "service_call_failed", str(e), service_called=e.service, data_sent=e.data)
+        return jsonify({"success": False, "message": str(e)}), 500
     except Exception as e:
+        log_error_to_shyft("car_charge_start_test", classify_error(str(e)), str(e))
         return jsonify({"success": False, "message": str(e)}), 500
 
 
@@ -401,7 +450,11 @@ def testCarChargeStop():
     try:
         call_recipe_stage(recipe.get("control", {}), branch_key="stop")
         return jsonify({"success": True})
+    except RecipeCallError as e:
+        log_error_to_shyft("car_charge_stop_test", "service_call_failed", str(e), service_called=e.service, data_sent=e.data)
+        return jsonify({"success": False, "message": str(e)}), 500
     except Exception as e:
+        log_error_to_shyft("car_charge_stop_test", classify_error(str(e)), str(e))
         return jsonify({"success": False, "message": str(e)}), 500
 
 
@@ -511,6 +564,8 @@ def testAutoManagedControl(control_key):
             # here and risking showing the stale one. The frontend re-checks shortly after.
             return jsonify({"success": True, "value": new_value, "confirmed": False})
         except Exception as e:
+            log_error_to_shyft(f"{control_key}_test", classify_error(str(e)), str(e),
+                                service_called=f"script.{control['script_id']}", data_sent={"target_value": delta})
             return jsonify({"success": False, "message": str(e)}), 500
     else:  # switch
         turn_on = body.get("on", True)
@@ -518,6 +573,9 @@ def testAutoManagedControl(control_key):
             homeassistant_adapter.call_service("homeassistant", "turn_on" if turn_on else "turn_off", {"entity_id": entity_id})
             return jsonify({"success": True, "value": "on" if turn_on else "off", "confirmed": False})
         except Exception as e:
+            log_error_to_shyft(f"{control_key}_test", classify_error(str(e)), str(e),
+                                service_called="homeassistant.turn_on" if turn_on else "homeassistant.turn_off",
+                                data_sent={"entity_id": entity_id})
             return jsonify({"success": False, "message": str(e)}), 500
 
 

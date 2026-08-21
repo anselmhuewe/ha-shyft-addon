@@ -1043,7 +1043,7 @@ function buildAutoManagedNumberControl(control) {
             if (result.success) {
                 // devices reachable only via a manufacturer cloud API can take a while to
                 // report the new value back, so show what we sent right away, then confirm
-                valueDisplay.textContent = 'Gesendet: ' + result.value + unitSuffix + ' (prüfe...)';
+                valueDisplay.textContent = 'Gesendet: ' + result.value + unitSuffix + ' (wird geprüft...)';
                 setTimeout(refreshStatus, 4000);
             } else {
                 valueDisplay.textContent = 'Fehler: ' + (result.message || 'unbekannt');
@@ -1139,7 +1139,7 @@ function buildAutoManagedSwitchControl(control) {
             });
             const result = await response.json();
             if (result.success) {
-                valueDisplay.textContent = 'Gesendet: ' + (turnOn ? 'An' : 'Aus') + ' (prüfe...)';
+                valueDisplay.textContent = 'Gesendet: ' + (turnOn ? 'An' : 'Aus') + ' (wird geprüft...)';
                 setTimeout(refreshStatus, 4000);
             } else {
                 valueDisplay.textContent = 'Fehler: ' + (result.message || 'unbekannt');
@@ -1433,7 +1433,7 @@ function buildCarChargeControl() {
                 });
                 const result = await response.json();
                 if (result.success) {
-                    status.textContent = `Gesendet: ${result.phaseCount} Phase(n), Laden gestartet (prüfe Wallbox-Status...)`;
+                    status.textContent = `Gesendet: ${result.phaseCount} Phase(n), Laden gestartet.`;
                     status.className = 'autoActionStatus status-ok';
                     setTimeout(refreshWallboxStatus, 4000);
                 } else {
@@ -1464,7 +1464,7 @@ function buildCarChargeControl() {
             const response = await fetch(insideHomeAssistant + '/actions/car_charge_stop/test', {method: 'POST'});
             const result = await response.json();
             if (result.success) {
-                status.textContent = 'Gesendet: Laden beendet (prüfe Wallbox-Status...)';
+                status.textContent = 'Gesendet: Laden beendet.';
                 status.className = 'autoActionStatus status-ok';
                 setTimeout(refreshWallboxStatus, 4000);
             } else {

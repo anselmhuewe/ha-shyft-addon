@@ -26,6 +26,10 @@ class ShyftAdapter:
                            sensor_values : str):
         return self._call_workflow("addon_sensor_data", sensor_values)
 
+    def send_error_log(self, payload: dict):
+        "Best-effort error report to shyft-power, sent whenever a Test-Button click in the addon returns an error (see log_error_to_shyft in app.py for how the payload is assembled)."
+        return self._call_workflow("ha_addon_error_logging", json.dumps(payload))
+
     def get_actions(self, user_id: str):
         "Pulls the (read-only, for display only for now) action queue for user_id from shyft-power. Unlike _call_workflow, this returns the actual response body since the caller needs the action list."
         try:
