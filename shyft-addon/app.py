@@ -258,7 +258,16 @@ def call_recipe_stage(stage, branch_key):
     data = dict((stage.get("sharedFields") or {}))
     data.update((stage.get("branchFields") or {}).get(branch_key, {}))
 
-    homeassistant_adapter.call_service(domain, service_name, data)
+    print(f"[Shyft] Rufe {domain}.{service_name} auf mit Daten {data}")
+    try:
+        homeassistant_adapter.call_service(domain, service_name, data)
+    except Exception as e:
+        # Home Assistant's own response usually has no more detail than this for a 500 (the real
+        # traceback - e.g. from a bug in the integration's own service handler - only shows up in
+        # Home Assistant Core's own log, not in the REST response) - logging what we actually sent
+        # at least lets you cross-reference the two.
+        print(f"[Shyft] {domain}.{service_name} fehlgeschlagen: {e!r}")
+        raise
 
 
 # Gives the wallbox time to actually process the phase switch before the start command follows -

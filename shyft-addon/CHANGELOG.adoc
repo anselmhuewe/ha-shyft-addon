@@ -1,3 +1,10 @@
+== 0.0.26.0
+
+* Geräte-Kacheln in der Konfiguration sind jetzt ein-/ausklappbar (Pfeil vor der Überschrift). Beim Laden sind unvollständige Kacheln (leere Sensor-/Aktion-Zuordnung, unvollständige "Auto laden"-Variante) automatisch ausgeklappt, vollständige eingeklappt - Kacheln ohne ausgewählte Integration bleiben eingeklappt (nichts zum Anzeigen). Taucht später ein Fehler auf (z.B. eine zugeordnete Entity liefert keinen lesbaren Wert), klappt sich die betroffene Kachel automatisch auf
+* "Auto laden": Die device_id (bzw. jedes Feld mit Geräte-Bezug) wird nicht mehr angezeigt - sie ist immer eindeutig die des bereits ausgewählten Wallbox-Geräts und wird beim Speichern automatisch gesetzt
+* Der verbindende vertikale Strich läuft jetzt nicht mehr neben "1. Phasenanzahl setzen"/"2. Ladevorgang steuern" selbst, sondern nur noch als kurzer Verbinder in der Lücke dazwischen
+* Mehr Logging beim Ausführen eines "Auto laden"-Befehls (welcher Service mit welchen Daten aufgerufen wird, und der Fehler bei einem Fehlschlag) - hilfreich zum Abgleich mit Home Assistants eigenem Log, da dessen REST-Antwort bei einem 500er meist keine weiteren Details enthält
+
 == 0.0.25.0
 
 * "Auto laden": Felder, die eine Home-Assistant-Geräte-ID erwarten (z.B. device_id bei easee.set_charger_phase_mode), werden jetzt automatisch aus der bereits gewählten Wallbox-Integration befüllt (Dropdown statt Freitext) - dafür liefert /integrations jetzt auch die Geräte pro Integration mit

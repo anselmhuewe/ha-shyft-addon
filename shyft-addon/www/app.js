@@ -411,6 +411,12 @@ async function saveConfigurationNow() {
         if (match) {
             for (const field of match.fields) {
                 if (field.options.length === 0) {
+                    if (field.isDevice) {
+                        // never shown in the UI - always the already-selected Wallbox's own device
+                        const devices = getWallboxDevices();
+                        if (devices.length > 0) stage.sharedFields[field.name] = devices[0].id;
+                        continue;
+                    }
                     const el = document.getElementById('car_charge_' + stageKey + '_field_' + field.name);
                     if (el) stage.sharedFields[field.name] = el.value;
                 } else {
@@ -557,6 +563,57 @@ document.addEventListener('mousedown', (event) => {
     }
 });
 
+// Whether a device tile has everything filled in yet, checked from configData alone (no need to
+// wait for any live status fetch) - an empty sensor/action mapping, an unconfigured auto-managed
+// control, or an incomplete "Auto laden" recipe all count as incomplete. A section with no
+// integration selected at all has nothing to show either way, so it's not forced open.
+function isSectionComplete(section, currentIds) {
+    if (currentIds.length === 0) return true;
+
+    const sensorMappings = configData['sensorMappings'] || {};
+    const actorMappings = configData['actorMappings'] || {};
+
+    for (const key of section.sensors) {
+        if (!sensorMappings[key]) return false;
+    }
+
+    for (const control of AUTO_MANAGED_CONTROLS) {
+        if (control.actionKeys.some(k => section.actions.includes(k)) && !sensorMappings[control.sensorField]) {
+            return false;
+        }
+    }
+
+    const manualActions = section.actions.filter(key => !AUTO_MANAGED_ACTION_KEYS.has(key) && !CAR_CHARGE_ACTION_KEYS.has(key));
+    for (const key of manualActions) {
+        if (!actorMappings[key]) return false;
+    }
+
+    if (section.actions.some(k => CAR_CHARGE_ACTION_KEYS.has(k))) {
+        const recipe = configData['carChargeRecipe'] || {};
+        if (!(recipe.type === 'two_stage' && (recipe.phaseCount || {}).service && (recipe.control || {}).service)) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+// Catches errors that only show up after an async status fetch resolves (e.g. an entity that's
+// mapped but currently unreadable) - forces the tile open the moment one appears, even though
+// the initial synchronous isSectionComplete check couldn't have known about it yet.
+function watchForErrorsToExpand(bodyDiv, onError) {
+    const observer = new MutationObserver((mutations) => {
+        for (const mutation of mutations) {
+            if (mutation.target.classList && mutation.target.classList.contains('status-error')) {
+                onError();
+                observer.disconnect();
+                return;
+            }
+        }
+    });
+    observer.observe(bodyDiv, {attributes: true, attributeFilter: ['class'], subtree: true});
+}
+
 function renderIntegrationSections() {
     const container = document.getElementById('deviceSections');
     container.innerHTML = '';
@@ -566,10 +623,22 @@ function renderIntegrationSections() {
         const sectionDiv = document.createElement('div');
         sectionDiv.className = 'integrationSection';
 
+        const currentIds = integrationMappings[section.key] || [];
+        currentIntegrationSelections[section.key] = currentIds;
+        let expanded = !isSectionComplete(section, currentIds);
+
         const heading = document.createElement('div');
         heading.className = 'integrationHeading';
         const headingRow = document.createElement('div');
         headingRow.className = 'integrationHeadingRow';
+
+        const toggleButton = document.createElement('button');
+        toggleButton.type = 'button';
+        toggleButton.className = 'sectionToggleButton';
+        toggleButton.setAttribute('aria-label', 'Ein-/ausklappen');
+        toggleButton.textContent = '▾';
+        headingRow.appendChild(toggleButton);
+
         const headingTitle = document.createElement('h2');
         headingTitle.textContent = section.label;
         headingRow.appendChild(headingTitle);
@@ -578,24 +647,42 @@ function renderIntegrationSections() {
         }
         heading.appendChild(headingRow);
 
-        const currentIds = integrationMappings[section.key] || [];
-        currentIntegrationSelections[section.key] = currentIds;
-
         const bodyDiv = document.createElement('div');
         bodyDiv.id = 'section_body_' + section.key;
-        bodyDiv.style.display = currentIds.length > 0 ? '' : 'none';
+        watchForErrorsToExpand(bodyDiv, () => {
+            if (!expanded) {
+                expanded = true;
+                updateBodyVisibility();
+            }
+        });
+
+        function updateBodyVisibility() {
+            const hasSelection = currentIntegrationSelections[section.key].length > 0;
+            bodyDiv.style.display = (hasSelection && expanded) ? '' : 'none';
+            toggleButton.classList.toggle('collapsed', !expanded);
+            toggleButton.disabled = !hasSelection;
+        }
+
         if (currentIds.length > 0) {
             renderSectionBody(bodyDiv, section, currentIds);
         }
+        updateBodyVisibility();
+
+        toggleButton.addEventListener('click', () => {
+            expanded = !expanded;
+            updateBodyVisibility();
+        });
 
         const picker = buildIntegrationPicker(section, currentIds, (selectedIds) => {
+            const wasEmpty = currentIntegrationSelections[section.key].length === 0;
             currentIntegrationSelections[section.key] = selectedIds;
-            bodyDiv.style.display = selectedIds.length > 0 ? '' : 'none';
             if (selectedIds.length > 0) {
                 renderSectionBody(bodyDiv, section, selectedIds);
+                if (wasEmpty) expanded = true;
             } else {
                 bodyDiv.innerHTML = '';
             }
+            updateBodyVisibility();
             autoSave();
         });
         heading.appendChild(picker);
@@ -1160,42 +1247,25 @@ function buildBranchedStageFields(stageKey, label, tooltip, candidateServices, s
         const staticFields = match.fields.filter(f => f.options.length === 0);
         const enumFields = match.fields.filter(f => f.options.length > 0);
 
-        if (staticFields.length > 0) {
+        // device-selector fields (e.g. device_id) are never shown at all - there's exactly one
+        // device to mean (the already-selected Wallbox's own), so saveConfigurationNow fills it
+        // in directly from getWallboxDevices() rather than rendering anything the user could pick
+        const visibleStaticFields = staticFields.filter(f => !f.isDevice);
+
+        if (visibleStaticFields.length > 0) {
             const staticTable = document.createElement('table');
             const staticTbody = document.createElement('tbody');
-            for (const field of staticFields) {
+            for (const field of visibleStaticFields) {
                 const row = document.createElement('tr');
                 const keyCell = document.createElement('td');
                 keyCell.textContent = field.label;
                 const valueCell = document.createElement('td');
-
-                if (field.isDevice) {
-                    // auto-filled from the Wallbox integration's own device(s) - never typed by
-                    // hand, since a device registry id has no way for the user to look it up
-                    const devices = getWallboxDevices();
-                    const select = document.createElement('select');
-                    select.id = 'car_charge_' + stageKey + '_field_' + field.name;
-                    select.className = 'sensorInput';
-                    for (const device of devices) {
-                        const optionEl = document.createElement('option');
-                        optionEl.value = device.id;
-                        optionEl.textContent = device.name;
-                        select.appendChild(optionEl);
-                    }
-                    const currentValue = (stageData.sharedFields || {})[field.name];
-                    if (currentValue && devices.some(d => d.id === currentValue)) {
-                        select.value = currentValue;
-                    }
-                    select.addEventListener('change', autoSave);
-                    valueCell.appendChild(select);
-                } else {
-                    const input = document.createElement('input');
-                    input.id = 'car_charge_' + stageKey + '_field_' + field.name;
-                    input.className = 'sensorInput';
-                    input.value = (stageData.sharedFields || {})[field.name] || '';
-                    input.addEventListener('change', autoSave);
-                    valueCell.appendChild(input);
-                }
+                const input = document.createElement('input');
+                input.id = 'car_charge_' + stageKey + '_field_' + field.name;
+                input.className = 'sensorInput';
+                input.value = (stageData.sharedFields || {})[field.name] || '';
+                input.addEventListener('change', autoSave);
+                valueCell.appendChild(input);
                 row.appendChild(keyCell);
                 row.appendChild(valueCell);
                 staticTbody.appendChild(row);
@@ -1304,6 +1374,11 @@ function buildCarChargeControl() {
         candidateServices, phaseCountStage,
         CAR_CHARGE_STAGE_BRANCHES.phaseCount.keys, CAR_CHARGE_STAGE_BRANCHES.phaseCount.labels,
         'z.B. set_charger_phase_mode'));
+    // connects step 1 to step 2 without running alongside either numbered heading - starts below
+    // "1. Phasenanzahl setzen"'s own content, stops above "2. Ladevorgang steuern"
+    const stageConnector = document.createElement('div');
+    stageConnector.className = 'carChargeStageConnector';
+    stagesWrapper.appendChild(stageConnector);
     stagesWrapper.appendChild(buildBranchedStageFields('control', '2. Ladevorgang steuern',
         'Befehl, mit dem der Ladevorgang gestartet bzw. beendet wird.',
         candidateServices, controlStage,
