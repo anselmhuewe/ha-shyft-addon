@@ -133,10 +133,6 @@ const actorHelpInformation = {
         label: 'Batterie-Aktion beenden',
         description: ' Home-Assistant-Automation, die ausgelöst wird, wenn Shyft eine laufende Batterie-Aktion beenden möchte.'
     },
-    'hot_water': {
-        label: 'Warmwasser',
-        description: ' Home-Assistant-Automation, die ausgelöst wird, wenn Shyft die Warmwasserbereitung ansteuern möchte.'
-    },
     'heating_target_temp': {
         label: 'Heizung Soll-Temperatur (aktuell)',
         description: ' Home-Assistant-Automation, die ausgelöst wird, wenn Shyft die Soll-Temperatur der Heizung anpassen möchte.'
@@ -302,13 +298,18 @@ const AUTO_MANAGED_ACTION_KEYS = new Set(AUTO_MANAGED_CONTROLS.flatMap(c => c.ac
 // AUTO_MANAGED_CONTROLS shape, since it's a multi-stage, manufacturer-varying command sequence.
 const CAR_CHARGE_ACTION_KEYS = new Set(['car_charge_start', 'car_charge_stop']);
 
+// "Warmwasser" also gets a device+service picker (buildHotWaterControl) rather than the
+// "map an existing Home-Assistant automation" approach every other manual action still uses -
+// unlike those, it's a single fixed action (no branches, no computed value, no Ende-Verhalten).
+const HOT_WATER_ACTION_KEYS = new Set(['hot_water']);
+
 // The branches each "Auto laden" recipe stage splits its enum fields into (see
 // buildBranchedStageFields) - phaseCount by computed phase count, control by start vs. stop.
 // amperage has no branches: its Ampere value is always the same computed number regardless of
 // outcome, so it gets one or more auto-filled fields instead (see amountFields).
 const CAR_CHARGE_STAGE_BRANCHES = {
     phaseCount: {keys: ['1', '3'], labels: ['Mit 1 Phase laden', 'Mit 3 Phasen laden']},
-    amperage: {keys: [], labels: []},
+    amperage: {keys: [], labels: [], amountUnit: 'A'},
     control: {keys: ['start', 'stop'], labels: ['Ladevorgang starten', 'Ladevorgang beenden']},
 };
 
@@ -353,6 +354,45 @@ function getActionIconUrl(actionName) {
 }
 
 let currentIntegrationSelections = {};
+
+// Reads one recipe stage's service + field values back out of the DOM (see
+// buildBranchedStageFields for how they're rendered) - shared by "Auto laden"'s per-stage loop and
+// the single-stage "Warmwasserbereitung" recipe, since both are built from the same picker.
+function readStageFromDom(idPrefix, stageKey, integrationKey, amountUnit, branchKeys) {
+    const serviceElement = document.getElementById(idPrefix + stageKey + '_service');
+    if (!serviceElement) return null;
+    const stage = {service: serviceElement.value, sharedFields: {}, branchFields: {}, amountFields: []};
+    const match = allServiceOptions.find(s => s.service === serviceElement.value);
+    if (match) {
+        for (const field of match.fields) {
+            if (field.options.length === 0) {
+                if (field.isDevice) {
+                    // never shown in the UI - always the already-selected integration's own device
+                    const devices = getIntegrationDevices(integrationKey);
+                    if (devices.length > 0) stage.sharedFields[field.name] = devices[0].id;
+                    continue;
+                }
+                if (field.isNumber && amountUnit && field.unit === amountUnit) {
+                    // reliably picked out via its declared unit (e.g. "A") rather than guessed -
+                    // never shown in the UI, always gets the computed value at call time
+                    stage.amountFields.push(field.name);
+                    continue;
+                }
+                const el = document.getElementById(idPrefix + stageKey + '_field_' + field.name);
+                if (el) stage.sharedFields[field.name] = el.value;
+            } else {
+                for (const branchKey of branchKeys) {
+                    const el = document.getElementById(idPrefix + stageKey + '_branch_' + branchKey + '_field_' + field.name);
+                    if (el) {
+                        stage.branchFields[branchKey] = stage.branchFields[branchKey] || {};
+                        stage.branchFields[branchKey][field.name] = el.value;
+                    }
+                }
+            }
+        }
+    }
+    return stage;
+}
 
 async function saveConfigurationNow() {
     const sensorValues = {...(configData["sensorMappings"] || {})};
@@ -407,47 +447,13 @@ async function saveConfigurationNow() {
         carChargeRecipe.type = recipeTypeElement.value;
     }
     for (const stageKey of Object.keys(CAR_CHARGE_STAGE_BRANCHES)) {
-        const serviceElement = document.getElementById('car_charge_' + stageKey + '_service');
-        if (!serviceElement) continue;
-        const stage = {service: serviceElement.value, sharedFields: {}, branchFields: {}, amountFields: []};
-        const match = allServiceOptions.find(s => s.service === serviceElement.value);
-        if (match) {
-            for (const field of match.fields) {
-                if (field.options.length === 0) {
-                    if (field.isDevice) {
-                        // never shown in the UI - always the already-selected Wallbox's own device
-                        const devices = getWallboxDevices();
-                        if (devices.length > 0) stage.sharedFields[field.name] = devices[0].id;
-                        continue;
-                    }
-                    if (field.isNumber) {
-                        // a service can have more than one number field, not all of them meaning
-                        // "current" (e.g. Easee's set_charger_dynamic_limit also has an unrelated
-                        // time_to_live) - the user marks which one(s) via the checkbox rendered in
-                        // buildBranchedStageFields; only those get the computed Ampere value at
-                        // call time (see call_recipe_stage in app.py), any other stays a normal,
-                        // manually-entered field
-                        const autoCheckbox = document.getElementById('car_charge_' + stageKey + '_field_' + field.name + '_auto');
-                        if (autoCheckbox && autoCheckbox.checked) {
-                            stage.amountFields.push(field.name);
-                            continue;
-                        }
-                    }
-                    const el = document.getElementById('car_charge_' + stageKey + '_field_' + field.name);
-                    if (el) stage.sharedFields[field.name] = el.value;
-                } else {
-                    for (const branchKey of CAR_CHARGE_STAGE_BRANCHES[stageKey].keys) {
-                        const el = document.getElementById('car_charge_' + stageKey + '_branch_' + branchKey + '_field_' + field.name);
-                        if (el) {
-                            stage.branchFields[branchKey] = stage.branchFields[branchKey] || {};
-                            stage.branchFields[branchKey][field.name] = el.value;
-                        }
-                    }
-                }
-            }
-        }
-        carChargeRecipe[stageKey] = stage;
+        const branch = CAR_CHARGE_STAGE_BRANCHES[stageKey];
+        const stage = readStageFromDom('car_charge_', stageKey, 'wallbox', branch.amountUnit, branch.keys);
+        if (stage) carChargeRecipe[stageKey] = stage;
     }
+
+    const hotWaterStage = readStageFromDom('hot_water_', 'hotWater', 'waermepumpe', undefined, []);
+    const hotWaterRecipe = hotWaterStage || (configData["hotWaterRecipe"] || {});
 
     const toBeWritten = {
         "sensorMappings": sensorValues,
@@ -455,6 +461,7 @@ async function saveConfigurationNow() {
         "integrationMappings": integrationValues,
         "actionTypeEnabled": actionTypeEnabled,
         "carChargeRecipe": carChargeRecipe,
+        "hotWaterRecipe": hotWaterRecipe,
         "notificationTargets": notificationTargets,
         "notificationsEnabled": notificationsEnabled
     };
@@ -599,7 +606,7 @@ function isSectionComplete(section, currentIds) {
         }
     }
 
-    const manualActions = section.actions.filter(key => !AUTO_MANAGED_ACTION_KEYS.has(key) && !CAR_CHARGE_ACTION_KEYS.has(key));
+    const manualActions = section.actions.filter(key => !AUTO_MANAGED_ACTION_KEYS.has(key) && !CAR_CHARGE_ACTION_KEYS.has(key) && !HOT_WATER_ACTION_KEYS.has(key));
     for (const key of manualActions) {
         if (!actorMappings[key]) return false;
     }
@@ -611,6 +618,11 @@ function isSectionComplete(section, currentIds) {
             && amperageStage.service && (amperageStage.amountFields || []).length > 0 && (recipe.control || {}).service)) {
             return false;
         }
+    }
+
+    if (section.actions.some(k => HOT_WATER_ACTION_KEYS.has(k))) {
+        const recipe = configData['hotWaterRecipe'] || {};
+        if (!recipe.service) return false;
     }
 
     return true;
@@ -945,11 +957,12 @@ function renderSectionBody(bodyDiv, section, entryIds) {
         bodyDiv.appendChild(buildMappingTable(section.sensors, configData["sensorMappings"] || {}, helpinformation, VALUE_POSTFIX, key => sensorDatalistIds[key], true));
     }
 
-    const manualActions = section.actions.filter(key => !AUTO_MANAGED_ACTION_KEYS.has(key) && !CAR_CHARGE_ACTION_KEYS.has(key));
+    const manualActions = section.actions.filter(key => !AUTO_MANAGED_ACTION_KEYS.has(key) && !CAR_CHARGE_ACTION_KEYS.has(key) && !HOT_WATER_ACTION_KEYS.has(key));
     const sectionControls = AUTO_MANAGED_CONTROLS.filter(c => c.actionKeys.some(k => section.actions.includes(k)));
     const hasCarCharge = section.actions.some(k => CAR_CHARGE_ACTION_KEYS.has(k));
+    const hasHotWater = section.actions.some(k => HOT_WATER_ACTION_KEYS.has(k));
 
-    if (manualActions.length > 0 || sectionControls.length > 0 || hasCarCharge) {
+    if (manualActions.length > 0 || sectionControls.length > 0 || hasCarCharge || hasHotWater) {
         const controlHeading = document.createElement('div');
         controlHeading.className = 'sectionSubHeading controlSectionHeading';
         controlHeading.textContent = 'Steuerung';
@@ -966,6 +979,10 @@ function renderSectionBody(bodyDiv, section, entryIds) {
 
     if (hasCarCharge) {
         bodyDiv.appendChild(buildCarChargeControl());
+    }
+
+    if (hasHotWater) {
+        bodyDiv.appendChild(buildHotWaterControl());
     }
 }
 
@@ -1017,7 +1034,7 @@ function buildAutoManagedNumberControl(control) {
         try {
             const result = await getJson(insideHomeAssistant + '/actions/' + control.key + '/status');
             if (!result.configured) {
-                status.textContent = 'Befülle die "' + control.titleLabel + '"';
+                status.textContent = 'Befülle den Sensor "' + control.titleLabel + '"';
                 status.className = 'autoActionStatus status-missing';
                 checkmark.hidden = true;
                 minusButton.disabled = true;
@@ -1115,7 +1132,7 @@ function buildAutoManagedSwitchControl(control) {
         try {
             const result = await getJson(insideHomeAssistant + '/actions/' + control.key + '/status');
             if (!result.configured) {
-                status.textContent = 'Befülle die "' + control.titleLabel + '"';
+                status.textContent = 'Befülle den Sensor "' + control.titleLabel + '"';
                 status.className = 'autoActionStatus status-missing';
                 checkmark.hidden = true;
                 testToggleInput.disabled = true;
@@ -1184,12 +1201,14 @@ function buildAutoManagedSwitchControl(control) {
 // command sequence (currently one recipe, "Dreistufig": set phase count, then Ampere, then start charging) plus
 // an independent single-action "Laden beenden". Kept separate from AUTO_MANAGED_CONTROLS since the
 // concrete kW->Phasen/Ampere math lives entirely server-side (see compute_charging_phases_and_amps).
-// Domains eligible as an "Auto laden" Befehl: generic controllable-entity domains, plus whatever
-// domain(s) the currently selected Wallbox-Integration(s) belong to (e.g. 'easee') - so
-// integration-specific services like easee.set_charger_phase_mode show up as candidates too.
-function getWallboxServiceDomains() {
+// Domains eligible as a Befehl for a given integration section (e.g. "Auto laden" -> 'wallbox',
+// "Warmwasserbereitung" -> 'waermepumpe'): generic controllable-entity domains, plus whatever
+// domain(s) the currently selected integration(s) for that section belong to (e.g. 'easee',
+// 'vicare') - so integration-specific services like easee.set_charger_phase_mode or a ViCare
+// service show up as candidates too.
+function getIntegrationServiceDomains(integrationKey) {
     const domains = new Set(['number', 'select', 'button', 'switch']);
-    const selectedIds = currentIntegrationSelections['wallbox'] || [];
+    const selectedIds = currentIntegrationSelections[integrationKey] || [];
     for (const integration of integrationsData.integrations) {
         if (selectedIds.includes(integration.id)) {
             const match = integration.name.match(/\(([^)]+)\)$/);
@@ -1199,11 +1218,12 @@ function getWallboxServiceDomains() {
     return domains;
 }
 
-// Devices belonging to the currently selected Wallbox integration(s) - lets a service field with
-// a "device" selector (e.g. easee.set_charger_phase_mode's device_id) be filled by picking from
-// the user's own already-selected wallbox instead of typing a device registry id by hand.
-function getWallboxDevices() {
-    const selectedIds = currentIntegrationSelections['wallbox'] || [];
+// Devices belonging to the currently selected integration(s) for a given section - lets a service
+// field with a "device" selector (e.g. easee.set_charger_phase_mode's device_id) be filled by
+// picking from the user's own already-selected device instead of typing a device registry id by
+// hand.
+function getIntegrationDevices(integrationKey) {
+    const selectedIds = currentIntegrationSelections[integrationKey] || [];
     const devices = [];
     for (const entryId of selectedIds) {
         for (const device of (integrationsData.deviceMap || {})[entryId] || []) {
@@ -1220,10 +1240,10 @@ function getWallboxDevices() {
 // exactly the kind of field that differs between the two - the user never has to know or type the
 // raw values, and the addon assembles the actual service-call data at runtime (see
 // call_recipe_stage in app.py).
-function buildBranchedStageFields(stageKey, label, tooltip, candidateServices, stageData, branchKeys, branchLabels, placeholderExample, entityUnitFilter) {
+function buildBranchedStageFields(idPrefix, stageKey, label, tooltip, candidateServices, stageData, branchKeys, branchLabels, placeholderExample, amountUnit) {
     const wrapper = document.createElement('div');
 
-    const serviceDatalistId = 'carChargeServiceOptions_' + stageKey;
+    const serviceDatalistId = idPrefix + 'ServiceOptions_' + stageKey;
     const serviceDatalist = document.createElement('datalist');
     serviceDatalist.id = serviceDatalistId;
     for (const s of candidateServices) {
@@ -1242,7 +1262,7 @@ function buildBranchedStageFields(stageKey, label, tooltip, candidateServices, s
     serviceLabelCell.appendChild(buildTooltip(tooltip));
     const serviceValueCell = document.createElement('td');
     const serviceInput = document.createElement('input');
-    serviceInput.id = 'car_charge_' + stageKey + '_service';
+    serviceInput.id = idPrefix + stageKey + '_service';
     serviceInput.value = stageData.service || '';
     serviceInput.setAttribute('list', serviceDatalistId);
     serviceInput.setAttribute('class', 'sensorInput');
@@ -1266,9 +1286,11 @@ function buildBranchedStageFields(stageKey, label, tooltip, candidateServices, s
         const enumFields = match.fields.filter(f => f.options.length > 0);
 
         // device-selector fields (e.g. device_id) are never shown at all - there's exactly one
-        // device to mean (the already-selected Wallbox's own), so saveConfigurationNow fills it
-        // in directly from getWallboxDevices() rather than rendering anything the user could pick.
-        const visibleStaticFields = staticFields.filter(f => !f.isDevice);
+        // device to mean (the already-selected integration's own), so saveConfigurationNow fills
+        // it in directly via getIntegrationDevices() rather than rendering anything to pick.
+        // Number fields whose declared unit matches this stage's amountUnit aren't shown either -
+        // they always get the freshly computed value at call time instead (see saveConfigurationNow).
+        const visibleStaticFields = staticFields.filter(f => !f.isDevice && !(f.isNumber && amountUnit && f.unit === amountUnit));
 
         if (visibleStaticFields.length > 0) {
             const staticTable = document.createElement('table');
@@ -1279,68 +1301,37 @@ function buildBranchedStageFields(stageKey, label, tooltip, candidateServices, s
                 keyCell.textContent = field.label;
                 const valueCell = document.createElement('td');
 
-                if (field.isNumber) {
-                    // a service can have more than one number field (e.g. Easee's
-                    // set_charger_dynamic_limit has both "current" and an unrelated
-                    // "time_to_live") - only the user knows which one(s), if any, should track
-                    // the computed Ampere value, so ask explicitly rather than guessing
-                    const isAuto = (stageData.amountFields || []).includes(field.name);
-                    const toggleLabel = document.createElement('label');
-                    toggleLabel.className = 'amountFieldToggle';
-                    const checkbox = document.createElement('input');
-                    checkbox.type = 'checkbox';
-                    checkbox.id = 'car_charge_' + stageKey + '_field_' + field.name + '_auto';
-                    checkbox.checked = isAuto;
-                    toggleLabel.appendChild(checkbox);
-                    toggleLabel.appendChild(document.createTextNode(' automatisch aus berechneter Amperezahl'));
-                    valueCell.appendChild(toggleLabel);
-
-                    const manualInput = document.createElement('input');
-                    manualInput.id = 'car_charge_' + stageKey + '_field_' + field.name;
-                    manualInput.className = 'sensorInput';
-                    manualInput.setAttribute('autocomplete', 'off');
-                    manualInput.value = (stageData.sharedFields || {})[field.name] || '';
-                    manualInput.style.display = isAuto ? 'none' : '';
-                    manualInput.addEventListener('change', autoSave);
-                    valueCell.appendChild(manualInput);
-
-                    checkbox.addEventListener('change', () => {
-                        manualInput.style.display = checkbox.checked ? 'none' : '';
-                        autoSave();
-                    });
-                } else {
-                    const input = document.createElement('input');
-                    input.id = 'car_charge_' + stageKey + '_field_' + field.name;
-                    input.className = 'sensorInput';
-                    input.setAttribute('autocomplete', 'off');
-                    input.value = (stageData.sharedFields || {})[field.name] || '';
-                    if (field.isEntity) {
-                        // an "entity_id" target selector (e.g. number.set_value) has no fixed
-                        // choices of its own - offer a searchable dropdown of known entities
-                        // instead of asking the user to type an id by hand, narrowed to the
-                        // relevant unit where given (e.g. "A" for the amperage stage, so only
-                        // Ladestrom-Entitäten show up)
-                        const entityDatalistId = 'carChargeEntityOptions_' + stageKey + '_' + field.name;
-                        const entityDatalist = document.createElement('datalist');
-                        entityDatalist.id = entityDatalistId;
-                        const candidates = entityUnitFilter
-                            ? allSensorIdOptions.filter(e => e.unit === entityUnitFilter)
-                            : allSensorIdOptions;
-                        for (const entity of candidates) {
-                            const option = document.createElement('option');
-                            option.value = entity.entity_id;
-                            option.textContent = entity.label;
-                            entityDatalist.appendChild(option);
-                        }
-                        fieldsContainer.appendChild(entityDatalist);
-                        input.setAttribute('list', entityDatalistId);
-                        input.placeholder = entityUnitFilter
-                            ? `z.B. number.wallbox_ladestrom (gefiltert nach Einheit "${entityUnitFilter}")`
-                            : 'z.B. number.wallbox_ladestrom';
+                const input = document.createElement('input');
+                input.id = idPrefix + stageKey + '_field_' + field.name;
+                input.className = 'sensorInput';
+                input.setAttribute('autocomplete', 'off');
+                input.value = (stageData.sharedFields || {})[field.name] || '';
+                if (field.isEntity) {
+                    // an "entity_id" target selector (e.g. number.set_value) has no fixed
+                    // choices of its own - offer a searchable dropdown of known entities
+                    // instead of asking the user to type an id by hand, narrowed to the
+                    // relevant unit where given (e.g. "A" for the amperage stage, so only
+                    // Ladestrom-Entitäten show up)
+                    const entityDatalistId = idPrefix + 'EntityOptions_' + stageKey + '_' + field.name;
+                    const entityDatalist = document.createElement('datalist');
+                    entityDatalist.id = entityDatalistId;
+                    const candidates = amountUnit
+                        ? allSensorIdOptions.filter(e => e.unit === amountUnit)
+                        : allSensorIdOptions;
+                    for (const entity of candidates) {
+                        const option = document.createElement('option');
+                        option.value = entity.entity_id;
+                        option.textContent = entity.label;
+                        entityDatalist.appendChild(option);
                     }
-                    input.addEventListener('change', autoSave);
-                    valueCell.appendChild(input);
+                    fieldsContainer.appendChild(entityDatalist);
+                    input.setAttribute('list', entityDatalistId);
+                    input.placeholder = amountUnit
+                        ? `z.B. number.wallbox_ladestrom (gefiltert nach Einheit "${amountUnit}")`
+                        : 'z.B. number.wallbox_ladestrom';
                 }
+                input.addEventListener('change', autoSave);
+                valueCell.appendChild(input);
                 row.appendChild(keyCell);
                 row.appendChild(valueCell);
                 staticTbody.appendChild(row);
@@ -1365,7 +1356,7 @@ function buildBranchedStageFields(stageKey, label, tooltip, candidateServices, s
                     keyCell.textContent = enumFields.length === 1 ? branchLabels[i] : `${branchLabels[i]}: ${field.label}`;
                     const valueCell = document.createElement('td');
                     const select = document.createElement('select');
-                    select.id = 'car_charge_' + stageKey + '_branch_' + branchKey + '_field_' + field.name;
+                    select.id = idPrefix + stageKey + '_branch_' + branchKey + '_field_' + field.name;
                     select.className = 'sensorInput';
                     for (const opt of field.options) {
                         const optionEl = document.createElement('option');
@@ -1411,7 +1402,7 @@ function buildCarChargeControl() {
     checkmark.hidden = !(recipe.type === 'three_stage' && phaseCountStage.service
         && amperageStage.service && (amperageStage.amountFields || []).length > 0 && controlStage.service);
 
-    const candidateServices = allServiceOptions.filter(s => getWallboxServiceDomains().has(s.service.split('.')[0]));
+    const candidateServices = allServiceOptions.filter(s => getIntegrationServiceDomains('wallbox').has(s.service.split('.')[0]));
 
     const variantsHeading = document.createElement('div');
     variantsHeading.className = 'sectionSubHeading';
@@ -1446,7 +1437,7 @@ function buildCarChargeControl() {
 
     const stagesWrapper = document.createElement('div');
     stagesWrapper.className = 'carChargeStages';
-    stagesWrapper.appendChild(buildBranchedStageFields('phaseCount', '1. Phasenanzahl setzen',
+    stagesWrapper.appendChild(buildBranchedStageFields('car_charge_', 'phaseCount', '1. Phasenanzahl setzen',
         'Befehl, mit dem die Phasenzahl an deiner Wallbox eingestellt wird.',
         candidateServices, phaseCountStage,
         CAR_CHARGE_STAGE_BRANCHES.phaseCount.keys, CAR_CHARGE_STAGE_BRANCHES.phaseCount.labels,
@@ -1456,15 +1447,15 @@ function buildCarChargeControl() {
     const stageConnector1 = document.createElement('div');
     stageConnector1.className = 'carChargeStageConnector';
     stagesWrapper.appendChild(stageConnector1);
-    stagesWrapper.appendChild(buildBranchedStageFields('amperage', '2. Amperezahl setzen',
+    stagesWrapper.appendChild(buildBranchedStageFields('car_charge_', 'amperage', '2. Amperezahl setzen',
         'Befehl, mit dem die Ladestromstärke (Ampere) an deiner Wallbox eingestellt wird. Wähle die Entität, die den Ladestrom entgegennimmt (meist eine number-Entität mit Einheit "A") - das Addon berechnet die passende Amperezahl aus dem Ziel-kW-Wert von shyft-power und sendet sie automatisch.',
         candidateServices, amperageStage,
         CAR_CHARGE_STAGE_BRANCHES.amperage.keys, CAR_CHARGE_STAGE_BRANCHES.amperage.labels,
-        'z.B. set_value', 'A'));
+        'z.B. set_value', CAR_CHARGE_STAGE_BRANCHES.amperage.amountUnit));
     const stageConnector2 = document.createElement('div');
     stageConnector2.className = 'carChargeStageConnector';
     stagesWrapper.appendChild(stageConnector2);
-    stagesWrapper.appendChild(buildBranchedStageFields('control', '3. Ladevorgang steuern',
+    stagesWrapper.appendChild(buildBranchedStageFields('car_charge_', 'control', '3. Ladevorgang steuern',
         'Befehl, mit dem der Ladevorgang gestartet bzw. beendet wird.',
         candidateServices, controlStage,
         CAR_CHARGE_STAGE_BRANCHES.control.keys, CAR_CHARGE_STAGE_BRANCHES.control.labels,
@@ -1575,6 +1566,84 @@ function buildCarChargeControl() {
 
     wrapper.__refresh = refreshWallboxStatus;
     refreshWallboxStatus();
+
+    return wrapper;
+}
+
+// "Warmwasserbereitung" is a single fixed action (e.g. a Wärmepumpe-integration's "one-time DHW
+// charge" service) rather than a multi-stage recipe like "Auto laden" - one service+field picker,
+// filtered to the selected Wärmepumpe integration's own domain/device, no branches needed.
+function buildHotWaterControl() {
+    const wrapper = document.createElement('div');
+    wrapper.className = 'autoActionControl';
+
+    const {title, checkmark} = buildAutoActionTitle({titleLabel: 'Warmwasserbereitung'}, 'hot_water');
+    wrapper.appendChild(title);
+
+    const recipe = configData['hotWaterRecipe'] || {};
+    checkmark.hidden = !recipe.service;
+
+    const candidateServices = allServiceOptions.filter(s => getIntegrationServiceDomains('waermepumpe').has(s.service.split('.')[0]));
+    wrapper.appendChild(buildBranchedStageFields('hot_water_', 'hotWater', 'Befehl',
+        'Befehl, mit dem die (einmalige) Warmwasserbereitung an deiner Wärmepumpe aktiviert wird.',
+        candidateServices, recipe, [], [], 'z.B. activate_onetimecharge'));
+
+    const status = document.createElement('div');
+    status.className = 'autoActionStatus';
+    wrapper.appendChild(status);
+
+    const controlsRow = document.createElement('div');
+    controlsRow.className = 'autoActionButtons';
+
+    const statusDisplay = document.createElement('span');
+    statusDisplay.className = 'autoActionValue';
+
+    // shows the mapped "Warmwassermodus aktiviert?" sensor's own state - an honest read of
+    // whatever the Wärmepumpe integration reports, not a claim that the test call itself is
+    // being verified (see the "(wird geprüft...)" wording fix for why that distinction matters)
+    function refreshHotWaterStatus() {
+        const entity = (configData['sensorMappings'] || {})['heatpump_dhw_activated'] || '';
+        if (!entity) {
+            statusDisplay.textContent = 'Warmwassermodus: – (kein Sensor zugeordnet)';
+            return;
+        }
+        const match = allSensorIdOptions.find(e => e.entity_id === entity);
+        statusDisplay.textContent = 'Warmwassermodus: ' + (match ? match.state : '–');
+    }
+
+    const testButton = document.createElement('button');
+    testButton.type = 'button';
+    testButton.textContent = 'Test: Warmwasserbereitung';
+    testButton.addEventListener('click', async () => {
+        testButton.disabled = true;
+        status.textContent = 'Teste...';
+        status.className = 'autoActionStatus';
+        try {
+            const response = await fetch(insideHomeAssistant + '/actions/hot_water_activate/test', {method: 'POST'});
+            const result = await response.json();
+            if (result.success) {
+                status.textContent = 'Gesendet: Warmwasserbereitung aktiviert.';
+                status.className = 'autoActionStatus status-ok';
+                setTimeout(refreshHotWaterStatus, 4000);
+            } else {
+                status.textContent = 'Fehler: ' + (result.message || 'unbekannt');
+                status.className = 'autoActionStatus status-error';
+            }
+        } catch (err) {
+            console.log(err);
+            status.textContent = 'Fehler beim Testen';
+            status.className = 'autoActionStatus status-error';
+        } finally {
+            testButton.disabled = false;
+        }
+    });
+
+    controlsRow.appendChild(statusDisplay);
+    controlsRow.appendChild(testButton);
+    wrapper.appendChild(controlsRow);
+
+    wrapper.__refresh = refreshHotWaterStatus;
+    refreshHotWaterStatus();
 
     return wrapper;
 }

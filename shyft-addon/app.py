@@ -131,9 +131,10 @@ def mapToResponse(response):
     for item in response:
         attributes = item.get("attributes", {})
         unitOfMeasurement = attributes.get("unit_of_measurement", "")
+        stateAndUnit = item["state"] + " " + unitOfMeasurement if unitOfMeasurement else item["state"]
         result.append({
             "entity_id": item["entity_id"],
-            "label": item["entity_id"] + " (" + item["state"] + " " + unitOfMeasurement + ")",
+            "label": item["entity_id"] + " (" + stateAndUnit + ")",
             "device_class": attributes.get("device_class", ""),
             "state": item["state"],
             "unit": unitOfMeasurement,
@@ -242,16 +243,16 @@ def compute_charging_phases_and_amps(target_kw):
     return 3, max(CHARGING_MIN_AMPS, three_phase_amps)
 
 
-def get_wallbox_device_id():
-    "Best-effort device id of the currently selected Wallbox integration's own device - mirrors getWallboxDevices() in app.js, used server-side as a fallback when a stored device_id is missing."
+def get_integration_device_id(integration_key):
+    "Best-effort device id of the currently selected integration's own device (e.g. 'wallbox', 'waermepumpe') - mirrors getIntegrationDevices() in app.js, used server-side as a fallback when a stored device_id is missing."
     config = _read_current_config()
-    selected_ids = config.get("integrationMappings", {}).get("wallbox", [])
+    selected_ids = config.get("integrationMappings", {}).get(integration_key, [])
     if not selected_ids:
         return None
     try:
         device_map = homeassistant_adapter.get_integrations_and_entities().get("deviceMap", {})
     except Exception as e:
-        print("[Shyft] Konnte Wallbox-Geraet nicht ermitteln:", repr(e))
+        print(f"[Shyft] Konnte Geraet fuer '{integration_key}' nicht ermitteln:", repr(e))
         return None
     for entry_id in selected_ids:
         devices = device_map.get(entry_id) or []
@@ -304,17 +305,19 @@ def log_error_to_shyft(context, error_type, error_message, service_called=None, 
         print("[Shyft] Fehlerreport an shyft-power fehlgeschlagen:", repr(e))
 
 
-def call_recipe_stage(stage, branch_key=None, extra_data=None):
-    """Calls one configured 'Auto laden' recipe stage's Home Assistant service with its shared
-    fields (the same for every call, e.g. device_id) plus whichever branch-specific fields apply
-    for branch_key (e.g. phaseCount's "1"/"3", or control's "start"/"stop") - see
-    buildBranchedStageFields in app.js for how these are configured. A field only needs a branch
-    split at all if it has a fixed set of choices (a Home Assistant "select" selector) that
-    differs by branch, e.g. easee.action_command's action_command being "start" vs "stop"; static
-    fields like device_id are the same in sharedFields regardless of branch. extra_data overrides
-    on top of that - used by the amperage stage to inject the freshly computed Ampere value into
-    each of its configured amountFields, since a service can have more than one number field (e.g.
-    Easee's set_charger_dynamic_limit also has a time_to_live) and only some of them mean "current".
+def call_recipe_stage(stage, branch_key=None, extra_data=None, integration_key="wallbox"):
+    """Calls one configured recipe stage's Home Assistant service (e.g. an "Auto laden" stage, or
+    the single-stage "Warmwasserbereitung aktivieren" recipe) with its shared fields (the same for
+    every call, e.g. device_id) plus whichever branch-specific fields apply for branch_key (e.g.
+    phaseCount's "1"/"3", or control's "start"/"stop") - see buildBranchedStageFields in app.js for
+    how these are configured. A field only needs a branch split at all if it has a fixed set of
+    choices (a Home Assistant "select" selector) that differs by branch, e.g. easee.action_command's
+    action_command being "start" vs "stop"; static fields like device_id are the same in
+    sharedFields regardless of branch. extra_data overrides on top of that - used by the amperage
+    stage to inject the freshly computed Ampere value into each of its configured amountFields,
+    since a service can have more than one number field (e.g. Easee's set_charger_dynamic_limit
+    also has a time_to_live) and only some of them mean "current". integration_key picks which
+    integration's device to fall back to for an empty device_id (see integration_key below).
     """
     service = (stage or {}).get("service", "")
     if not service or "." not in service:
@@ -326,11 +329,11 @@ def call_recipe_stage(stage, branch_key=None, extra_data=None):
     if extra_data:
         data.update(extra_data)
 
-    # safety net: the frontend fills device_id in from the selected Wallbox's own device at save
-    # time, but a config saved before that existed (or before a device was detectable) can still
-    # have it empty - re-derive it fresh here rather than depending on the user re-triggering a save
+    # safety net: the frontend fills device_id in from the selected integration's own device at
+    # save time, but a config saved before that existed (or before a device was detectable) can
+    # still have it empty - re-derive it fresh here rather than depending on a re-triggered save
     if not data.get("device_id"):
-        fallback_device_id = get_wallbox_device_id()
+        fallback_device_id = get_integration_device_id(integration_key)
         if fallback_device_id:
             data["device_id"] = fallback_device_id
 
@@ -407,6 +410,16 @@ def execute_car_charge_stop():
     call_recipe_stage(recipe.get("control", {}), branch_key="stop")
 
 
+def execute_hot_water_activate():
+    """"Warmwasserbereitung" is a single fixed action (e.g. a Wärmepumpe-integration's "one-time
+    DHW charge" service) rather than a multi-stage recipe like "Auto laden" - there's no computed
+    value and no branch to pick, and (unlike a wallbox) nothing to explicitly turn back off again,
+    so there's no matching stop/end action."""
+    config = _read_current_config()
+    recipe = config.get("hotWaterRecipe", {})
+    call_recipe_stage(recipe, integration_key="waermepumpe")
+
+
 def extract_select_options(field_info):
     """Reads the fixed choices out of a service field's selector, if it has a 'select' selector -
     the same schema Home Assistant's own Developer Tools -> Actions editor uses to render a
@@ -447,18 +460,20 @@ def readServices():
                 # can be auto-filled from the already-selected Wallbox integration's own device(s)
                 # instead of asking the user to type an id they have no way to look up themselves
                 is_device_field = bool((field_info.get("selector") or {}).get("device")) or field_name == "device_id"
-                # a "number" selector has no fixed choices to pick from - the "Amperezahl setzen"
-                # stage offers each of these as a candidate the user can mark to receive the
-                # computed Ampere value at call time (see amountFields in buildBranchedStageFields
-                # in app.js) - a service can have more than one, and not all of them mean "current"
-                # (e.g. Easee's set_charger_dynamic_limit also has an unrelated time_to_live)
-                is_number_field = bool((field_info.get("selector") or {}).get("number"))
+                # a "number" selector has no fixed choices to pick from. Its declared
+                # unit_of_measurement (if any) is what lets the "Amperezahl setzen" stage tell
+                # apart the field that actually means "current" from an unrelated one a service
+                # might also have (e.g. Easee's set_charger_dynamic_limit also has a time_to_live,
+                # in minutes, not amps) - see amountUnit/amountFields in app.js.
+                number_selector = (field_info.get("selector") or {}).get("number") or {}
+                is_number_field = bool(number_selector)
                 fields.append({
                     "name": field_name,
                     "label": field_info.get("name") or field_name,
                     "options": extract_select_options(field_info),
                     "isDevice": is_device_field,
                     "isNumber": is_number_field,
+                    "unit": number_selector.get("unit_of_measurement", ""),
                 })
 
             # Generic Home Assistant services (e.g. number.set_value) declare their entity as a
@@ -532,6 +547,23 @@ def testCarChargeStop():
         return jsonify({"success": False, "message": str(e)}), 500
     except Exception as e:
         log_error_to_shyft("car_charge_stop_test", classify_error(str(e)), str(e))
+        return jsonify({"success": False, "message": str(e)}), 500
+
+
+@app.route("/actions/hot_water_activate/test", methods=["POST"])
+def testHotWaterActivate():
+    config = _read_current_config()
+    recipe = config.get("hotWaterRecipe", {})
+    if not recipe.get("service"):
+        return jsonify({"success": False, "message": "Kein Befehl konfiguriert"}), 400
+    try:
+        call_recipe_stage(recipe, integration_key="waermepumpe")
+        return jsonify({"success": True})
+    except RecipeCallError as e:
+        log_error_to_shyft("hot_water_activate_test", "service_call_failed", str(e), service_called=e.service, data_sent=e.data)
+        return jsonify({"success": False, "message": str(e)}), 500
+    except Exception as e:
+        log_error_to_shyft("hot_water_activate_test", classify_error(str(e)), str(e))
         return jsonify({"success": False, "message": str(e)}), 500
 
 
@@ -798,6 +830,12 @@ def handle_shyft_action_start(action, actions_enabled, config):
             print(f"[Shyft] Start ausgefuehrt fuer '{label}' (Ziel: {target} kW).")
         except Exception as e:
             print(f"[Shyft] Start fuer '{label}' fehlgeschlagen: {e!r}")
+    elif label == "Warmwasser":
+        try:
+            execute_hot_water_activate()
+            print(f"[Shyft] Start ausgefuehrt fuer '{label}'.")
+        except Exception as e:
+            print(f"[Shyft] Start fuer '{label}' fehlgeschlagen: {e!r}")
     elif control_key:
         try:
             execute_auto_managed_action(control_key, "start", target)
@@ -823,6 +861,8 @@ def handle_shyft_action_end(action, actions_enabled, config):
             print(f"[Shyft] Ende ausgefuehrt fuer '{label}'.")
         except Exception as e:
             print(f"[Shyft] Ende fuer '{label}' fehlgeschlagen: {e!r}")
+    elif label == "Warmwasser":
+        pass  # single-action Aktionstyp, kein Ende-Verhalten (siehe execute_hot_water_activate)
     elif control_key:
         try:
             execute_auto_managed_action(control_key, "end", None)

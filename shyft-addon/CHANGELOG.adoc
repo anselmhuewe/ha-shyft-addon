@@ -1,3 +1,11 @@
+== 0.0.30.0
+
+* Neu: "Warmwasserbereitung" bekommt einen eigenen Befehl-Auswahl analog zu "Auto laden" (Dropdown, gefiltert auf die Wärmepumpen-Integration deines gewählten Geräts, Geräte-ID automatisch befüllt) statt einer selbst zu bauenden Home-Assistant-Automation - einfache Einzelaktion, kein mehrstufiger Prozess. Dazu ein "Test: Warmwasserbereitung"-Button, der den Sensor "Warmwassermodus aktiviert?" nach dem Auslösen anzeigt
+* Fix: "2. Amperezahl setzen" erkennt das Feld für die Amperezahl jetzt zuverlässig an dessen deklarierter Einheit (z.B. "A") statt über eine Checkbox - das betroffene Feld wird automatisch befüllt und gar nicht mehr angezeigt, andere Zahlenfelder (z.B. "minutes") bleiben normale Eingabefelder
+* Mobile-Optimierung: Fehlendes Viewport-Meta-Tag ergänzt (Seite wurde auf Handys winzig dargestellt); Sensor-/Aktion-Tabellen brechen unter 600px Breite jetzt in eine gestapelte Ansicht um, statt die Seite horizontal scrollen zu lassen
+* Fix: Bei Sensor-Werten ohne Einheit (z.B. "on"/"off") stand ein überflüssiges Leerzeichen vor der schließenden Klammer (z.B. "on )" statt "on)")
+* Wortlaut: "Befülle die '...'" heißt jetzt "Befülle den Sensor '...'"
+
 == 0.0.29.0
 
 * "Auto laden": Springt die Ziel-Ladeleistung über die 1-/3-Phasen-Grenze (z.B. von 2,3 kW auf 6,9 kW oder umgekehrt), stoppt das Addon den Ladevorgang jetzt zuerst und wartet 10s, bevor es die neue Phasenzahl setzt - Wallboxen können die Phase nur wechseln, während gerade nicht geladen wird. Erkannt wird das am Sensor "Wallbox - Ladestrom" (aktuelle Ladeleistung) im Vergleich zum neuen Zielwert; ist der Sensor nicht zugeordnet oder sein Wert nicht lesbar, wird sicherheitshalber immer zuerst gestoppt

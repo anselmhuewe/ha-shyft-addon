@@ -1,6 +1,7 @@
 <html>
 <head>
     <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
     <style>
         :root {
             --font-heading: -apple-system, "Segoe UI", "Open Sans", Roboto, Helvetica, Arial, sans-serif;
@@ -35,6 +36,9 @@
             }
         }
 
+        html {
+            overflow-x: hidden;
+        }
         body {
             background-color: var(--color-bg);
             color: var(--color-text);
@@ -43,6 +47,7 @@
             max-width: 960px;
             margin: 0 auto;
             padding: 24px;
+            overflow-x: hidden;
         }
 
         h1 {
@@ -161,6 +166,7 @@
             position: absolute;
             bottom: 150%;
             left: 50%;
+            transform: translateX(-50%);
             padding: 6px 10px;
             background: var(--color-tooltip-bg);
             color: var(--color-tooltip-text);
@@ -195,6 +201,7 @@
         .actionMenu {
             margin: 1.5em 0;
             display: flex;
+            flex-wrap: wrap;
             align-items: center;
             gap: 1em;
         }
@@ -244,6 +251,7 @@
         }
         .autoActionButtons {
             display: flex;
+            flex-wrap: wrap;
             align-items: center;
             gap: 0.75em;
         }
@@ -280,14 +288,6 @@
         .branchFieldsGroup {
             margin-left: 1.2em;
             margin-top: 0.3em;
-        }
-        .amountFieldToggle {
-            display: flex;
-            align-items: center;
-            gap: 0.4em;
-            margin-bottom: 0.3em;
-            font-size: 0.9em;
-            color: var(--color-text-secondary);
         }
 
         .integrationSection {
@@ -605,6 +605,44 @@
         #saveStatus.status-error {
             color: var(--color-error);
             font-weight: 600;
+        }
+
+        /* Below this width, the label|input tables used throughout (sensor/actor mappings, "Auto
+           laden" stages, notifications) no longer have room to sit side by side - a long German
+           label under white-space:nowrap would otherwise force the whole page to scroll
+           horizontally. Stacking each row's cells (label above its input) keeps every field at
+           full, readable width instead. */
+        @media (max-width: 600px) {
+            body {
+                padding: 16px;
+            }
+            #deviceSections table,
+            #deviceSections tbody,
+            #deviceSections tr,
+            #deviceSections td,
+            #notificationSection table,
+            #notificationSection tbody,
+            #notificationSection tr,
+            #notificationSection td {
+                display: block;
+                width: 100%;
+            }
+            #deviceSections table td:first-child,
+            #notificationSection table td:first-child {
+                width: auto;
+                white-space: normal;
+                padding-bottom: 0.3em;
+            }
+            #deviceSections table td:not(:first-child),
+            #notificationSection table td:not(:first-child) {
+                padding-bottom: 0.6em;
+            }
+            .toggleCell {
+                text-align: left;
+            }
+            .integrationSection {
+                padding: 1em 1em 1.25em;
+            }
         }
     </style>
     <title>shyft addon</title>
