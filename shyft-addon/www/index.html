@@ -277,13 +277,27 @@
             min-width: 5em;
         }
         .carChargeStages {
+            position: relative;
             margin-top: 0.75em;
-        }
-        .carChargeStageConnector {
-            width: 0;
-            height: 1.25em;
-            margin-left: 1.4em;
+            padding-left: 1.2em;
             border-left: 2px solid var(--color-accent);
+        }
+        .carChargeStage {
+            position: relative;
+            margin-bottom: 1.25em;
+        }
+        .carChargeStage:last-child {
+            margin-bottom: 0;
+        }
+        .carChargeStageDot {
+            position: absolute;
+            left: -1.2em;
+            top: 0.65em;
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background: var(--color-accent);
+            transform: translate(-50%, -50%);
         }
         .branchFieldsGroup {
             margin-left: 1.2em;
@@ -291,6 +305,7 @@
         }
 
         .integrationSection {
+            position: relative;
             margin-top: 1.5em;
             padding: 1.25em 1.5em;
             background: var(--color-bg-card);
@@ -314,11 +329,13 @@
             margin: 0;
         }
         .sectionToggleButton {
+            position: absolute;
+            top: 1em;
+            right: 1.25em;
             background: none;
             border: none;
             padding: 0.1em 0.3em;
-            margin-right: 0.2em;
-            font-size: 1em;
+            font-size: 1.6em;
             color: var(--color-text-secondary);
             cursor: pointer;
             transition: transform 0.15s ease;

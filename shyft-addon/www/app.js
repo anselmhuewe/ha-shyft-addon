@@ -1240,8 +1240,20 @@ function getIntegrationDevices(integrationKey) {
 // exactly the kind of field that differs between the two - the user never has to know or type the
 // raw values, and the addon assembles the actual service-call data at runtime (see
 // call_recipe_stage in app.py).
-function buildBranchedStageFields(idPrefix, stageKey, label, tooltip, candidateServices, stageData, branchKeys, branchLabels, placeholderExample, amountUnit) {
+function buildBranchedStageFields(idPrefix, stageKey, label, tooltip, candidateServices, stageData, branchKeys, branchLabels, placeholderExample, amountUnit, showDot = true) {
     const wrapper = document.createElement('div');
+    wrapper.className = 'carChargeStage';
+
+    if (showDot) {
+        // marks this step on the continuous vertical line running down .carChargeStages (see CSS)
+        // - positioned relative to this stage's own top so it lines up with "1./2./3. ..."
+        // regardless of how tall the previous stages ended up being. Single-stage recipes (e.g.
+        // "Warmwasserbereitung") aren't wrapped in .carChargeStages and skip this - a lone dot with
+        // no line to sit on would misleadingly suggest a multi-step process.
+        const stageDot = document.createElement('span');
+        stageDot.className = 'carChargeStageDot';
+        wrapper.appendChild(stageDot);
+    }
 
     const serviceDatalistId = idPrefix + 'ServiceOptions_' + stageKey;
     const serviceDatalist = document.createElement('datalist');
@@ -1437,24 +1449,19 @@ function buildCarChargeControl() {
 
     const stagesWrapper = document.createElement('div');
     stagesWrapper.className = 'carChargeStages';
+    // a single continuous line (border-left on stagesWrapper itself, see .carChargeStages)
+    // now runs alongside all three numbered steps, with a dot marking each one (see the
+    // "stageDot" appended inside buildBranchedStageFields) - replaces the old per-gap connector
     stagesWrapper.appendChild(buildBranchedStageFields('car_charge_', 'phaseCount', '1. Phasenanzahl setzen',
         'Befehl, mit dem die Phasenzahl an deiner Wallbox eingestellt wird.',
         candidateServices, phaseCountStage,
         CAR_CHARGE_STAGE_BRANCHES.phaseCount.keys, CAR_CHARGE_STAGE_BRANCHES.phaseCount.labels,
         'z.B. set_charger_phase_mode'));
-    // connects one numbered step to the next without running alongside either heading itself -
-    // starts below a step's own content, stops above the next step's heading
-    const stageConnector1 = document.createElement('div');
-    stageConnector1.className = 'carChargeStageConnector';
-    stagesWrapper.appendChild(stageConnector1);
     stagesWrapper.appendChild(buildBranchedStageFields('car_charge_', 'amperage', '2. Amperezahl setzen',
         'Befehl, mit dem die Ladestromstärke (Ampere) an deiner Wallbox eingestellt wird. Wähle die Entität, die den Ladestrom entgegennimmt (meist eine number-Entität mit Einheit "A") - das Addon berechnet die passende Amperezahl aus dem Ziel-kW-Wert von shyft-power und sendet sie automatisch.',
         candidateServices, amperageStage,
         CAR_CHARGE_STAGE_BRANCHES.amperage.keys, CAR_CHARGE_STAGE_BRANCHES.amperage.labels,
         'z.B. set_value', CAR_CHARGE_STAGE_BRANCHES.amperage.amountUnit));
-    const stageConnector2 = document.createElement('div');
-    stageConnector2.className = 'carChargeStageConnector';
-    stagesWrapper.appendChild(stageConnector2);
     stagesWrapper.appendChild(buildBranchedStageFields('car_charge_', 'control', '3. Ladevorgang steuern',
         'Befehl, mit dem der Ladevorgang gestartet bzw. beendet wird.',
         candidateServices, controlStage,
@@ -1586,7 +1593,7 @@ function buildHotWaterControl() {
     const candidateServices = allServiceOptions.filter(s => getIntegrationServiceDomains('waermepumpe').has(s.service.split('.')[0]));
     wrapper.appendChild(buildBranchedStageFields('hot_water_', 'hotWater', 'Befehl',
         'Befehl, mit dem die (einmalige) Warmwasserbereitung an deiner Wärmepumpe aktiviert wird.',
-        candidateServices, recipe, [], [], 'z.B. activate_onetimecharge'));
+        candidateServices, recipe, [], [], 'z.B. activate_onetimecharge', undefined, false));
 
     const status = document.createElement('div');
     status.className = 'autoActionStatus';

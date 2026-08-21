@@ -1,3 +1,8 @@
+== 0.0.30.1
+
+* Aufklapp-Pfeil bei den Gerätekacheln ist jetzt größer und oben rechts statt oben links
+* Der Verbindungsstrich bei "Auto laden" läuft jetzt durchgehend neben allen drei Schritten (statt nur als kurzer Verbinder in den Lücken), mit einem Punkt an jedem Schritt
+
 == 0.0.30.0
 
 * Neu: "Warmwasserbereitung" bekommt einen eigenen Befehl-Auswahl analog zu "Auto laden" (Dropdown, gefiltert auf die Wärmepumpen-Integration deines gewählten Geräts, Geräte-ID automatisch befüllt) statt einer selbst zu bauenden Home-Assistant-Automation - einfache Einzelaktion, kein mehrstufiger Prozess. Dazu ein "Test: Warmwasserbereitung"-Button, der den Sensor "Warmwassermodus aktiviert?" nach dem Auslösen anzeigt
