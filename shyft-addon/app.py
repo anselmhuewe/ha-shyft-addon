@@ -352,11 +352,40 @@ def call_recipe_stage(stage, branch_key=None, extra_data=None):
 CHARGING_STAGE_DELAY_SECONDS = 10
 
 
+def needs_stop_before_phase_change(target_kw):
+    """A wallbox can only change its phase count while it isn't actively charging - starting a new
+    charge whose phase count differs from whatever's currently running needs a stop-wait-restart
+    first, or the phase switch silently fails to apply. Compares the phase count the CURRENTLY
+    reported charging power falls into (via the "Wallbox - Ladestrom" sensor, sensorMappings key
+    wallbox_current_charging_power) against the new target's, using the same 1-vs-3-phase
+    threshold as compute_charging_phases_and_amps, so the two stay in sync by construction rather
+    than duplicating the ~4kW cutoff as a separate magic number. If that sensor isn't configured or
+    its value isn't a number, defaults to True (safer to always stop first than to risk a phase
+    switch mid-charge) - matching what happens anyway when there's genuinely nothing charging yet:
+    a "stop" call on an idle wallbox is a harmless no-op.
+    """
+    config = _read_current_config()
+    entity_id = config.get("sensorMappings", {}).get("wallbox_current_charging_power", "")
+    if not entity_id:
+        return True
+    try:
+        current_kw = homeassistant_adapter.read_entity_numeric_value(entity_id)
+    except Exception:
+        return True
+    current_phases, _ = compute_charging_phases_and_amps(current_kw)
+    new_phases, _ = compute_charging_phases_and_amps(target_kw)
+    return current_phases != new_phases
+
+
 def execute_car_charge_start(target_kw):
     config = _read_current_config()
     recipe = config.get("carChargeRecipe", {})
     if recipe.get("type") != "three_stage":
         raise Exception("Kein Lade-Rezept konfiguriert")
+
+    if needs_stop_before_phase_change(target_kw):
+        call_recipe_stage(recipe.get("control", {}), branch_key="stop")
+        time.sleep(CHARGING_STAGE_DELAY_SECONDS)
 
     phases, amps = compute_charging_phases_and_amps(target_kw)
     call_recipe_stage(recipe.get("phaseCount", {}), branch_key=str(phases))
@@ -466,6 +495,10 @@ def testCarChargeStart():
     body = request.get_json(force=True, silent=True) or {}
     target_kw = body.get("targetKw")
     try:
+        if needs_stop_before_phase_change(target_kw):
+            call_recipe_stage(recipe.get("control", {}), branch_key="stop")
+            time.sleep(CHARGING_STAGE_DELAY_SECONDS)
+
         phase_count, amps = compute_charging_phases_and_amps(target_kw)
         call_recipe_stage(recipe.get("phaseCount", {}), branch_key=str(phase_count))
         time.sleep(CHARGING_STAGE_DELAY_SECONDS)
