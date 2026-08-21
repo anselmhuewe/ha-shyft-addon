@@ -319,10 +319,16 @@ def readServices():
         for service_name, service_info in (domain_entry.get("services") or {}).items():
             fields = []
             for field_name, field_info in (service_info.get("fields") or {}).items():
+                # a "device" selector (or the common device_id naming, for integrations whose
+                # schema doesn't declare one) means this field wants a device registry id - that
+                # can be auto-filled from the already-selected Wallbox integration's own device(s)
+                # instead of asking the user to type an id they have no way to look up themselves
+                is_device_field = bool((field_info.get("selector") or {}).get("device")) or field_name == "device_id"
                 fields.append({
                     "name": field_name,
                     "label": field_info.get("name") or field_name,
                     "options": extract_select_options(field_info),
+                    "isDevice": is_device_field,
                 })
             result.append({
                 "service": f"{domain}.{service_name}",

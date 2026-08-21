@@ -140,6 +140,7 @@ class HomeAssistantAdapter:
     def _build_integrations_and_entities(self, config_entries, entities, devices):
         integration_list = []
         entity_map = {}
+        device_map = {}
         for entry in config_entries:
             entry_id = entry["entry_id"]
             domain = entry.get("domain", "")
@@ -147,6 +148,7 @@ class HomeAssistantAdapter:
             name = f"{title} ({domain})" if domain else title
             integration_list.append({"id": entry_id, "name": name})
             entity_map[entry_id] = []
+            device_map[entry_id] = []
 
         device_to_entries = {device["id"]: device.get("config_entries", []) for device in devices}
 
@@ -161,8 +163,17 @@ class HomeAssistantAdapter:
                 if entry_id in entity_map and entity["entity_id"] not in entity_map[entry_id]:
                     entity_map[entry_id].append(entity["entity_id"])
 
+        # needed so a service field with a "device" selector (e.g. easee.set_charger_phase_mode's
+        # device_id) can be auto-filled from the already-selected Wallbox integration instead of
+        # asking the user to type a device registry id they'd have no way to look up themselves
+        for device in devices:
+            device_name = device.get("name_by_user") or device.get("name") or device["id"]
+            for entry_id in device.get("config_entries", []):
+                if entry_id in device_map:
+                    device_map[entry_id].append({"id": device["id"], "name": device_name})
+
         integration_list.sort(key=lambda i: i["name"].lower())
-        return {"integrations": integration_list, "entityMap": entity_map}
+        return {"integrations": integration_list, "entityMap": entity_map, "deviceMap": device_map}
 
     def get_from_homeassistant(self, path):
         headers = {

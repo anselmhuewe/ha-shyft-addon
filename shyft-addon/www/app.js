@@ -305,7 +305,7 @@ const CAR_CHARGE_ACTION_KEYS = new Set(['car_charge_start', 'car_charge_stop']);
 // The two branches each "Auto laden" recipe stage splits its enum fields into (see
 // buildBranchedStageFields) - phaseCount by computed phase count, control by start vs. stop.
 const CAR_CHARGE_STAGE_BRANCHES = {
-    phaseCount: {keys: ['1', '3'], labels: ['Wert für 1 Phase', 'Wert für 3 Phasen']},
+    phaseCount: {keys: ['1', '3'], labels: ['Mit 1 Phase laden', 'Mit 3 Phasen laden']},
     control: {keys: ['start', 'stop'], labels: ['Ladevorgang starten', 'Ladevorgang beenden']},
 };
 
@@ -1094,6 +1094,20 @@ function getWallboxServiceDomains() {
     return domains;
 }
 
+// Devices belonging to the currently selected Wallbox integration(s) - lets a service field with
+// a "device" selector (e.g. easee.set_charger_phase_mode's device_id) be filled by picking from
+// the user's own already-selected wallbox instead of typing a device registry id by hand.
+function getWallboxDevices() {
+    const selectedIds = currentIntegrationSelections['wallbox'] || [];
+    const devices = [];
+    for (const entryId of selectedIds) {
+        for (const device of (integrationsData.deviceMap || {})[entryId] || []) {
+            devices.push(device);
+        }
+    }
+    return devices;
+}
+
 // One field-set for a recipe stage's Home Assistant service: static fields (no fixed choices,
 // e.g. device_id) get a single input shared across both branches; fields with a fixed set of
 // choices (a "select" selector, e.g. easee.action_command's action_command) get one dropdown per
@@ -1154,12 +1168,34 @@ function buildBranchedStageFields(stageKey, label, tooltip, candidateServices, s
                 const keyCell = document.createElement('td');
                 keyCell.textContent = field.label;
                 const valueCell = document.createElement('td');
-                const input = document.createElement('input');
-                input.id = 'car_charge_' + stageKey + '_field_' + field.name;
-                input.className = 'sensorInput';
-                input.value = (stageData.sharedFields || {})[field.name] || '';
-                input.addEventListener('change', autoSave);
-                valueCell.appendChild(input);
+
+                if (field.isDevice) {
+                    // auto-filled from the Wallbox integration's own device(s) - never typed by
+                    // hand, since a device registry id has no way for the user to look it up
+                    const devices = getWallboxDevices();
+                    const select = document.createElement('select');
+                    select.id = 'car_charge_' + stageKey + '_field_' + field.name;
+                    select.className = 'sensorInput';
+                    for (const device of devices) {
+                        const optionEl = document.createElement('option');
+                        optionEl.value = device.id;
+                        optionEl.textContent = device.name;
+                        select.appendChild(optionEl);
+                    }
+                    const currentValue = (stageData.sharedFields || {})[field.name];
+                    if (currentValue && devices.some(d => d.id === currentValue)) {
+                        select.value = currentValue;
+                    }
+                    select.addEventListener('change', autoSave);
+                    valueCell.appendChild(select);
+                } else {
+                    const input = document.createElement('input');
+                    input.id = 'car_charge_' + stageKey + '_field_' + field.name;
+                    input.className = 'sensorInput';
+                    input.value = (stageData.sharedFields || {})[field.name] || '';
+                    input.addEventListener('change', autoSave);
+                    valueCell.appendChild(input);
+                }
                 row.appendChild(keyCell);
                 row.appendChild(valueCell);
                 staticTbody.appendChild(row);
@@ -1168,39 +1204,42 @@ function buildBranchedStageFields(stageKey, label, tooltip, candidateServices, s
             fieldsContainer.appendChild(staticTable);
         }
 
-        for (let i = 0; i < branchKeys.length && enumFields.length > 0; i++) {
-            const branchKey = branchKeys[i];
-            const branchHeading = document.createElement('div');
-            branchHeading.className = 'branchFieldsHeading';
-            branchHeading.textContent = branchLabels[i];
-            fieldsContainer.appendChild(branchHeading);
-
+        if (enumFields.length > 0) {
+            const branchGroup = document.createElement('div');
+            branchGroup.className = 'branchFieldsGroup';
             const branchTable = document.createElement('table');
             const branchTbody = document.createElement('tbody');
-            for (const field of enumFields) {
-                const row = document.createElement('tr');
-                const keyCell = document.createElement('td');
-                keyCell.textContent = field.label;
-                const valueCell = document.createElement('td');
-                const select = document.createElement('select');
-                select.id = 'car_charge_' + stageKey + '_branch_' + branchKey + '_field_' + field.name;
-                select.className = 'sensorInput';
-                for (const opt of field.options) {
-                    const optionEl = document.createElement('option');
-                    optionEl.value = opt.value;
-                    optionEl.textContent = String(opt.label) === String(opt.value) ? opt.label : `${opt.label} (${opt.value})`;
-                    select.appendChild(optionEl);
+            for (let i = 0; i < branchKeys.length; i++) {
+                const branchKey = branchKeys[i];
+                for (const field of enumFields) {
+                    const row = document.createElement('tr');
+                    const keyCell = document.createElement('td');
+                    // a single enum field is the common case (e.g. just "mode") - name the row
+                    // after the branch itself ("Mit 1 Phase laden") rather than the field, since
+                    // that's clearer than a generic field label repeated for every branch
+                    keyCell.textContent = enumFields.length === 1 ? branchLabels[i] : `${branchLabels[i]}: ${field.label}`;
+                    const valueCell = document.createElement('td');
+                    const select = document.createElement('select');
+                    select.id = 'car_charge_' + stageKey + '_branch_' + branchKey + '_field_' + field.name;
+                    select.className = 'sensorInput';
+                    for (const opt of field.options) {
+                        const optionEl = document.createElement('option');
+                        optionEl.value = opt.value;
+                        optionEl.textContent = String(opt.label) === String(opt.value) ? opt.label : `${opt.label} (${opt.value})`;
+                        select.appendChild(optionEl);
+                    }
+                    const currentValue = ((stageData.branchFields || {})[branchKey] || {})[field.name];
+                    if (currentValue !== undefined) select.value = currentValue;
+                    select.addEventListener('change', autoSave);
+                    valueCell.appendChild(select);
+                    row.appendChild(keyCell);
+                    row.appendChild(valueCell);
+                    branchTbody.appendChild(row);
                 }
-                const currentValue = ((stageData.branchFields || {})[branchKey] || {})[field.name];
-                if (currentValue !== undefined) select.value = currentValue;
-                select.addEventListener('change', autoSave);
-                valueCell.appendChild(select);
-                row.appendChild(keyCell);
-                row.appendChild(valueCell);
-                branchTbody.appendChild(row);
             }
             branchTable.appendChild(branchTbody);
-            fieldsContainer.appendChild(branchTable);
+            branchGroup.appendChild(branchTable);
+            fieldsContainer.appendChild(branchGroup);
         }
     }
 
@@ -1259,6 +1298,7 @@ function buildCarChargeControl() {
     wrapper.appendChild(recipeTable);
 
     const stagesWrapper = document.createElement('div');
+    stagesWrapper.className = 'carChargeStages';
     stagesWrapper.appendChild(buildBranchedStageFields('phaseCount', '1. Phasenanzahl setzen',
         'Befehl, mit dem die Phasenzahl an deiner Wallbox eingestellt wird.',
         candidateServices, phaseCountStage,
