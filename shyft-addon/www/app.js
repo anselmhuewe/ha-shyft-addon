@@ -1957,7 +1957,7 @@ function showShyftActionsError(container) {
 // generated itself server-side (creation_date rounded down to the hour, +1h per row), so building
 // the SVG via a template string is safe here even though it isn't the DOM-builder style used
 // elsewhere in this file.
-function buildLineChart(title, unit, labels, values) {
+function buildLineChart(title, unit, labels, values, stepped = false) {
     const width = 600, height = 220;
     const paddingLeft = 45, paddingRight = 15, paddingTop = 15, paddingBottom = 26;
     const plotWidth = width - paddingLeft - paddingRight;
@@ -1979,7 +1979,18 @@ function buildLineChart(title, unit, labels, values) {
         paddingLeft + (i / lastIndex) * plotWidth,
         paddingTop + plotHeight - ((v - yMin) / yRange) * plotHeight,
     ]);
-    const linePath = points.map((p, i) => (i === 0 ? 'M' : 'L') + p[0].toFixed(1) + ',' + p[1].toFixed(1)).join(' ');
+    // "step-after" path: each hourly value holds flat until the next hour, then jumps - matches
+    // how e.g. an hourly electricity price actually behaves, rather than implying it drifts
+    // smoothly between two hours' values
+    let linePath;
+    if (stepped) {
+        linePath = 'M' + points[0][0].toFixed(1) + ',' + points[0][1].toFixed(1);
+        for (let i = 1; i < points.length; i++) {
+            linePath += ` L${points[i][0].toFixed(1)},${points[i - 1][1].toFixed(1)} L${points[i][0].toFixed(1)},${points[i][1].toFixed(1)}`;
+        }
+    } else {
+        linePath = points.map((p, i) => (i === 0 ? 'M' : 'L') + p[0].toFixed(1) + ',' + p[1].toFixed(1)).join(' ');
+    }
     const baseline = (paddingTop + plotHeight).toFixed(1);
     const areaPath = `${linePath} L${points[points.length - 1][0].toFixed(1)},${baseline} L${points[0][0].toFixed(1)},${baseline} Z`;
 
@@ -2025,7 +2036,7 @@ async function loadDashboard() {
             return;
         }
         container.innerHTML =
-            buildLineChart('Strompreis (Bezug)', '€/kWh', data.labels, data.p_buy) +
+            buildLineChart('Strompreis (Bezug)', '€/kWh', data.labels, data.p_buy, true) +
             buildLineChart('Außentemperatur', '°C', data.labels, data.temperature) +
             buildLineChart('PV-Leistung', 'kW', data.labels, data.pv_generation);
     } catch (err) {

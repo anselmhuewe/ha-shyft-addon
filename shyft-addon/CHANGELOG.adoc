@@ -1,3 +1,7 @@
+== 0.0.31.2
+
+* "Strompreis (Bezug)" wird jetzt als Stufenfunktion dargestellt (Wert bleibt bis zur nächsten Stunde konstant, statt zwischen zwei Stunden zu verlaufen) - passend dazu, dass sich der Preis stündlich ändert. Außentemperatur und PV-Leistung bleiben unverändert als geglättete Linie
+
 == 0.0.31.1
 
 * Die Dashboard-Diagrammdaten (input_csv) werden jetzt stündlich im Hintergrund von shyft-power abgerufen und lokal zwischengespeichert (zusammen mit dem stündlichen Aktions-Abruf), statt bei jedem Öffnen des Dashboard-Tabs live abgefragt zu werden
