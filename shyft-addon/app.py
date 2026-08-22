@@ -38,6 +38,7 @@ DETAILED_LOGGING = False
 DEVELOPMENT_MODE = False
 OPTIONS_PATH = "/data/options.json"
 CONFIG_PATH = "/data/config.json"
+DASHBOARD_CACHE_PATH = "/data/dashboard_cache.json"
 SUPERVISOR_TOKEN = os.getenv("SUPERVISOR_TOKEN")
 HASSIO_URI_RUNNING_ON_HAOS = "http://supervisor/core"
 HASSIO_URI_RUNNING_REMOTE = "http://homeassistant.local:8123"
@@ -130,19 +131,21 @@ def readShyftActions():
 
 @app.route("/dashboard/chart-data", methods=["GET"])
 def readDashboardChartData():
-    """Builds the Dashboard tab's three charts (Strompreis, Außentemperatur, PV-Leistung) from
-    shyft-power's optimizer input_csv - one row per hour, starting at creation_date rounded down
-    to the start of its hour."""
-    user_id = extract_shyft_user_id(shyft_adapter.bubble_token)
-    if not user_id:
-        return jsonify({"status": "error", "message": "Kein gültiger Shyft-Access-Key konfiguriert."})
+    """Builds the Dashboard tab's three charts (Strompreis, Außentemperatur, PV-Leistung) from the
+    locally cached optimizer input_csv (see sync_dashboard_chart_data, refreshed hourly - the
+    chart data itself only changes about that often, so there's no need for a live shyft-power
+    call on every page load) - one row per hour, starting at creation_date rounded down to the
+    start of its hour."""
+    try:
+        with open(DASHBOARD_CACHE_PATH, "r") as f:
+            cache = json.load(f)
+    except Exception:
+        return jsonify({"status": "error", "message": "Noch keine Dashboard-Daten von shyft-power vorhanden - die nächste stündliche Aktualisierung steht noch aus."})
 
-    result = shyft_adapter.get_input_output_csv(user_id)
-    response_data = (result or {}).get("response") or {}
-    input_csv = response_data.get("input_csv")
-    creation_date_ms = response_data.get("creation_date")
+    input_csv = cache.get("input_csv")
+    creation_date_ms = cache.get("creation_date")
     if not input_csv or creation_date_ms is None:
-        return jsonify({"status": "error", "message": "input_csv oder creation_date fehlt in der Antwort von shyft-power."})
+        return jsonify({"status": "error", "message": "input_csv oder creation_date fehlt im Dashboard-Cache."})
 
     try:
         rows = list(csv.DictReader(io.StringIO(input_csv), delimiter=";"))
@@ -1042,6 +1045,25 @@ def apply_action_type_toggle_changes(old_map, new_map, config):
     config["endedShyftActionIds"] = sorted(ended_ids)
 
 
+def sync_dashboard_chart_data():
+    "Refreshes the cached optimizer input_csv/creation_date (see DASHBOARD_CACHE_PATH) from shyft-power - runs hourly (see scheduler), alongside the action queue poll, since the underlying data itself only changes about that often."
+    user_id = extract_shyft_user_id(shyft_adapter.bubble_token)
+    if not user_id:
+        return
+    result = shyft_adapter.get_input_output_csv(user_id)
+    response_data = (result or {}).get("response") or {}
+    input_csv = response_data.get("input_csv")
+    creation_date_ms = response_data.get("creation_date")
+    if not input_csv or creation_date_ms is None:
+        print("[Shyft] Dashboard-Chart-Daten: input_csv oder creation_date fehlt in der Antwort von shyft-power.")
+        return
+    try:
+        with open(DASHBOARD_CACHE_PATH, "w") as f:
+            json.dump({"input_csv": input_csv, "creation_date": creation_date_ms}, f)
+    except Exception as e:
+        print("[Shyft] Dashboard-Chart-Daten konnten nicht zwischengespeichert werden:", repr(e))
+
+
 def sync_sensors_periodically():
     with app.app_context():
         sync_sensors()
@@ -1054,10 +1076,17 @@ def process_shyft_actions_periodically():
     with app.app_context():
         process_shyft_actions()
 
+def sync_dashboard_chart_data_periodically():
+    with app.app_context():
+        sync_dashboard_chart_data()
+
 
 scheduler = BackgroundScheduler()
 scheduler.add_job(sync_sensors_periodically, 'cron', minute="55")
 scheduler.add_job(sync_pv_history_periodically, 'cron', hour="21", minute="0")
+# same tick as process_shyft_actions_periodically's on-the-hour run, but only hourly - the
+# Dashboard tab's chart data doesn't change more often than that
+scheduler.add_job(sync_dashboard_chart_data_periodically, 'cron', minute="0")
 # on the hour and every 15 min after - actions can be created mid-hour for the current hour
 # and start immediately, so a coarser schedule would miss those until the next hour
 scheduler.add_job(process_shyft_actions_periodically, 'cron', minute="0,15,30,45")
@@ -1093,5 +1122,10 @@ if __name__ == "__main__":
         sync_all_auto_managed_scripts()
     except Exception as e:
         print("Failed to sync auto-managed scripts at startup:", repr(e))
+
+    try:
+        sync_dashboard_chart_data()
+    except Exception as e:
+        print("Failed to sync dashboard chart data at startup:", repr(e))
 
     app.run(host="0.0.0.0", port=8080)

@@ -1,3 +1,7 @@
+== 0.0.31.1
+
+* Die Dashboard-Diagrammdaten (input_csv) werden jetzt stündlich im Hintergrund von shyft-power abgerufen und lokal zwischengespeichert (zusammen mit dem stündlichen Aktions-Abruf), statt bei jedem Öffnen des Dashboard-Tabs live abgefragt zu werden
+
 == 0.0.31.0
 
 * Neu: Tab "Dashboard" (vor "Gerätesteuerung") mit drei Diagrammen für die nächsten Stunden - Strompreis (Bezug), Außentemperatur und PV-Leistung. Die Daten kommen aus shyft-powers Optimierer-Rohdaten (input_csv); die Zeitachse startet bei creation_date, abgerundet auf die volle Stunde, mit einem Wert pro Stunde
