@@ -273,9 +273,28 @@ def sync_all_auto_managed_scripts():
 
 
 def execute_auto_managed_action(control_key, phase, target_value):
-    "Executes the concrete Start/Ende-Verhalten for a direct-entity-control Aktionstyp (see AUTO_MANAGED_CONTROLS)."
+    """Executes the concrete Start/Ende-Verhalten for an AUTO_MANAGED_CONTROLS Aktionstyp - either
+    "direct" (the addon writes the mapped entity itself, the original/default behavior) or
+    "ha_automation" (the addon triggers the user's own automation instead - see controlVariant in
+    the config and trigger_ha_automation)."""
+    config = _read_current_config()
     control = AUTO_MANAGED_CONTROLS[control_key]
-    entity_id = _read_current_config().get("sensorMappings", {}).get(control["sensor_field"], "")
+    variant = config.get("controlVariant", {}).get(control_key, "direct")
+
+    if variant == "ha_automation":
+        actor_mappings = config.get("actorMappings", {})
+        if control["type"] == "number":
+            if phase != "start":
+                return  # no Ende-Verhalten defined yet for direct-value controls either
+            trigger_ha_automation(actor_mappings.get(control_key), "start", target_value)
+        elif control["type"] == "switch":
+            # two independent automations (not one automation + a "phase" variable like elsewhere)
+            # since the user asked for that shape specifically for "Sonstiger Verbraucher"
+            actor_key = "consumer_on" if phase == "start" else "consumer_off"
+            trigger_ha_automation(actor_mappings.get(actor_key), phase, target_value)
+        return
+
+    entity_id = config.get("sensorMappings", {}).get(control["sensor_field"], "")
     if not entity_id:
         raise Exception(f"Keine Entity fuer '{control_key}' zugeordnet")
 
@@ -447,19 +466,23 @@ def needs_stop_before_phase_change(target_kw):
     return current_phases != new_phases
 
 
-def trigger_ha_automation_recipe(recipe, phase, target_kw):
-    """Runs the "HA-Automation" recipe variant: triggers the user's own automation with target/phase
-    as template variables ({{ target }}, {{ phase }}) instead of the addon driving individual
-    services itself - lets the user implement arbitrary logic Home Assistant-side. Confirmed via
-    Home Assistant's own source that automation.trigger's "variables" field does populate custom
-    keys like this correctly (the one known bug is specific to the reserved "trigger" variable)."""
-    automation_entity_id = recipe.get("haAutomationEntityId")
+def trigger_ha_automation(automation_entity_id, phase, target):
+    """Triggers the user's own automation with target/phase as template variables ({{ target }},
+    {{ phase }}) instead of the addon driving individual services itself - lets the user implement
+    arbitrary logic Home Assistant-side. Confirmed via Home Assistant's own source that
+    automation.trigger's "variables" field does populate custom keys like this correctly (the one
+    known bug is specific to the reserved "trigger" variable, not custom ones like these)."""
     if not automation_entity_id:
         raise Exception("Keine Automation ausgewählt")
     homeassistant_adapter.call_service("automation", "trigger", {
         "entity_id": automation_entity_id,
-        "variables": {"target": target_kw, "phase": phase},
+        "variables": {"target": target, "phase": phase},
     })
+
+
+def trigger_ha_automation_recipe(recipe, phase, target_kw):
+    "Runs a car-charge-style recipe's 'HA-Automation' variant - see trigger_ha_automation."
+    trigger_ha_automation(recipe.get("haAutomationEntityId"), phase, target_kw)
 
 
 def execute_car_charge_start(target_kw):
@@ -507,6 +530,9 @@ def execute_hot_water_activate():
     so there's no matching stop/end action."""
     config = _read_current_config()
     recipe = config.get("hotWaterRecipe", {})
+    if recipe.get("type") == "ha_automation":
+        trigger_ha_automation(recipe.get("haAutomationEntityId"), "start", None)
+        return
     call_recipe_stage(recipe, integration_key="waermepumpe")
 
 
@@ -661,6 +687,18 @@ def testCarChargeStop():
 def testHotWaterActivate():
     config = _read_current_config()
     recipe = config.get("hotWaterRecipe", {})
+
+    if recipe.get("type") == "ha_automation":
+        if not recipe.get("haAutomationEntityId"):
+            return jsonify({"success": False, "message": "Keine Automation ausgewählt"}), 400
+        try:
+            trigger_ha_automation(recipe.get("haAutomationEntityId"), "start", None)
+            return jsonify({"success": True})
+        except Exception as e:
+            log_error_to_shyft("hot_water_activate_test", classify_error(str(e)), str(e),
+                                service_called="automation.trigger")
+            return jsonify({"success": False, "message": str(e)}), 500
+
     if not recipe.get("service"):
         return jsonify({"success": False, "message": "Kein Befehl konfiguriert"}), 400
     try:
@@ -727,7 +765,20 @@ def statusAutoManagedControl(control_key):
     if not control:
         return jsonify({"error": "unbekannte Steuerung"}), 404
 
-    entity_id = _read_current_config().get("sensorMappings", {}).get(control["sensor_field"], "")
+    config = _read_current_config()
+    variant = config.get("controlVariant", {}).get(control_key, "direct")
+
+    if variant == "ha_automation":
+        # No sensor/entity to poll a value from - the addon only ever fires the user's
+        # own automation, so "configured" just checks the automation field(s) are set.
+        actor_mappings = config.get("actorMappings", {})
+        if control["type"] == "number":
+            configured = bool(actor_mappings.get(control_key))
+        else:  # switch
+            configured = bool(actor_mappings.get("consumer_on")) and bool(actor_mappings.get("consumer_off"))
+        return jsonify({"configured": configured})
+
+    entity_id = config.get("sensorMappings", {}).get(control["sensor_field"], "")
     if not entity_id:
         return jsonify({"configured": False})
 
@@ -762,11 +813,36 @@ def testAutoManagedControl(control_key):
     if not control:
         return jsonify({"success": False, "message": "unbekannte Steuerung"}), 404
 
-    entity_id = _read_current_config().get("sensorMappings", {}).get(control["sensor_field"], "")
+    config = _read_current_config()
+    variant = config.get("controlVariant", {}).get(control_key, "direct")
+    body = request.get_json(force=True, silent=True) or {}
+
+    if variant == "ha_automation":
+        actor_mappings = config.get("actorMappings", {})
+        if control["type"] == "number":
+            delta = body.get("delta", 0)
+            automation_entity_id = actor_mappings.get(control_key)
+            try:
+                trigger_ha_automation(automation_entity_id, "start", delta)
+                return jsonify({"success": True, "value": delta, "confirmed": False})
+            except Exception as e:
+                log_error_to_shyft(f"{control_key}_test", classify_error(str(e)), str(e),
+                                    service_called="automation.trigger", data_sent={"target": delta})
+                return jsonify({"success": False, "message": str(e)}), 500
+        else:  # switch - single button, alternates start/stop each click (frontend tracks phase)
+            phase = body.get("phase", "start")
+            automation_entity_id = actor_mappings.get("consumer_on" if phase == "start" else "consumer_off")
+            try:
+                trigger_ha_automation(automation_entity_id, phase, None)
+                return jsonify({"success": True, "value": phase, "confirmed": False})
+            except Exception as e:
+                log_error_to_shyft(f"{control_key}_test", classify_error(str(e)), str(e),
+                                    service_called="automation.trigger", data_sent={"phase": phase})
+                return jsonify({"success": False, "message": str(e)}), 500
+
+    entity_id = config.get("sensorMappings", {}).get(control["sensor_field"], "")
     if not entity_id:
         return jsonify({"success": False, "message": "Keine Entity zugeordnet"}), 400
-
-    body = request.get_json(force=True, silent=True) or {}
 
     if control["type"] == "number":
         delta = body.get("delta", 0)
@@ -783,8 +859,9 @@ def testAutoManagedControl(control_key):
             log_error_to_shyft(f"{control_key}_test", classify_error(str(e)), str(e),
                                 service_called=f"script.{control['script_id']}", data_sent={"target_value": delta})
             return jsonify({"success": False, "message": str(e)}), 500
-    else:  # switch
-        turn_on = body.get("on", True)
+    else:  # switch - single button, alternates start/stop each click (frontend tracks phase)
+        phase = body.get("phase", "start")
+        turn_on = phase == "start"
         try:
             homeassistant_adapter.call_service("homeassistant", "turn_on" if turn_on else "turn_off", {"entity_id": entity_id})
             return jsonify({"success": True, "value": "on" if turn_on else "off", "confirmed": False})
@@ -822,6 +899,12 @@ ACTION_TYPE_TOGGLE_KEYS = {
     "consumer_on": "Verbraucher an",
 }
 ACTION_NAME_TO_ACTOR_KEY = {name: key for key, name in ACTION_TYPE_TOGGLE_KEYS.items()}
+
+# These three battery Aktionstypen have no direct-entity-control alternative (see
+# AUTO_MANAGED_CONTROLS) - they're always "trigger the user's own automation", using whatever's
+# mapped under their own actorMappings key (see actorHelpInformation in app.js). All three share
+# the same stop automation (actorMappings["battery_action_stop"]) rather than each having their own.
+BATTERY_SHIFT_ACTOR_KEYS = {"battery_charge_shift_pv_surplus", "battery_discharge_shift", "battery_grid_charge"}
 
 # Notification types the user can toggle in the "Benachrichtigungen" config section - extend this
 # dict as new types are added, the frontend renders one toggle row per entry.
@@ -943,6 +1026,13 @@ def handle_shyft_action_start(action, actions_enabled, config):
             print(f"[Shyft] Start ausgefuehrt fuer '{label}'.")
         except Exception as e:
             print(f"[Shyft] Start fuer '{label}' fehlgeschlagen: {e!r}")
+    elif ACTION_NAME_TO_ACTOR_KEY.get(label) in BATTERY_SHIFT_ACTOR_KEYS:
+        try:
+            automation_entity_id = config.get("actorMappings", {}).get(ACTION_NAME_TO_ACTOR_KEY[label])
+            trigger_ha_automation(automation_entity_id, "start", target)
+            print(f"[Shyft] Start ausgefuehrt fuer '{label}' (Ziel: {target}).")
+        except Exception as e:
+            print(f"[Shyft] Start fuer '{label}' fehlgeschlagen: {e!r}")
     elif control_key:
         try:
             execute_auto_managed_action(control_key, "start", target)
@@ -973,6 +1063,15 @@ def handle_shyft_action_end(action, actions_enabled, config):
             print(f"[Shyft] Ende fuer '{label}' fehlgeschlagen: {e!r}")
     elif label == "Warmwasser":
         pass  # single-action Aktionstyp, kein Ende-Verhalten (siehe execute_hot_water_activate)
+    elif ACTION_NAME_TO_ACTOR_KEY.get(label) in BATTERY_SHIFT_ACTOR_KEYS:
+        try:
+            # shared across all three battery Aktionstypen - see BATTERY_SHIFT_ACTOR_KEYS - and no
+            # target value, unlike the start: "stop the current battery action" has nothing to aim for
+            automation_entity_id = config.get("actorMappings", {}).get("battery_action_stop")
+            trigger_ha_automation(automation_entity_id, "stop", None)
+            print(f"[Shyft] Ende ausgefuehrt fuer '{label}'.")
+        except Exception as e:
+            print(f"[Shyft] Ende fuer '{label}' fehlgeschlagen: {e!r}")
     elif control_key:
         try:
             execute_auto_managed_action(control_key, "end", None)

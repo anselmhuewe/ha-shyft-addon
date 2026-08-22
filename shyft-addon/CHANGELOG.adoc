@@ -1,3 +1,8 @@
+== 0.0.33.0
+
+* Neu: Die Variante "HA-Automation" (deine selbst erstellte Automation triggern statt eine Entität direkt zu steuern) ist jetzt auch bei "PV: Einspeisung begrenzen", "Verbrauch begrenzen §14a", "Warmwasserbereitung" und "Sonstiger Verbraucher" wählbar (Dropdown "Varianten")
+* "Sonstiger Verbraucher": bei "HA-Automation" gibt es zwei Automationsfelder (Start/Ende); der Toggle beim Testen ist einem einzelnen Button gewichen, der bei jedem Klick zwischen Start und Ende wechselt
+
 == 0.0.32.0
 
 * Dashboard: ist jetzt der Standard-Tab beim Öffnen; die Tab-Leiste lässt sich horizontal swipen/scrollen, damit "Konfiguration" auf schmalen Bildschirmen erreichbar bleibt; Diagramm-Beschriftungen sind auf Mobilgeräten größer

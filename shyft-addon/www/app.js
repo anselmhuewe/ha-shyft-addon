@@ -119,19 +119,19 @@ const actorHelpInformation = {
     },
     'battery_charge_shift_pv_surplus': {
         label: 'Batterie-Laden verschieben (PV-Überschuss)',
-        description: ' Home-Assistant-Automation, die ausgelöst wird, wenn Shyft das Laden der Batterie aus PV-Überschuss zeitlich verschieben möchte.'
+        description: ' Home-Assistant-Automation, die ausgelöst wird, wenn Shyft das Laden der Batterie aus PV-Überschuss zeitlich verschieben möchte. Der Zielwert wird als {{ target }} übergeben, "start" bzw. "stop" als {{ phase }}.'
     },
     'battery_discharge_shift': {
         label: 'Batterie-Entladen verschieben',
-        description: ' Home-Assistant-Automation, die ausgelöst wird, wenn Shyft das Entladen der Batterie zeitlich verschieben möchte.'
+        description: ' Home-Assistant-Automation, die ausgelöst wird, wenn Shyft das Entladen der Batterie zeitlich verschieben möchte. Der Zielwert wird als {{ target }} übergeben, "start" bzw. "stop" als {{ phase }}.'
     },
     'battery_grid_charge': {
         label: 'Batterie netzladen',
-        description: ' Home-Assistant-Automation, die ausgelöst wird, wenn Shyft die Batterie aus dem Netz laden möchte.'
+        description: ' Home-Assistant-Automation, die ausgelöst wird, wenn Shyft die Batterie aus dem Netz laden möchte. Der Zielwert wird als {{ target }} übergeben, "start" bzw. "stop" als {{ phase }}.'
     },
     'battery_action_stop': {
         label: 'Batterie-Aktion beenden',
-        description: ' Home-Assistant-Automation, die ausgelöst wird, wenn Shyft eine laufende Batterie-Aktion beenden möchte.'
+        description: ' Home-Assistant-Automation, die ausgelöst wird, wenn Shyft eine laufende Batterie-Aktion beenden möchte (gemeinsam für alle drei Batterie-Aktionstypen oben) - kein Zielwert nötig, {{ target }} ist hier immer leer.'
     },
     'heating_target_temp': {
         label: 'Heizung Soll-Temperatur (aktuell)',
@@ -288,9 +288,9 @@ const ACTION_TOGGLE_POSTFIX = "_toggle";
 // mirrors the Home Assistant entity domains handled in AUTO_MANAGED_CONTROLS in app.py.
 const AUTO_MANAGED_CONTROLS = [
     {key: 'heating_target_temp', type: 'number', sensorField: 'heatpump_heating_target_temp_normal', actionKeys: ['heating_target_temp'], titleLabel: 'Heizung Soll-Temperatur (aktuell)', unit: '°C', step: 1},
-    {key: 'pv_feed_in_limit', type: 'number', sensorField: 'photovoltaic_feed_in_limit_entity', actionKeys: ['pv_feed_in_limit'], titleLabel: 'PV: Einspeisung begrenzen (aktuell)', unit: '', step: 1},
-    {key: 'consumption_limit_14a', type: 'number', sensorField: 'photovoltaic_consumption_limit_entity', actionKeys: ['consumption_limit_14a'], titleLabel: 'Verbrauch begrenzen §14a (aktuell)', unit: '', step: 1},
-    {key: 'consumer_on_off', type: 'switch', sensorField: 'sonstiger_verbraucher_switch_entity', actionKeys: ['consumer_on', 'consumer_off'], titleLabel: 'Sonstiger Verbraucher (aktuell)'},
+    {key: 'pv_feed_in_limit', type: 'number', sensorField: 'photovoltaic_feed_in_limit_entity', actionKeys: ['pv_feed_in_limit'], titleLabel: 'PV: Einspeisung begrenzen (aktuell)', unit: '', step: 1, hasAutomationVariant: true},
+    {key: 'consumption_limit_14a', type: 'number', sensorField: 'photovoltaic_consumption_limit_entity', actionKeys: ['consumption_limit_14a'], titleLabel: 'Verbrauch begrenzen §14a (aktuell)', unit: '', step: 1, hasAutomationVariant: true},
+    {key: 'consumer_on_off', type: 'switch', sensorField: 'sonstiger_verbraucher_switch_entity', actionKeys: ['consumer_on', 'consumer_off'], titleLabel: 'Sonstiger Verbraucher (aktuell)', hasAutomationVariant: true},
 ];
 const AUTO_MANAGED_ACTION_KEYS = new Set(AUTO_MANAGED_CONTROLS.flatMap(c => c.actionKeys));
 
@@ -431,11 +431,28 @@ async function saveConfigurationNow() {
             }
         }
     }
+    const controlVariant = {...(configData["controlVariant"] || {})};
     for (const control of AUTO_MANAGED_CONTROLS) {
         const toggleKey = control.actionKeys[0];
         const toggleElement = document.getElementById(toggleKey + ACTION_TOGGLE_POSTFIX);
         if (toggleElement) {
             actionTypeEnabled[toggleKey] = toggleElement.checked;
+        }
+        if (!control.hasAutomationVariant) continue;
+        const variantElement = document.getElementById(control.key + '_variant');
+        if (variantElement) {
+            controlVariant[control.key] = variantElement.value;
+        }
+        if (control.type === 'number') {
+            const automationElement = document.getElementById(control.key + '_ha_automation_entity');
+            if (automationElement) {
+                actorValues[control.key] = automationElement.value;
+            }
+        } else {
+            const onElement = document.getElementById('consumer_on_ha_automation_entity');
+            if (onElement) actorValues['consumer_on'] = onElement.value;
+            const offElement = document.getElementById('consumer_off_ha_automation_entity');
+            if (offElement) actorValues['consumer_off'] = offElement.value;
         }
     }
 
@@ -469,12 +486,21 @@ async function saveConfigurationNow() {
 
     const hotWaterStage = readStageFromDom('hot_water_', 'hotWater', 'waermepumpe', undefined, [], (configData["hotWaterRecipe"] || {}).sharedFields);
     const hotWaterRecipe = hotWaterStage || (configData["hotWaterRecipe"] || {});
+    const hotWaterVariantElement = document.getElementById('hot_water_variant');
+    if (hotWaterVariantElement) {
+        hotWaterRecipe.type = hotWaterVariantElement.value;
+    }
+    const hotWaterAutomationElement = document.getElementById('hot_water_ha_automation_entity');
+    if (hotWaterAutomationElement) {
+        hotWaterRecipe.haAutomationEntityId = hotWaterAutomationElement.value;
+    }
 
     const toBeWritten = {
         "sensorMappings": sensorValues,
         "actorMappings": actorValues,
         "integrationMappings": integrationValues,
         "actionTypeEnabled": actionTypeEnabled,
+        "controlVariant": controlVariant,
         "carChargeRecipe": carChargeRecipe,
         "hotWaterRecipe": hotWaterRecipe,
         "notificationTargets": notificationTargets,
@@ -616,7 +642,15 @@ function isSectionComplete(section, currentIds) {
     }
 
     for (const control of AUTO_MANAGED_CONTROLS) {
-        if (control.actionKeys.some(k => section.actions.includes(k)) && !sensorMappings[control.sensorField]) {
+        if (!control.actionKeys.some(k => section.actions.includes(k))) continue;
+        const variant = control.hasAutomationVariant ? ((configData['controlVariant'] || {})[control.key] || 'direct') : 'direct';
+        if (variant === 'ha_automation') {
+            if (control.type === 'number') {
+                if (!actorMappings[control.key]) return false;
+            } else if (!actorMappings['consumer_on'] || !actorMappings['consumer_off']) {
+                return false;
+            }
+        } else if (!sensorMappings[control.sensorField]) {
             return false;
         }
     }
@@ -639,7 +673,8 @@ function isSectionComplete(section, currentIds) {
 
     if (section.actions.some(k => HOT_WATER_ACTION_KEYS.has(k))) {
         const recipe = configData['hotWaterRecipe'] || {};
-        if (!recipe.service) return false;
+        const isComplete = recipe.type === 'ha_automation' ? !!recipe.haAutomationEntityId : !!recipe.service;
+        if (!isComplete) return false;
     }
 
     return true;
@@ -1019,12 +1054,94 @@ function buildAutoActionTitle(control, toggleKey) {
     return {title, checkmark};
 }
 
+// "Direkt steuern" vs "HA-Automation" dropdown, shared by every AUTO_MANAGED_CONTROLS entry that
+// has hasAutomationVariant set - selecting a value here just toggles which of the two sibling
+// wrappers (direct-entity UI vs. automation-entity field(s)) is visible, see callers.
+function buildVariantSelect(id, currentValue, directLabel) {
+    const select = document.createElement('select');
+    select.id = id;
+    select.className = 'sensorInput';
+    const directOption = document.createElement('option');
+    directOption.value = 'direct';
+    directOption.textContent = directLabel;
+    select.appendChild(directOption);
+    const haOption = document.createElement('option');
+    haOption.value = 'ha_automation';
+    haOption.textContent = 'HA-Automation';
+    select.appendChild(haOption);
+    select.value = currentValue;
+    return select;
+}
+
+// One "pick a HA automation" input + datalist, used for every ha_automation variant field (see
+// buildCarChargeControl for the original inline version this generalizes).
+function buildAutomationEntityRow(labelText, tooltipText, inputId, value, placeholder) {
+    const table = document.createElement('table');
+    const tbody = document.createElement('tbody');
+    const row = document.createElement('tr');
+    const labelCell = document.createElement('td');
+    labelCell.textContent = labelText;
+    labelCell.appendChild(buildTooltip(tooltipText));
+    const valueCell = document.createElement('td');
+    const input = document.createElement('input');
+    input.id = inputId;
+    input.className = 'sensorInput';
+    input.setAttribute('autocomplete', 'off');
+    input.value = value || '';
+    const datalistId = inputId + '_options';
+    const datalist = document.createElement('datalist');
+    datalist.id = datalistId;
+    for (const entity of allSensorIdOptions.filter(e => e.entity_id.startsWith('automation.'))) {
+        const option = document.createElement('option');
+        option.value = entity.entity_id;
+        option.textContent = entity.label;
+        datalist.appendChild(option);
+    }
+    valueCell.appendChild(datalist);
+    input.setAttribute('list', datalistId);
+    input.placeholder = placeholder;
+    input.addEventListener('change', autoSave);
+    valueCell.appendChild(input);
+    row.appendChild(labelCell);
+    row.appendChild(valueCell);
+    tbody.appendChild(row);
+    table.appendChild(tbody);
+    return table;
+}
+
 function buildAutoManagedNumberControl(control) {
     const wrapper = document.createElement('div');
     wrapper.className = 'autoActionControl';
 
     const {title, checkmark} = buildAutoActionTitle(control, control.actionKeys[0]);
     wrapper.appendChild(title);
+
+    let variant = control.hasAutomationVariant ? ((configData['controlVariant'] || {})[control.key] || 'direct') : 'direct';
+
+    let variantSelect = null;
+    let automationRow = null;
+    if (control.hasAutomationVariant) {
+        variantSelect = buildVariantSelect(control.key + '_variant', variant, 'Direkt steuern');
+        const variantTable = document.createElement('table');
+        const variantTbody = document.createElement('tbody');
+        const variantRow = document.createElement('tr');
+        const variantLabelCell = document.createElement('td');
+        variantLabelCell.textContent = 'Varianten';
+        variantLabelCell.appendChild(buildTooltip('Wie das Addon diese Aktion umsetzt: entweder direkt über eine Home-Assistant-Entität, oder indem es eine selbst erstellte Automation triggert.'));
+        const variantValueCell = document.createElement('td');
+        variantValueCell.appendChild(variantSelect);
+        variantRow.appendChild(variantLabelCell);
+        variantRow.appendChild(variantValueCell);
+        variantTbody.appendChild(variantRow);
+        variantTable.appendChild(variantTbody);
+        wrapper.appendChild(variantTable);
+
+        automationRow = buildAutomationEntityRow('HA-Automation auswählen',
+            'Zum Auslösen dieser Aktion kannst du deine selber erstellte Automation hinterlegen. Der Zielwert für die Aktion wird als {{ target }} von Shyft übergeben.',
+            control.key + '_ha_automation_entity', (configData['actorMappings'] || {})[control.key], 'z.B. automation.meine_aktion');
+        automationRow.style.display = variant === 'ha_automation' ? '' : 'none';
+        wrapper.appendChild(automationRow);
+    }
 
     const status = document.createElement('div');
     status.className = 'autoActionStatus';
@@ -1051,7 +1168,9 @@ function buildAutoManagedNumberControl(control) {
         try {
             const result = await getJson(insideHomeAssistant + '/actions/' + control.key + '/status');
             if (!result.configured) {
-                status.textContent = 'Befülle den Sensor "' + control.titleLabel + '"';
+                status.textContent = variant === 'ha_automation'
+                    ? 'Wähle eine Automation für "' + control.titleLabel + '"'
+                    : 'Befülle den Sensor "' + control.titleLabel + '"';
                 status.className = 'autoActionStatus status-missing';
                 checkmark.hidden = true;
                 minusButton.disabled = true;
@@ -1061,6 +1180,12 @@ function buildAutoManagedNumberControl(control) {
             }
             minusButton.disabled = false;
             plusButton.disabled = false;
+            if (variant === 'ha_automation') {
+                status.textContent = '';
+                status.className = 'autoActionStatus status-ok';
+                checkmark.hidden = false;
+                return;
+            }
             if (result.error) {
                 status.textContent = 'Eingerichtet, aktueller Wert aber nicht lesbar: ' + result.error;
                 status.className = 'autoActionStatus status-error';
@@ -1093,10 +1218,16 @@ function buildAutoManagedNumberControl(control) {
             });
             const result = await response.json();
             if (result.success) {
-                // devices reachable only via a manufacturer cloud API can take a while to
-                // report the new value back, so show what we sent right away, then confirm
-                valueDisplay.textContent = 'Gesendet: ' + result.value + unitSuffix + ' (wird geprüft...)';
-                setTimeout(refreshStatus, 4000);
+                if (variant === 'ha_automation') {
+                    // fire-and-forget - there's no entity to poll back and confirm, unlike the
+                    // direct variant's cloud-device round-trip
+                    valueDisplay.textContent = 'Gesendet: ' + result.value + unitSuffix;
+                } else {
+                    // devices reachable only via a manufacturer cloud API can take a while to
+                    // report the new value back, so show what we sent right away, then confirm
+                    valueDisplay.textContent = 'Gesendet: ' + result.value + unitSuffix + ' (wird geprüft...)';
+                    setTimeout(refreshStatus, 4000);
+                }
             } else {
                 valueDisplay.textContent = 'Fehler: ' + (result.message || 'unbekannt');
             }
@@ -1117,6 +1248,16 @@ function buildAutoManagedNumberControl(control) {
     controls.appendChild(plusButton);
     wrapper.appendChild(controls);
 
+    if (variantSelect) {
+        variantSelect.addEventListener('change', () => {
+            variant = variantSelect.value;
+            automationRow.style.display = variant === 'ha_automation' ? '' : 'none';
+            valueDisplay.textContent = 'Aktueller Wert: –';
+            autoSave();
+            refreshStatus();
+        });
+    }
+
     wrapper.__refresh = refreshStatus;
     refreshStatus();
 
@@ -1130,6 +1271,38 @@ function buildAutoManagedSwitchControl(control) {
     const {title, checkmark} = buildAutoActionTitle(control, control.actionKeys[0]);
     wrapper.appendChild(title);
 
+    let variant = control.hasAutomationVariant ? ((configData['controlVariant'] || {})[control.key] || 'direct') : 'direct';
+
+    let variantSelect = null;
+    let automationRows = null;
+    if (control.hasAutomationVariant) {
+        variantSelect = buildVariantSelect(control.key + '_variant', variant, 'Entität ein-/ausschalten');
+        const variantTable = document.createElement('table');
+        const variantTbody = document.createElement('tbody');
+        const variantRow = document.createElement('tr');
+        const variantLabelCell = document.createElement('td');
+        variantLabelCell.textContent = 'Varianten';
+        variantLabelCell.appendChild(buildTooltip('Wie das Addon diese Aktion umsetzt: entweder direkt über eine Home-Assistant-Entität, oder indem es selbst erstellte Automationen triggert.'));
+        const variantValueCell = document.createElement('td');
+        variantValueCell.appendChild(variantSelect);
+        variantRow.appendChild(variantLabelCell);
+        variantRow.appendChild(variantValueCell);
+        variantTbody.appendChild(variantRow);
+        variantTable.appendChild(variantTbody);
+        wrapper.appendChild(variantTable);
+
+        automationRows = document.createElement('div');
+        const actorMappings = configData['actorMappings'] || {};
+        automationRows.appendChild(buildAutomationEntityRow('Sonstigen Verbraucher starten',
+            'Automation, die beim Start dieser Aktion getriggert wird. Der Zielwert wird als {{ target }} übergeben.',
+            'consumer_on_ha_automation_entity', actorMappings['consumer_on'], 'z.B. automation.verbraucher_starten'));
+        automationRows.appendChild(buildAutomationEntityRow('Sonstigen Verbraucher beenden',
+            'Automation, die beim Beenden dieser Aktion getriggert wird.',
+            'consumer_off_ha_automation_entity', actorMappings['consumer_off'], 'z.B. automation.verbraucher_beenden'));
+        automationRows.style.display = variant === 'ha_automation' ? '' : 'none';
+        wrapper.appendChild(automationRows);
+    }
+
     const status = document.createElement('div');
     status.className = 'autoActionStatus';
     status.textContent = 'Lade Status...';
@@ -1142,21 +1315,34 @@ function buildAutoManagedSwitchControl(control) {
     valueDisplay.className = 'autoActionValue';
     valueDisplay.textContent = 'Aktueller Status: –';
 
-    const testToggleLabel = buildBareToggleSwitch(false);
-    const testToggleInput = testToggleLabel.querySelector('input');
+    // Single button instead of a toggle - it alternates Start/Ende on each click rather than
+    // reflecting/setting an on/off state directly, since the ha_automation variant has no entity
+    // to read a real state from in the first place.
+    let nextPhase = 'start';
+    const testButton = document.createElement('button');
+    testButton.type = 'button';
+    testButton.textContent = 'Test: Start';
 
     async function refreshStatus() {
         try {
             const result = await getJson(insideHomeAssistant + '/actions/' + control.key + '/status');
             if (!result.configured) {
-                status.textContent = 'Befülle den Sensor "' + control.titleLabel + '"';
+                status.textContent = variant === 'ha_automation'
+                    ? 'Befülle beide Automationsfelder für "' + control.titleLabel + '"'
+                    : 'Befülle den Sensor "' + control.titleLabel + '"';
                 status.className = 'autoActionStatus status-missing';
                 checkmark.hidden = true;
-                testToggleInput.disabled = true;
+                testButton.disabled = true;
                 valueDisplay.textContent = 'Aktueller Status: –';
                 return;
             }
-            testToggleInput.disabled = false;
+            testButton.disabled = false;
+            if (variant === 'ha_automation') {
+                status.textContent = '';
+                status.className = 'autoActionStatus status-ok';
+                checkmark.hidden = false;
+                return;
+            }
             if (result.error) {
                 status.textContent = 'Eingerichtet, aktueller Status aber nicht lesbar: ' + result.error;
                 status.className = 'autoActionStatus status-error';
@@ -1168,7 +1354,9 @@ function buildAutoManagedSwitchControl(control) {
                 checkmark.hidden = false;
                 const isOn = result.value === 'on';
                 valueDisplay.textContent = 'Aktueller Status: ' + (isOn ? 'An' : 'Aus');
-                testToggleInput.checked = isOn;
+                // next click should do the opposite of whatever the entity actually reports
+                nextPhase = isOn ? 'stop' : 'start';
+                testButton.textContent = nextPhase === 'start' ? 'Test: Start' : 'Test: Ende';
             }
         } catch (err) {
             console.log(err);
@@ -1179,20 +1367,28 @@ function buildAutoManagedSwitchControl(control) {
         }
     }
 
-    testToggleInput.addEventListener('change', async () => {
-        const turnOn = testToggleInput.checked;
-        testToggleInput.disabled = true;
+    testButton.addEventListener('click', async () => {
+        const phase = nextPhase;
+        testButton.disabled = true;
         valueDisplay.textContent = 'Teste...';
         try {
             const response = await fetch(insideHomeAssistant + '/actions/' + control.key + '/test', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({on: turnOn})
+                body: JSON.stringify({phase})
             });
             const result = await response.json();
             if (result.success) {
-                valueDisplay.textContent = 'Gesendet: ' + (turnOn ? 'An' : 'Aus') + ' (wird geprüft...)';
-                setTimeout(refreshStatus, 4000);
+                const phaseLabel = phase === 'start' ? 'Start' : 'Ende';
+                if (variant === 'ha_automation') {
+                    // fire-and-forget - no entity to poll back and confirm
+                    valueDisplay.textContent = 'Gesendet: ' + phaseLabel;
+                    nextPhase = phase === 'start' ? 'stop' : 'start';
+                    testButton.textContent = nextPhase === 'start' ? 'Test: Start' : 'Test: Ende';
+                } else {
+                    valueDisplay.textContent = 'Gesendet: ' + phaseLabel + ' (wird geprüft...)';
+                    setTimeout(refreshStatus, 4000);
+                }
             } else {
                 valueDisplay.textContent = 'Fehler: ' + (result.message || 'unbekannt');
             }
@@ -1200,13 +1396,25 @@ function buildAutoManagedSwitchControl(control) {
             console.log(err);
             valueDisplay.textContent = 'Fehler beim Testen';
         } finally {
-            testToggleInput.disabled = false;
+            testButton.disabled = false;
         }
     });
 
     controlsRow.appendChild(valueDisplay);
-    controlsRow.appendChild(testToggleLabel);
+    controlsRow.appendChild(testButton);
     wrapper.appendChild(controlsRow);
+
+    if (variantSelect) {
+        variantSelect.addEventListener('change', () => {
+            variant = variantSelect.value;
+            automationRows.style.display = variant === 'ha_automation' ? '' : 'none';
+            valueDisplay.textContent = 'Aktueller Status: –';
+            nextPhase = 'start';
+            testButton.textContent = 'Test: Start';
+            autoSave();
+            refreshStatus();
+        });
+    }
 
     wrapper.__refresh = refreshStatus;
     refreshStatus();
@@ -1656,12 +1864,57 @@ function buildHotWaterControl() {
     wrapper.appendChild(title);
 
     const recipe = configData['hotWaterRecipe'] || {};
-    checkmark.hidden = !recipe.service;
+    let variant = recipe.type === 'ha_automation' ? 'ha_automation' : 'direct';
+    checkmark.hidden = variant === 'ha_automation' ? !recipe.haAutomationEntityId : !recipe.service;
 
     const candidateServices = allServiceOptions.filter(s => getIntegrationServiceDomains('waermepumpe').has(s.service.split('.')[0]));
-    wrapper.appendChild(buildBranchedStageFields('hot_water_', 'hotWater', 'Befehl',
+    const stageWrapper = buildBranchedStageFields('hot_water_', 'hotWater', 'Befehl',
         'Befehl, mit dem die (einmalige) Warmwasserbereitung an deiner Wärmepumpe aktiviert wird.',
-        candidateServices, recipe, [], [], 'z.B. activate_onetimecharge', undefined, false));
+        candidateServices, recipe, [], [], 'z.B. activate_onetimecharge', undefined, false);
+    stageWrapper.style.display = variant === 'direct' ? '' : 'none';
+    wrapper.appendChild(stageWrapper);
+
+    const variantSelect = buildVariantSelect('hot_water_variant', variant, 'Befehl auswählen');
+    const variantTable = document.createElement('table');
+    const variantTbody = document.createElement('tbody');
+    const variantRow = document.createElement('tr');
+    const variantLabelCell = document.createElement('td');
+    variantLabelCell.textContent = 'Varianten';
+    variantLabelCell.appendChild(buildTooltip('Wie das Addon die Warmwasserbereitung auslöst: entweder direkt über einen Wärmepumpen-Befehl, oder indem es eine selbst erstellte Automation triggert.'));
+    const variantValueCell = document.createElement('td');
+    variantValueCell.appendChild(variantSelect);
+    variantRow.appendChild(variantLabelCell);
+    variantRow.appendChild(variantValueCell);
+    variantTbody.appendChild(variantRow);
+    variantTable.appendChild(variantTbody);
+    wrapper.appendChild(variantTable);
+
+    const automationRow = buildAutomationEntityRow('HA-Automation auswählen',
+        'Zum Auslösen der Warmwasserbereitung kannst du deine selber erstellte Automation hinterlegen.',
+        'hot_water_ha_automation_entity', recipe.haAutomationEntityId, 'z.B. automation.warmwasser_starten');
+    automationRow.style.display = variant === 'ha_automation' ? '' : 'none';
+    wrapper.appendChild(automationRow);
+
+    const automationInput = automationRow.querySelector('input');
+    function refreshCheckmark() {
+        if (variant === 'ha_automation') {
+            checkmark.hidden = !automationInput.value;
+        } else {
+            const serviceInput = document.getElementById('hot_water_hotWater_service');
+            checkmark.hidden = !(serviceInput && serviceInput.value);
+        }
+    }
+    automationInput.addEventListener('change', refreshCheckmark);
+    const hotWaterServiceInput = document.getElementById('hot_water_hotWater_service');
+    if (hotWaterServiceInput) hotWaterServiceInput.addEventListener('change', refreshCheckmark);
+
+    variantSelect.addEventListener('change', () => {
+        variant = variantSelect.value;
+        stageWrapper.style.display = variant === 'direct' ? '' : 'none';
+        automationRow.style.display = variant === 'ha_automation' ? '' : 'none';
+        refreshCheckmark();
+        autoSave();
+    });
 
     const status = document.createElement('div');
     status.className = 'autoActionStatus';
