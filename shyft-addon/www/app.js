@@ -2456,7 +2456,7 @@ async function loadDashboard() {
         container.appendChild(buildLineChart('Raumtemperatur (Ziel)', '°C', data.output_labels, data.t_i_target));
         container.appendChild(buildLineChart('Warmwasser', '°C', data.output_labels, data.t_hw));
         container.appendChild(buildLineChart('Ladestand Heimspeicher', '%', data.output_labels, data.soc_b, {minY: 0}));
-        container.appendChild(buildLineChart('Ladestand Auto', '%', data.output_labels, data.soc_ev, {minY: 0}));
+        container.appendChild(buildLineChart('Ladestand Auto', '%', data.output_labels, data.soc_ev, {minY: 0, valueScale: 100}));
     } catch (err) {
         console.log(err);
         container.innerHTML = '';

@@ -1,3 +1,7 @@
+== 0.0.33.1
+
+* Ladestand Auto: Wert war fraktional (0-1) statt Prozent - wird jetzt wie Ladestand Heimspeicher als 0-100 % dargestellt
+
 == 0.0.33.0
 
 * Neu: Die Variante "HA-Automation" (deine selbst erstellte Automation triggern statt eine Entität direkt zu steuern) ist jetzt auch bei "PV: Einspeisung begrenzen", "Verbrauch begrenzen §14a", "Warmwasserbereitung" und "Sonstiger Verbraucher" wählbar (Dropdown "Varianten")
