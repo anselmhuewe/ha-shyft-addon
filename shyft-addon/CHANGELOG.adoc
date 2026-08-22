@@ -1,3 +1,11 @@
+== 0.0.34.0
+
+* Strompreis- und Raumtemperatur-Titel zeigen die Einheit jetzt in einer Klammer zusammen mit der Zusatzangabe ("Bezug, Cent/kWh" bzw. "Ziel, °C")
+* Behoben: Springt der Strompreis über eine Farbschwelle (z.B. von 20 auf 31 Cent), wird die Verbindungslinie jetzt an der Schwelle farblich geteilt statt komplett in der falschen Farbe zu erscheinen
+* Tageswechsel-Markierung in allen Diagrammen deutlicher sichtbar (dickere Linie, fettere Beschriftung)
+* Raumtemperatur (Ziel) wird jetzt als Stufenfunktion und auf ganze Grad gerundet dargestellt
+* Warmwasser sowie Ladestand Heimspeicher/Auto sind jetzt farbcodiert: grün bei Anstieg, grau bei kleinem Rückgang, rot bei stärkerem Rückgang (Schwelle 1 °C/h bzw. 0,1 %/h)
+
 == 0.0.33.1
 
 * Ladestand Auto: Wert war fraktional (0-1) statt Prozent - wird jetzt wie Ladestand Heimspeicher als 0-100 % dargestellt

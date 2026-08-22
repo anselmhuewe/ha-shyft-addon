@@ -2291,7 +2291,7 @@ function showShyftActionsError(container) {
 //                 0 for a value that's never actually negative (PV-Leistung)
 //   decimals    - digits shown in the hover/tap tooltip
 function buildLineChart(title, unit, labels, values, options = {}) {
-    const {stepped = false, colorBands = null, valueScale = 1, minY = null, decimals = 1} = options;
+    const {stepped = false, colorBands = null, slopeBands = null, valueScale = 1, minY = null, decimals = 1, round = false, subtitle = ''} = options;
     const width = 600, height = 220;
     const paddingLeft = 45, paddingRight = 15, paddingTop = 15, paddingBottom = 26;
     const plotWidth = width - paddingLeft - paddingRight;
@@ -2301,7 +2301,8 @@ function buildLineChart(title, unit, labels, values, options = {}) {
     wrapper.className = 'dashboardChart';
     const titleEl = document.createElement('div');
     titleEl.className = 'dashboardChartTitle';
-    titleEl.textContent = title + (unit ? ` (${unit})` : '');
+    const parenthetical = [subtitle, unit].filter(Boolean).join(', ');
+    titleEl.textContent = title + (parenthetical ? ` (${parenthetical})` : '');
     wrapper.appendChild(titleEl);
 
     if (!values || values.length === 0) {
@@ -2312,7 +2313,8 @@ function buildLineChart(title, unit, labels, values, options = {}) {
         return wrapper;
     }
 
-    const scaledValues = values.map(v => v * valueScale);
+    let scaledValues = values.map(v => v * valueScale);
+    if (round) scaledValues = scaledValues.map(Math.round);
     const rawMin = Math.min(...scaledValues);
     const rawMax = Math.max(...scaledValues);
     const valueRange = (rawMax - rawMin) || 1;
@@ -2334,20 +2336,68 @@ function buildLineChart(title, unit, labels, values, options = {}) {
         return colorBands.midColor;
     }
 
+    // slope-based coloring (e.g. Warmwasser, Ladestand): colors a segment by how much the value
+    // changed over it, rather than by its absolute level - rising is always "good" (riseColor),
+    // a small drop is unremarkable (flatColor), a drop at or past bigDropThreshold is called out
+    // (dropColor). Naturally a per-segment property, so it works for a smooth (non-stepped) line.
+    function colorForSlope(v0, v1) {
+        if (!slopeBands) return 'var(--color-accent)';
+        const delta = v1 - v0;
+        if (delta > 0) return slopeBands.riseColor;
+        if (delta <= -(slopeBands.bigDropThreshold ?? 1)) return slopeBands.dropColor;
+        return slopeBands.flatColor;
+    }
+
+    // A stepped segment's vertical "jump" connector can cross one or two colorBands thresholds
+    // (e.g. 20 -> 31 crossing the 25 boundary) - splitting it into sub-segments at the exact
+    // crossing point(s) keeps the connector's color matching what it's actually passing through,
+    // instead of taking on a single (misleading) color for its whole length.
+    function splitJumpByBands(v0, v1, y0, y1) {
+        if (!colorBands || v0 === v1) return [{y0, y1, color: colorForValue(v1)}];
+        const thresholds = [colorBands.lowThreshold, colorBands.highThreshold]
+            .filter(t => t > Math.min(v0, v1) && t < Math.max(v0, v1))
+            .sort((a, b) => (v0 < v1 ? a - b : b - a));
+        const stops = [{v: v0, y: y0}, ...thresholds.map(t => ({v: t, y: y0 + (t - v0) / (v1 - v0) * (y1 - y0)})), {v: v1, y: y1}];
+        const segments = [];
+        for (let k = 0; k < stops.length - 1; k++) {
+            segments.push({y0: stops[k].y, y1: stops[k + 1].y, color: colorForValue((stops[k].v + stops[k + 1].v) / 2)});
+        }
+        return segments;
+    }
+
     const baseline = paddingTop + plotHeight;
     let lineMarkup, areaMarkup;
     if (stepped) {
         // one path per segment so each can be colored by its own (held-flat) value; the vertical
-        // "jump" connecting two segments takes the color of the value it's leaving
+        // "jump" connecting two segments is split at any colorBands threshold it crosses (see
+        // splitJumpByBands), or otherwise takes the color of the value it's leaving
         const lineParts = [], areaParts = [];
         for (let i = 0; i < points.length - 1; i++) {
-            const color = colorForValue(scaledValues[i]);
+            const color = colorBands ? colorForValue(scaledValues[i]) : colorForSlope(scaledValues[i], scaledValues[i + 1]);
             const [x0, y0] = points[i];
             const [x1] = points[i + 1];
             lineParts.push(`<path d="M${x0.toFixed(1)},${y0.toFixed(1)} L${x1.toFixed(1)},${y0.toFixed(1)}" fill="none" stroke="${color}" stroke-width="2" />`);
             areaParts.push(`<path d="M${x0.toFixed(1)},${baseline.toFixed(1)} L${x0.toFixed(1)},${y0.toFixed(1)} L${x1.toFixed(1)},${y0.toFixed(1)} L${x1.toFixed(1)},${baseline.toFixed(1)} Z" fill="${color}" opacity="0.15" stroke="none" />`);
             const [, yNext] = points[i + 1];
-            lineParts.push(`<path d="M${x1.toFixed(1)},${y0.toFixed(1)} L${x1.toFixed(1)},${yNext.toFixed(1)}" fill="none" stroke="${color}" stroke-width="2" />`);
+            if (colorBands) {
+                for (const seg of splitJumpByBands(scaledValues[i], scaledValues[i + 1], y0, yNext)) {
+                    lineParts.push(`<path d="M${x1.toFixed(1)},${seg.y0.toFixed(1)} L${x1.toFixed(1)},${seg.y1.toFixed(1)}" fill="none" stroke="${seg.color}" stroke-width="2" />`);
+                }
+            } else {
+                lineParts.push(`<path d="M${x1.toFixed(1)},${y0.toFixed(1)} L${x1.toFixed(1)},${yNext.toFixed(1)}" fill="none" stroke="${color}" stroke-width="2" />`);
+            }
+        }
+        lineMarkup = lineParts.join('');
+        areaMarkup = areaParts.join('');
+    } else if (slopeBands) {
+        // one straight sub-path per segment, colored by that segment's own rise/fall
+        const lineParts = [], areaParts = [];
+        for (let i = 0; i < points.length - 1; i++) {
+            const color = colorForSlope(scaledValues[i], scaledValues[i + 1]);
+            const [x0, y0] = points[i];
+            const [x1, y1] = points[i + 1];
+            lineParts.push(`<path d="M${x0.toFixed(1)},${y0.toFixed(1)} L${x1.toFixed(1)},${y1.toFixed(1)}" fill="none" stroke="${color}" stroke-width="2" />`);
+            areaParts.push(`<path d="M${x0.toFixed(1)},${baseline.toFixed(1)} L${x0.toFixed(1)},${y0.toFixed(1)} L${x1.toFixed(1)},${y1.toFixed(1)} L${x1.toFixed(1)},${baseline.toFixed(1)} Z" fill="${color}" opacity="0.15" stroke="none" />`);
         }
         lineMarkup = lineParts.join('');
         areaMarkup = areaParts.join('');
@@ -2370,7 +2420,7 @@ function buildLineChart(title, unit, labels, values, options = {}) {
     const yTicks = [yMax, (yMin + yMax) / 2, yMin];
     const yLabels = yTicks.map(v => {
         const y = (paddingTop + plotHeight - ((v - yMin) / yRange) * plotHeight).toFixed(1);
-        return `<text x="${paddingLeft - 8}" y="${(parseFloat(y) + 3).toFixed(1)}" fill="var(--color-text-secondary)" text-anchor="end">${v.toFixed(1)}</text>`;
+        return `<text x="${paddingLeft - 8}" y="${(parseFloat(y) + 3).toFixed(1)}" fill="var(--color-text-secondary)" text-anchor="end">${round ? Math.round(v) : v.toFixed(1)}</text>`;
     }).join('');
 
     // vertical marker wherever the local calendar date changes between two consecutive hourly
@@ -2383,8 +2433,8 @@ function buildLineChart(title, unit, labels, values, options = {}) {
         if (curDate.getDate() !== prevDate.getDate()) {
             const x = (paddingLeft + (i / lastIndex) * plotWidth).toFixed(1);
             const dateText = curDate.toLocaleDateString('de-DE', {day: '2-digit', month: '2-digit'});
-            dayBoundaryMarkup += `<line x1="${x}" y1="${paddingTop}" x2="${x}" y2="${baseline.toFixed(1)}" stroke="var(--color-border)" stroke-dasharray="3,3" />`;
-            dayBoundaryMarkup += `<text x="${x}" y="${paddingTop - 4}" fill="var(--color-text-secondary)" text-anchor="middle">${dateText}</text>`;
+            dayBoundaryMarkup += `<line x1="${x}" y1="${paddingTop}" x2="${x}" y2="${baseline.toFixed(1)}" stroke="var(--color-text-secondary)" stroke-width="1.5" stroke-dasharray="4,3" />`;
+            dayBoundaryMarkup += `<text x="${x}" y="${paddingTop - 4}" fill="var(--color-text)" font-weight="700" text-anchor="middle">${dateText}</text>`;
         }
     }
 
@@ -2445,7 +2495,8 @@ async function loadDashboard() {
             return;
         }
         container.innerHTML = '';
-        container.appendChild(buildLineChart('Strompreis (Bezug)', 'Cent/kWh', data.labels, data.p_buy, {
+        container.appendChild(buildLineChart('Strompreis', 'Cent/kWh', data.labels, data.p_buy, {
+            subtitle: 'Bezug',
             stepped: true,
             valueScale: 100,
             decimals: 0,
@@ -2453,10 +2504,24 @@ async function loadDashboard() {
         }));
         container.appendChild(buildLineChart('Außentemperatur', '°C', data.labels, data.temperature));
         container.appendChild(buildLineChart('PV-Leistung', 'kW', data.labels, data.pv_generation, {minY: 0}));
-        container.appendChild(buildLineChart('Raumtemperatur (Ziel)', '°C', data.output_labels, data.t_i_target));
-        container.appendChild(buildLineChart('Warmwasser', '°C', data.output_labels, data.t_hw));
-        container.appendChild(buildLineChart('Ladestand Heimspeicher', '%', data.output_labels, data.soc_b, {minY: 0}));
-        container.appendChild(buildLineChart('Ladestand Auto', '%', data.output_labels, data.soc_ev, {minY: 0, valueScale: 100}));
+        container.appendChild(buildLineChart('Raumtemperatur', '°C', data.output_labels, data.t_i_target, {
+            subtitle: 'Ziel',
+            stepped: true,
+            round: true,
+            decimals: 0,
+        }));
+        container.appendChild(buildLineChart('Warmwasser', '°C', data.output_labels, data.t_hw, {
+            slopeBands: {riseColor: 'var(--color-accent)', dropColor: 'var(--color-error)', flatColor: 'var(--color-text-secondary)', bigDropThreshold: 1},
+        }));
+        container.appendChild(buildLineChart('Ladestand Heimspeicher', '%', data.output_labels, data.soc_b, {
+            minY: 0,
+            slopeBands: {riseColor: 'var(--color-accent)', dropColor: 'var(--color-error)', flatColor: 'var(--color-text-secondary)', bigDropThreshold: 0.1},
+        }));
+        container.appendChild(buildLineChart('Ladestand Auto', '%', data.output_labels, data.soc_ev, {
+            minY: 0,
+            valueScale: 100,
+            slopeBands: {riseColor: 'var(--color-accent)', dropColor: 'var(--color-error)', flatColor: 'var(--color-text-secondary)', bigDropThreshold: 0.1},
+        }));
     } catch (err) {
         console.log(err);
         container.innerHTML = '';
