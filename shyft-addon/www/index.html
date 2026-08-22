@@ -443,6 +443,8 @@
             gap: 0.5em;
             border-bottom: 1px solid var(--color-border);
             margin-bottom: 1.5em;
+            overflow-x: auto;
+            -webkit-overflow-scrolling: touch;
         }
         .tabButton {
             background: none;
@@ -455,6 +457,8 @@
             cursor: pointer;
             border-bottom: 2px solid transparent;
             margin-bottom: -1px;
+            flex-shrink: 0;
+            white-space: nowrap;
         }
         .tabButton:hover {
             color: var(--color-text);
@@ -572,10 +576,35 @@
             color: var(--color-text);
             margin-bottom: 0.5em;
         }
+        .dashboardChartContainer {
+            position: relative;
+        }
         .dashboardChartSvg {
             width: 100%;
             height: auto;
             display: block;
+            touch-action: pan-y;
+        }
+        .dashboardChartSvg text {
+            font-size: 9px;
+        }
+        .dashboardChartTooltip {
+            position: absolute;
+            transform: translate(-50%, -100%);
+            margin-top: -8px;
+            background: var(--color-tooltip-bg);
+            color: var(--color-tooltip-text);
+            font-size: 11px;
+            padding: 4px 8px;
+            border-radius: 4px;
+            white-space: nowrap;
+            pointer-events: none;
+            z-index: 5;
+        }
+        @media (max-width: 600px) {
+            .dashboardChartSvg text {
+                font-size: 12px;
+            }
         }
 
         .toggleCell {
@@ -684,16 +713,16 @@
 <h1><span class="brand">shyft</span>-power - Dein Energiemanager</h1>
 
 <div class="tabBar">
-    <button type="button" class="tabButton" data-tab="dashboard">Dashboard</button>
-    <button type="button" class="tabButton active" data-tab="geraetesteuerung">Gerätesteuerung</button>
+    <button type="button" class="tabButton active" data-tab="dashboard">Dashboard</button>
+    <button type="button" class="tabButton" data-tab="geraetesteuerung">Gerätesteuerung</button>
     <button type="button" class="tabButton" data-tab="konfiguration">Konfiguration</button>
 </div>
 
-<div id="tab-dashboard" class="tabPanel">
+<div id="tab-dashboard" class="tabPanel active">
     <div id="dashboardBody"></div>
 </div>
 
-<div id="tab-geraetesteuerung" class="tabPanel active">
+<div id="tab-geraetesteuerung" class="tabPanel">
     <div id="shyftActionsBody"></div>
 </div>
 

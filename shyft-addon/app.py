@@ -143,13 +143,15 @@ def readDashboardChartData():
         return jsonify({"status": "error", "message": "Noch keine Dashboard-Daten von shyft-power vorhanden - die nächste stündliche Aktualisierung steht noch aus."})
 
     input_csv = cache.get("input_csv")
+    output_csv = cache.get("output_csv")
     creation_date_ms = cache.get("creation_date")
     if not input_csv or creation_date_ms is None:
         return jsonify({"status": "error", "message": "input_csv oder creation_date fehlt im Dashboard-Cache."})
 
+    start = datetime.fromtimestamp(creation_date_ms / 1000, tz=timezone.utc).replace(minute=0, second=0, microsecond=0)
+
     try:
         rows = list(csv.DictReader(io.StringIO(input_csv), delimiter=";"))
-        start = datetime.fromtimestamp(creation_date_ms / 1000, tz=timezone.utc).replace(minute=0, second=0, microsecond=0)
         labels = []
         pv_generation = []
         p_buy = []
@@ -162,12 +164,32 @@ def readDashboardChartData():
     except Exception as e:
         return jsonify({"status": "error", "message": f"input_csv konnte nicht gelesen werden: {e}"})
 
+    # output_csv isn't necessarily the same length as input_csv (the optimizer's own horizon can
+    # be shorter) - it's assumed to start at the same creation_date regardless, just with fewer rows
+    output_labels, t_i_target, t_hw, soc_b, soc_ev = [], [], [], [], []
+    if output_csv:
+        try:
+            output_rows = list(csv.DictReader(io.StringIO(output_csv)))
+            for i, row in enumerate(output_rows):
+                output_labels.append((start + timedelta(hours=i)).isoformat())
+                t_i_target.append(float(row.get("T_i_Target") or 0))
+                t_hw.append(float(row.get("T_HW") or 0))
+                soc_b.append(float(row.get("SOC_B") or 0))
+                soc_ev.append(float(row.get("SOC_EV") or 0))
+        except Exception as e:
+            print("[Shyft] output_csv konnte nicht gelesen werden:", repr(e))
+
     return jsonify({
         "status": "success",
         "labels": labels,
         "pv_generation": pv_generation,
         "p_buy": p_buy,
         "temperature": temperature,
+        "output_labels": output_labels,
+        "t_i_target": t_i_target,
+        "t_hw": t_hw,
+        "soc_b": soc_b,
+        "soc_ev": soc_ev,
     })
 
 
@@ -425,10 +447,30 @@ def needs_stop_before_phase_change(target_kw):
     return current_phases != new_phases
 
 
+def trigger_ha_automation_recipe(recipe, phase, target_kw):
+    """Runs the "HA-Automation" recipe variant: triggers the user's own automation with target/phase
+    as template variables ({{ target }}, {{ phase }}) instead of the addon driving individual
+    services itself - lets the user implement arbitrary logic Home Assistant-side. Confirmed via
+    Home Assistant's own source that automation.trigger's "variables" field does populate custom
+    keys like this correctly (the one known bug is specific to the reserved "trigger" variable)."""
+    automation_entity_id = recipe.get("haAutomationEntityId")
+    if not automation_entity_id:
+        raise Exception("Keine Automation ausgewählt")
+    homeassistant_adapter.call_service("automation", "trigger", {
+        "entity_id": automation_entity_id,
+        "variables": {"target": target_kw, "phase": phase},
+    })
+
+
 def execute_car_charge_start(target_kw):
     config = _read_current_config()
     recipe = config.get("carChargeRecipe", {})
-    if recipe.get("type") != "three_stage":
+    recipe_type = recipe.get("type")
+
+    if recipe_type == "ha_automation":
+        trigger_ha_automation_recipe(recipe, "start", target_kw)
+        return
+    if recipe_type != "three_stage":
         raise Exception("Kein Lade-Rezept konfiguriert")
 
     if needs_stop_before_phase_change(target_kw):
@@ -449,9 +491,12 @@ def execute_car_charge_start(target_kw):
     call_recipe_stage(recipe.get("control", {}), branch_key="start")
 
 
-def execute_car_charge_stop():
+def execute_car_charge_stop(target_kw=None):
     config = _read_current_config()
     recipe = config.get("carChargeRecipe", {})
+    if recipe.get("type") == "ha_automation":
+        trigger_ha_automation_recipe(recipe, "stop", target_kw)
+        return
     call_recipe_stage(recipe.get("control", {}), branch_key="stop")
 
 
@@ -549,11 +594,21 @@ def testCarChargeStart():
     "Runs the exact same kW -> Phasen/Ampere pipeline as a real shyft-power action (see execute_car_charge_start), so this test is a faithful dry run rather than a simplified stand-in."
     config = _read_current_config()
     recipe = config.get("carChargeRecipe", {})
-    if recipe.get("type") != "three_stage":
+    recipe_type = recipe.get("type")
+    if recipe_type not in ("three_stage", "ha_automation"):
         return jsonify({"success": False, "message": "Keine Variante ausgewählt"}), 400
 
     body = request.get_json(force=True, silent=True) or {}
     target_kw = body.get("targetKw")
+
+    if recipe_type == "ha_automation":
+        try:
+            trigger_ha_automation_recipe(recipe, "start", target_kw)
+            return jsonify({"success": True})
+        except Exception as e:
+            log_error_to_shyft("car_charge_start_test", classify_error(str(e)), str(e))
+            return jsonify({"success": False, "message": str(e)}), 500
+
     try:
         if needs_stop_before_phase_change(target_kw):
             call_recipe_stage(recipe.get("control", {}), branch_key="stop")
@@ -584,6 +639,13 @@ def testCarChargeStart():
 def testCarChargeStop():
     config = _read_current_config()
     recipe = config.get("carChargeRecipe", {})
+    if recipe.get("type") == "ha_automation":
+        try:
+            trigger_ha_automation_recipe(recipe, "stop", None)
+            return jsonify({"success": True})
+        except Exception as e:
+            log_error_to_shyft("car_charge_stop_test", classify_error(str(e)), str(e))
+            return jsonify({"success": False, "message": str(e)}), 500
     try:
         call_recipe_stage(recipe.get("control", {}), branch_key="stop")
         return jsonify({"success": True})
@@ -896,13 +958,16 @@ def handle_shyft_action_start(action, actions_enabled, config):
 def handle_shyft_action_end(action, actions_enabled, config):
     "For direct-entity-control Aktionstypen (see AUTO_MANAGED_CONTROLS) this really executes; everything else is still a placeholder pending a later step."
     label = action.get("Action Name", "?")
+    # only the "ha_automation" car-charge variant makes use of this - the addon-driven 3-stage
+    # stop doesn't need a target, but the user's own automation might want to know it
+    target = action.get("Target Value")
     control_key = ACTION_NAME_TO_CONTROL_KEY.get(label)
 
     if not actions_enabled:
         print(f"[Shyft] Ende faellig fuer '{label}' - Aktionstyp ist deaktiviert, nur simuliert.")
     elif label == "Auto laden":
         try:
-            execute_car_charge_stop()
+            execute_car_charge_stop(target)
             print(f"[Shyft] Ende ausgefuehrt fuer '{label}'.")
         except Exception as e:
             print(f"[Shyft] Ende fuer '{label}' fehlgeschlagen: {e!r}")
@@ -1046,20 +1111,21 @@ def apply_action_type_toggle_changes(old_map, new_map, config):
 
 
 def sync_dashboard_chart_data():
-    "Refreshes the cached optimizer input_csv/creation_date (see DASHBOARD_CACHE_PATH) from shyft-power - runs hourly (see scheduler), alongside the action queue poll, since the underlying data itself only changes about that often."
+    "Refreshes the cached optimizer input_csv/output_csv/creation_date (see DASHBOARD_CACHE_PATH) from shyft-power - runs hourly (see scheduler), alongside the action queue poll, since the underlying data itself only changes about that often."
     user_id = extract_shyft_user_id(shyft_adapter.bubble_token)
     if not user_id:
         return
     result = shyft_adapter.get_input_output_csv(user_id)
     response_data = (result or {}).get("response") or {}
     input_csv = response_data.get("input_csv")
+    output_csv = response_data.get("output_csv")
     creation_date_ms = response_data.get("creation_date")
     if not input_csv or creation_date_ms is None:
         print("[Shyft] Dashboard-Chart-Daten: input_csv oder creation_date fehlt in der Antwort von shyft-power.")
         return
     try:
         with open(DASHBOARD_CACHE_PATH, "w") as f:
-            json.dump({"input_csv": input_csv, "creation_date": creation_date_ms}, f)
+            json.dump({"input_csv": input_csv, "output_csv": output_csv, "creation_date": creation_date_ms}, f)
     except Exception as e:
         print("[Shyft] Dashboard-Chart-Daten konnten nicht zwischengespeichert werden:", repr(e))
 

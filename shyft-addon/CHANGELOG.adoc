@@ -1,3 +1,13 @@
+== 0.0.32.0
+
+* Dashboard: ist jetzt der Standard-Tab beim Öffnen; die Tab-Leiste lässt sich horizontal swipen/scrollen, damit "Konfiguration" auf schmalen Bildschirmen erreichbar bleibt; Diagramm-Beschriftungen sind auf Mobilgeräten größer
+* Strompreis wird jetzt in Cent/kWh angezeigt (statt €/kWh) und dreifarbig dargestellt (rötlich über 35 Cent, grün bis 25 Cent, dazwischen grau)
+* Alle Diagramme: Tooltip mit dem genauen Wert bei Hover (Desktop) bzw. Tippen (Mobile); ein gestrichelter senkrechter Strich markiert jeden Tageswechsel
+* PV-Leistung: Y-Achse beginnt jetzt bei 0 (keine negativen Werte mehr durch die Achsen-Rundung)
+* Neu: Vier weitere Diagramme aus shyft-powers Optimierer-output_csv - Raumtemperatur (Ziel), Warmwasser, Ladestand Heimspeicher, Ladestand Auto
+* "Auto laden": Zahlenfelder außer der Amperezahl (z.B. "minutes") werden jetzt nicht mehr angezeigt, sobald ein Amperezahl-Feld erkannt wurde - der zuletzt gespeicherte Wert bleibt aktiv, ohne dass ein Eingabefeld dafür nötig ist
+* Neu: "Auto laden" kann jetzt auch über eine eigene Home-Assistant-Automation gesteuert werden (Variante "HA-Automation") - die Automation wird beim Start bzw. Ende der Aktion getriggert, mit dem Zielwert als {{ target }} und "start"/"stop" als {{ phase }}
+
 == 0.0.31.2
 
 * "Strompreis (Bezug)" wird jetzt als Stufenfunktion dargestellt (Wert bleibt bis zur nächsten Stunde konstant, statt zwischen zwei Stunden zu verlaufen) - passend dazu, dass sich der Preis stündlich ändert. Außentemperatur und PV-Leistung bleiben unverändert als geglättete Linie

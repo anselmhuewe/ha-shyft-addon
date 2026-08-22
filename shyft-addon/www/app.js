@@ -358,7 +358,9 @@ let currentIntegrationSelections = {};
 // Reads one recipe stage's service + field values back out of the DOM (see
 // buildBranchedStageFields for how they're rendered) - shared by "Auto laden"'s per-stage loop and
 // the single-stage "Warmwasserbereitung" recipe, since both are built from the same picker.
-function readStageFromDom(idPrefix, stageKey, integrationKey, amountUnit, branchKeys) {
+// previousSharedFields carries forward whatever was already saved for a field that's no longer
+// rendered (see the isNumber branch below), so it isn't silently wiped out on the next save.
+function readStageFromDom(idPrefix, stageKey, integrationKey, amountUnit, branchKeys, previousSharedFields) {
     const serviceElement = document.getElementById(idPrefix + stageKey + '_service');
     if (!serviceElement) return null;
     const stage = {service: serviceElement.value, sharedFields: {}, branchFields: {}, amountFields: []};
@@ -372,10 +374,19 @@ function readStageFromDom(idPrefix, stageKey, integrationKey, amountUnit, branch
                     if (devices.length > 0) stage.sharedFields[field.name] = devices[0].id;
                     continue;
                 }
-                if (field.isNumber && amountUnit && field.unit === amountUnit) {
-                    // reliably picked out via its declared unit (e.g. "A") rather than guessed -
-                    // never shown in the UI, always gets the computed value at call time
-                    stage.amountFields.push(field.name);
+                if (amountUnit && field.isNumber) {
+                    if (field.unit === amountUnit) {
+                        // reliably picked out via its declared unit (e.g. "A") rather than
+                        // guessed - never shown in the UI, always gets the computed value at
+                        // call time
+                        stage.amountFields.push(field.name);
+                    } else if (previousSharedFields && previousSharedFields[field.name] !== undefined) {
+                        // a stage that cares about an amount field (e.g. the amperage stage) also
+                        // hides any OTHER number field it has (e.g. Easee's time_to_live) - it's
+                        // config-once data, not something worth re-showing an input for every
+                        // time, so just keep whatever was already configured
+                        stage.sharedFields[field.name] = previousSharedFields[field.name];
+                    }
                     continue;
                 }
                 const el = document.getElementById(idPrefix + stageKey + '_field_' + field.name);
@@ -446,13 +457,17 @@ async function saveConfigurationNow() {
     if (recipeTypeElement) {
         carChargeRecipe.type = recipeTypeElement.value;
     }
+    const haAutomationEntityElement = document.getElementById('car_charge_ha_automation_entity');
+    if (haAutomationEntityElement) {
+        carChargeRecipe.haAutomationEntityId = haAutomationEntityElement.value;
+    }
     for (const stageKey of Object.keys(CAR_CHARGE_STAGE_BRANCHES)) {
         const branch = CAR_CHARGE_STAGE_BRANCHES[stageKey];
-        const stage = readStageFromDom('car_charge_', stageKey, 'wallbox', branch.amountUnit, branch.keys);
+        const stage = readStageFromDom('car_charge_', stageKey, 'wallbox', branch.amountUnit, branch.keys, (carChargeRecipe[stageKey] || {}).sharedFields);
         if (stage) carChargeRecipe[stageKey] = stage;
     }
 
-    const hotWaterStage = readStageFromDom('hot_water_', 'hotWater', 'waermepumpe', undefined, []);
+    const hotWaterStage = readStageFromDom('hot_water_', 'hotWater', 'waermepumpe', undefined, [], (configData["hotWaterRecipe"] || {}).sharedFields);
     const hotWaterRecipe = hotWaterStage || (configData["hotWaterRecipe"] || {});
 
     const toBeWritten = {
@@ -614,8 +629,10 @@ function isSectionComplete(section, currentIds) {
     if (section.actions.some(k => CAR_CHARGE_ACTION_KEYS.has(k))) {
         const recipe = configData['carChargeRecipe'] || {};
         const amperageStage = recipe.amperage || {};
-        if (!(recipe.type === 'three_stage' && (recipe.phaseCount || {}).service
-            && amperageStage.service && (amperageStage.amountFields || []).length > 0 && (recipe.control || {}).service)) {
+        const isThreeStageComplete = recipe.type === 'three_stage' && (recipe.phaseCount || {}).service
+            && amperageStage.service && (amperageStage.amountFields || []).length > 0 && (recipe.control || {}).service;
+        const isHaAutomationComplete = recipe.type === 'ha_automation' && !!recipe.haAutomationEntityId;
+        if (!(isThreeStageComplete || isHaAutomationComplete)) {
             return false;
         }
     }
@@ -1300,9 +1317,12 @@ function buildBranchedStageFields(idPrefix, stageKey, label, tooltip, candidateS
         // device-selector fields (e.g. device_id) are never shown at all - there's exactly one
         // device to mean (the already-selected integration's own), so saveConfigurationNow fills
         // it in directly via getIntegrationDevices() rather than rendering anything to pick.
-        // Number fields whose declared unit matches this stage's amountUnit aren't shown either -
-        // they always get the freshly computed value at call time instead (see saveConfigurationNow).
-        const visibleStaticFields = staticFields.filter(f => !f.isDevice && !(f.isNumber && amountUnit && f.unit === amountUnit));
+        // In a stage that cares about an amount field (amountUnit set - currently only the
+        // amperage stage), ALL number fields are hidden, not just the one matching that unit:
+        // the matching one always gets the freshly computed value, and any other (e.g. Easee's
+        // time_to_live) is config-once data that isn't worth a permanent input either - it just
+        // keeps whatever was last configured (see readStageFromDom's previousSharedFields).
+        const visibleStaticFields = staticFields.filter(f => !f.isDevice && !(amountUnit && f.isNumber));
 
         if (visibleStaticFields.length > 0) {
             const staticTable = document.createElement('table');
@@ -1411,8 +1431,10 @@ function buildCarChargeControl() {
     const phaseCountStage = recipe.phaseCount || {};
     const amperageStage = recipe.amperage || {};
     const controlStage = recipe.control || {};
-    checkmark.hidden = !(recipe.type === 'three_stage' && phaseCountStage.service
-        && amperageStage.service && (amperageStage.amountFields || []).length > 0 && controlStage.service);
+    const isThreeStageComplete = recipe.type === 'three_stage' && phaseCountStage.service
+        && amperageStage.service && (amperageStage.amountFields || []).length > 0 && controlStage.service;
+    const isHaAutomationComplete = recipe.type === 'ha_automation' && !!recipe.haAutomationEntityId;
+    checkmark.hidden = !(isThreeStageComplete || isHaAutomationComplete);
 
     const candidateServices = allServiceOptions.filter(s => getIntegrationServiceDomains('wallbox').has(s.service.split('.')[0]));
 
@@ -1439,6 +1461,10 @@ function buildCarChargeControl() {
     threeStageOption.value = 'three_stage';
     threeStageOption.textContent = 'Dreistufig';
     recipeSelect.appendChild(threeStageOption);
+    const haAutomationOption = document.createElement('option');
+    haAutomationOption.value = 'ha_automation';
+    haAutomationOption.textContent = 'HA-Automation';
+    recipeSelect.appendChild(haAutomationOption);
     recipeSelect.value = recipe.type || '';
     recipeValueCell.appendChild(recipeSelect);
     recipeRow.appendChild(recipeLabelCell);
@@ -1470,8 +1496,48 @@ function buildCarChargeControl() {
     stagesWrapper.style.display = recipeSelect.value === 'three_stage' ? '' : 'none';
     wrapper.appendChild(stagesWrapper);
 
+    // "HA-Automation" is the alternative to the 3-stage recipe: instead of the addon driving
+    // individual services itself, it just triggers the user's own automation with target/phase
+    // as template variables ({{ target }}, {{ phase }}) - see trigger_ha_automation_recipe in
+    // app.py. Only ever one or the other is shown, matching recipeSelect's current value.
+    const automationWrapper = document.createElement('div');
+    const automationTable = document.createElement('table');
+    const automationTbody = document.createElement('tbody');
+    const automationRow = document.createElement('tr');
+    const automationLabelCell = document.createElement('td');
+    automationLabelCell.textContent = 'HA-Automation auswählen';
+    automationLabelCell.appendChild(buildTooltip('Zum Starten bzw. Beenden einer Shyft-Aktion kannst du deine selber erstellte Automation hinterlegen. Der Zielwert für die Aktion wird als {{ target }} von Shyft übergeben, und ob gerade gestartet oder beendet wird als {{ phase }} ("start"/"stop").'));
+    const automationValueCell = document.createElement('td');
+    const automationInput = document.createElement('input');
+    automationInput.id = 'car_charge_ha_automation_entity';
+    automationInput.className = 'sensorInput';
+    automationInput.setAttribute('autocomplete', 'off');
+    automationInput.value = recipe.haAutomationEntityId || '';
+    const automationDatalistId = 'carChargeAutomationOptions';
+    const automationDatalist = document.createElement('datalist');
+    automationDatalist.id = automationDatalistId;
+    for (const entity of allSensorIdOptions.filter(e => e.entity_id.startsWith('automation.'))) {
+        const option = document.createElement('option');
+        option.value = entity.entity_id;
+        option.textContent = entity.label;
+        automationDatalist.appendChild(option);
+    }
+    automationValueCell.appendChild(automationDatalist);
+    automationInput.setAttribute('list', automationDatalistId);
+    automationInput.placeholder = 'z.B. automation.mein_auto_laden';
+    automationInput.addEventListener('change', autoSave);
+    automationValueCell.appendChild(automationInput);
+    automationRow.appendChild(automationLabelCell);
+    automationRow.appendChild(automationValueCell);
+    automationTbody.appendChild(automationRow);
+    automationTable.appendChild(automationTbody);
+    automationWrapper.appendChild(automationTable);
+    automationWrapper.style.display = recipeSelect.value === 'ha_automation' ? '' : 'none';
+    wrapper.appendChild(automationWrapper);
+
     recipeSelect.addEventListener('change', () => {
         stagesWrapper.style.display = recipeSelect.value === 'three_stage' ? '' : 'none';
+        automationWrapper.style.display = recipeSelect.value === 'ha_automation' ? '' : 'none';
         autoSave();
     });
 
@@ -1518,7 +1584,9 @@ function buildCarChargeControl() {
                 });
                 const result = await response.json();
                 if (result.success) {
-                    status.textContent = `Gesendet: ${result.phaseCount} Phase(n), Laden gestartet.`;
+                    status.textContent = result.phaseCount !== undefined
+                        ? `Gesendet: ${result.phaseCount} Phase(n), Laden gestartet.`
+                        : 'Gesendet: Laden gestartet.';
                     status.className = 'autoActionStatus status-ok';
                     setTimeout(refreshWallboxStatus, 4000);
                 } else {
@@ -1951,75 +2019,163 @@ function showShyftActionsError(container) {
     container.appendChild(error);
 }
 
-// Renders one hourly time series as a static inline SVG line chart (no charting library - the
-// data is read-only and refreshed by reloading the tab, so nothing here needs to be interactive).
+// Renders one hourly time series as an interactive inline SVG line chart (no charting library).
 // values/labels come straight from /dashboard/chart-data - labels are ISO timestamps this addon
-// generated itself server-side (creation_date rounded down to the hour, +1h per row), so building
-// the SVG via a template string is safe here even though it isn't the DOM-builder style used
-// elsewhere in this file.
-function buildLineChart(title, unit, labels, values, stepped = false) {
+// generated itself server-side (creation_date rounded down to the hour, +1h per row).
+//
+// options:
+//   stepped     - draw a "step-after" path (each hourly value holds flat until the next hour,
+//                 then jumps) instead of a straight line between points - for values that
+//                 genuinely change once per hour (e.g. an hourly electricity price) rather than
+//                 drifting smoothly, a straight line between points would misleadingly imply
+//                 a gradual transition
+//   colorBands  - {highThreshold, highColor, lowThreshold, lowColor, midColor} - colors each
+//                 stepped segment by which band its (already valueScale-applied) value falls
+//                 into, instead of a single accent color. Only meaningful together with stepped.
+//   valueScale  - multiplier applied to every value before anything else (e.g. 100 to show a
+//                 €/kWh price as Cent/kWh)
+//   minY        - clamps the auto-computed lower axis bound (never shown lower than this) - e.g.
+//                 0 for a value that's never actually negative (PV-Leistung)
+//   decimals    - digits shown in the hover/tap tooltip
+function buildLineChart(title, unit, labels, values, options = {}) {
+    const {stepped = false, colorBands = null, valueScale = 1, minY = null, decimals = 1} = options;
     const width = 600, height = 220;
     const paddingLeft = 45, paddingRight = 15, paddingTop = 15, paddingBottom = 26;
     const plotWidth = width - paddingLeft - paddingRight;
     const plotHeight = height - paddingTop - paddingBottom;
 
+    const wrapper = document.createElement('div');
+    wrapper.className = 'dashboardChart';
+    const titleEl = document.createElement('div');
+    titleEl.className = 'dashboardChartTitle';
+    titleEl.textContent = title + (unit ? ` (${unit})` : '');
+    wrapper.appendChild(titleEl);
+
     if (!values || values.length === 0) {
-        return `<div class="dashboardChart"><div class="dashboardChartTitle">${title}</div><p class="shyftActionsEmpty">Keine Daten verfügbar.</p></div>`;
+        const empty = document.createElement('p');
+        empty.className = 'shyftActionsEmpty';
+        empty.textContent = 'Keine Daten verfügbar.';
+        wrapper.appendChild(empty);
+        return wrapper;
     }
 
-    const minValue = Math.min(...values);
-    const maxValue = Math.max(...values);
-    const valueRange = (maxValue - minValue) || 1;
-    const yMin = minValue - valueRange * 0.1;
-    const yMax = maxValue + valueRange * 0.1;
+    const scaledValues = values.map(v => v * valueScale);
+    const rawMin = Math.min(...scaledValues);
+    const rawMax = Math.max(...scaledValues);
+    const valueRange = (rawMax - rawMin) || 1;
+    let yMin = rawMin - valueRange * 0.1;
+    const yMax = rawMax + valueRange * 0.1;
+    if (minY !== null) yMin = Math.max(yMin, minY);
     const yRange = (yMax - yMin) || 1;
-    const lastIndex = values.length - 1 || 1;
+    const lastIndex = scaledValues.length - 1 || 1;
 
-    const points = values.map((v, i) => [
+    const points = scaledValues.map((v, i) => [
         paddingLeft + (i / lastIndex) * plotWidth,
         paddingTop + plotHeight - ((v - yMin) / yRange) * plotHeight,
     ]);
-    // "step-after" path: each hourly value holds flat until the next hour, then jumps - matches
-    // how e.g. an hourly electricity price actually behaves, rather than implying it drifts
-    // smoothly between two hours' values
-    let linePath;
-    if (stepped) {
-        linePath = 'M' + points[0][0].toFixed(1) + ',' + points[0][1].toFixed(1);
-        for (let i = 1; i < points.length; i++) {
-            linePath += ` L${points[i][0].toFixed(1)},${points[i - 1][1].toFixed(1)} L${points[i][0].toFixed(1)},${points[i][1].toFixed(1)}`;
-        }
-    } else {
-        linePath = points.map((p, i) => (i === 0 ? 'M' : 'L') + p[0].toFixed(1) + ',' + p[1].toFixed(1)).join(' ');
+
+    function colorForValue(v) {
+        if (!colorBands) return 'var(--color-accent)';
+        if (v >= colorBands.highThreshold) return colorBands.highColor;
+        if (v <= colorBands.lowThreshold) return colorBands.lowColor;
+        return colorBands.midColor;
     }
-    const baseline = (paddingTop + plotHeight).toFixed(1);
-    const areaPath = `${linePath} L${points[points.length - 1][0].toFixed(1)},${baseline} L${points[0][0].toFixed(1)},${baseline} Z`;
+
+    const baseline = paddingTop + plotHeight;
+    let lineMarkup, areaMarkup;
+    if (stepped) {
+        // one path per segment so each can be colored by its own (held-flat) value; the vertical
+        // "jump" connecting two segments takes the color of the value it's leaving
+        const lineParts = [], areaParts = [];
+        for (let i = 0; i < points.length - 1; i++) {
+            const color = colorForValue(scaledValues[i]);
+            const [x0, y0] = points[i];
+            const [x1] = points[i + 1];
+            lineParts.push(`<path d="M${x0.toFixed(1)},${y0.toFixed(1)} L${x1.toFixed(1)},${y0.toFixed(1)}" fill="none" stroke="${color}" stroke-width="2" />`);
+            areaParts.push(`<path d="M${x0.toFixed(1)},${baseline.toFixed(1)} L${x0.toFixed(1)},${y0.toFixed(1)} L${x1.toFixed(1)},${y0.toFixed(1)} L${x1.toFixed(1)},${baseline.toFixed(1)} Z" fill="${color}" opacity="0.15" stroke="none" />`);
+            const [, yNext] = points[i + 1];
+            lineParts.push(`<path d="M${x1.toFixed(1)},${y0.toFixed(1)} L${x1.toFixed(1)},${yNext.toFixed(1)}" fill="none" stroke="${color}" stroke-width="2" />`);
+        }
+        lineMarkup = lineParts.join('');
+        areaMarkup = areaParts.join('');
+    } else {
+        const color = colorForValue(scaledValues[0]);
+        const linePath = points.map((p, i) => (i === 0 ? 'M' : 'L') + p[0].toFixed(1) + ',' + p[1].toFixed(1)).join(' ');
+        const areaPath = `${linePath} L${points[points.length - 1][0].toFixed(1)},${baseline.toFixed(1)} L${points[0][0].toFixed(1)},${baseline.toFixed(1)} Z`;
+        areaMarkup = `<path d="${areaPath}" fill="${color}" opacity="0.15" stroke="none" />`;
+        lineMarkup = `<path d="${linePath}" fill="none" stroke="${color}" stroke-width="2" />`;
+    }
 
     const tickCount = Math.min(6, labels.length);
     const tickIndices = [...new Set(Array.from({length: tickCount}, (_, i) => Math.round(i * lastIndex / (tickCount - 1 || 1))))];
     const xLabels = tickIndices.map(i => {
         const x = (paddingLeft + (i / lastIndex) * plotWidth).toFixed(1);
         const text = new Date(labels[i]).toLocaleString('de-DE', {weekday: 'short', hour: '2-digit'}).replace('.', '');
-        return `<text x="${x}" y="${height - 6}" font-size="9" fill="var(--color-text-secondary)" text-anchor="middle">${text}</text>`;
+        return `<text x="${x}" y="${height - 6}" fill="var(--color-text-secondary)" text-anchor="middle">${text}</text>`;
     }).join('');
 
     const yTicks = [yMax, (yMin + yMax) / 2, yMin];
     const yLabels = yTicks.map(v => {
         const y = (paddingTop + plotHeight - ((v - yMin) / yRange) * plotHeight).toFixed(1);
-        return `<text x="${paddingLeft - 8}" y="${(parseFloat(y) + 3).toFixed(1)}" font-size="9" fill="var(--color-text-secondary)" text-anchor="end">${v.toFixed(1)}</text>`;
+        return `<text x="${paddingLeft - 8}" y="${(parseFloat(y) + 3).toFixed(1)}" fill="var(--color-text-secondary)" text-anchor="end">${v.toFixed(1)}</text>`;
     }).join('');
 
-    return `
-    <div class="dashboardChart">
-        <div class="dashboardChartTitle">${title}${unit ? ` (${unit})` : ''}</div>
+    // vertical marker wherever the local calendar date changes between two consecutive hourly
+    // points - shown on every chart so a day boundary is easy to spot regardless of which
+    // variable is plotted
+    let dayBoundaryMarkup = '';
+    for (let i = 1; i < labels.length; i++) {
+        const prevDate = new Date(labels[i - 1]);
+        const curDate = new Date(labels[i]);
+        if (curDate.getDate() !== prevDate.getDate()) {
+            const x = (paddingLeft + (i / lastIndex) * plotWidth).toFixed(1);
+            const dateText = curDate.toLocaleDateString('de-DE', {day: '2-digit', month: '2-digit'});
+            dayBoundaryMarkup += `<line x1="${x}" y1="${paddingTop}" x2="${x}" y2="${baseline.toFixed(1)}" stroke="var(--color-border)" stroke-dasharray="3,3" />`;
+            dayBoundaryMarkup += `<text x="${x}" y="${paddingTop - 4}" fill="var(--color-text-secondary)" text-anchor="middle">${dateText}</text>`;
+        }
+    }
+
+    const chartContainer = document.createElement('div');
+    chartContainer.className = 'dashboardChartContainer';
+    chartContainer.innerHTML = `
         <svg viewBox="0 0 ${width} ${height}" class="dashboardChartSvg">
-            <line x1="${paddingLeft}" y1="${paddingTop}" x2="${paddingLeft}" y2="${paddingTop + plotHeight}" stroke="var(--color-border)" />
-            <line x1="${paddingLeft}" y1="${paddingTop + plotHeight}" x2="${width - paddingRight}" y2="${paddingTop + plotHeight}" stroke="var(--color-border)" />
-            <path d="${areaPath}" fill="var(--color-accent)" opacity="0.15" stroke="none" />
-            <path d="${linePath}" fill="none" stroke="var(--color-accent)" stroke-width="2" />
+            <line x1="${paddingLeft}" y1="${paddingTop}" x2="${paddingLeft}" y2="${baseline.toFixed(1)}" stroke="var(--color-border)" />
+            <line x1="${paddingLeft}" y1="${baseline.toFixed(1)}" x2="${width - paddingRight}" y2="${baseline.toFixed(1)}" stroke="var(--color-border)" />
+            ${areaMarkup}
+            ${lineMarkup}
+            ${dayBoundaryMarkup}
             ${yLabels}
             ${xLabels}
-        </svg>
-    </div>`;
+        </svg>`;
+    wrapper.appendChild(chartContainer);
+
+    const tooltip = document.createElement('div');
+    tooltip.className = 'dashboardChartTooltip';
+    tooltip.hidden = true;
+    chartContainer.appendChild(tooltip);
+
+    const svgEl = chartContainer.querySelector('svg');
+
+    function showTooltip(clientX) {
+        const rect = svgEl.getBoundingClientRect();
+        if (rect.width === 0) return;
+        const scale = rect.width / width;
+        const svgX = (clientX - rect.left) / scale;
+        const idx = Math.max(0, Math.min(lastIndex, Math.round((svgX - paddingLeft) / plotWidth * lastIndex)));
+        const d = new Date(labels[idx]);
+        const dateText = d.toLocaleString('de-DE', {weekday: 'short', hour: '2-digit', minute: '2-digit'}).replace('.', '');
+        tooltip.textContent = `${dateText}: ${scaledValues[idx].toFixed(decimals)}${unit ? ' ' + unit : ''}`;
+        tooltip.style.left = (points[idx][0] * scale).toFixed(1) + 'px';
+        tooltip.style.top = (points[idx][1] * scale).toFixed(1) + 'px';
+        tooltip.hidden = false;
+    }
+
+    svgEl.addEventListener('mousemove', e => showTooltip(e.clientX));
+    svgEl.addEventListener('mouseleave', () => { tooltip.hidden = true; });
+    svgEl.addEventListener('touchstart', e => { if (e.touches[0]) showTooltip(e.touches[0].clientX); }, {passive: true});
+    svgEl.addEventListener('touchmove', e => { if (e.touches[0]) showTooltip(e.touches[0].clientX); }, {passive: true});
+
+    return wrapper;
 }
 
 async function loadDashboard() {
@@ -2035,10 +2191,19 @@ async function loadDashboard() {
             container.appendChild(error);
             return;
         }
-        container.innerHTML =
-            buildLineChart('Strompreis (Bezug)', '€/kWh', data.labels, data.p_buy, true) +
-            buildLineChart('Außentemperatur', '°C', data.labels, data.temperature) +
-            buildLineChart('PV-Leistung', 'kW', data.labels, data.pv_generation);
+        container.innerHTML = '';
+        container.appendChild(buildLineChart('Strompreis (Bezug)', 'Cent/kWh', data.labels, data.p_buy, {
+            stepped: true,
+            valueScale: 100,
+            decimals: 0,
+            colorBands: {highThreshold: 35, highColor: 'var(--color-error)', lowThreshold: 25, lowColor: 'var(--color-accent)', midColor: 'var(--color-text-secondary)'},
+        }));
+        container.appendChild(buildLineChart('Außentemperatur', '°C', data.labels, data.temperature));
+        container.appendChild(buildLineChart('PV-Leistung', 'kW', data.labels, data.pv_generation, {minY: 0}));
+        container.appendChild(buildLineChart('Raumtemperatur (Ziel)', '°C', data.output_labels, data.t_i_target));
+        container.appendChild(buildLineChart('Warmwasser', '°C', data.output_labels, data.t_hw));
+        container.appendChild(buildLineChart('Ladestand Heimspeicher', '%', data.output_labels, data.soc_b, {minY: 0}));
+        container.appendChild(buildLineChart('Ladestand Auto', '%', data.output_labels, data.soc_ev, {minY: 0}));
     } catch (err) {
         console.log(err);
         container.innerHTML = '';
