@@ -2289,9 +2289,13 @@ function showShyftActionsError(container) {
 //                 €/kWh price as Cent/kWh)
 //   minY        - clamps the auto-computed lower axis bound (never shown lower than this) - e.g.
 //                 0 for a value that's never actually negative (PV-Leistung)
+//   fixedMin/
+//   fixedMax    - pins the axis bound to this exact value instead of the auto-computed (padded)
+//                 one, regardless of the data's actual range - e.g. 0/100 for a percentage that
+//                 should always show its full possible range (Ladestand)
 //   decimals    - digits shown in the hover/tap tooltip
 function buildLineChart(title, unit, labels, values, options = {}) {
-    const {stepped = false, colorBands = null, slopeBands = null, valueScale = 1, minY = null, decimals = 1, round = false, subtitle = ''} = options;
+    const {stepped = false, colorBands = null, slopeBands = null, valueScale = 1, minY = null, fixedMin = null, fixedMax = null, decimals = 1, round = false, subtitle = ''} = options;
     const width = 600, height = 220;
     const paddingLeft = 45, paddingRight = 15, paddingTop = 15, paddingBottom = 26;
     const plotWidth = width - paddingLeft - paddingRight;
@@ -2319,8 +2323,10 @@ function buildLineChart(title, unit, labels, values, options = {}) {
     const rawMax = Math.max(...scaledValues);
     const valueRange = (rawMax - rawMin) || 1;
     let yMin = rawMin - valueRange * 0.1;
-    const yMax = rawMax + valueRange * 0.1;
+    let yMax = rawMax + valueRange * 0.1;
     if (minY !== null) yMin = Math.max(yMin, minY);
+    if (fixedMin !== null) yMin = fixedMin;
+    if (fixedMax !== null) yMax = fixedMax;
     const yRange = (yMax - yMin) || 1;
     const lastIndex = scaledValues.length - 1 || 1;
 
@@ -2514,11 +2520,13 @@ async function loadDashboard() {
             slopeBands: {riseColor: 'var(--color-accent)', dropColor: 'var(--color-error)', flatColor: 'var(--color-text-secondary)', bigDropThreshold: 1},
         }));
         container.appendChild(buildLineChart('Ladestand Heimspeicher', '%', data.output_labels, data.soc_b, {
-            minY: 0,
+            fixedMin: 0,
+            fixedMax: 100,
             slopeBands: {riseColor: 'var(--color-accent)', dropColor: 'var(--color-error)', flatColor: 'var(--color-text-secondary)', bigDropThreshold: 0.1},
         }));
         container.appendChild(buildLineChart('Ladestand Auto', '%', data.output_labels, data.soc_ev, {
-            minY: 0,
+            fixedMin: 0,
+            fixedMax: 100,
             valueScale: 100,
             slopeBands: {riseColor: 'var(--color-accent)', dropColor: 'var(--color-error)', flatColor: 'var(--color-text-secondary)', bigDropThreshold: 0.1},
         }));

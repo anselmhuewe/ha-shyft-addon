@@ -1,3 +1,7 @@
+== 0.0.34.1
+
+* Ladestand Heimspeicher/Auto: Y-Achse ist jetzt fix auf 0-100 % skaliert, statt sich am tatsächlichen Wertebereich zu orientieren
+
 == 0.0.34.0
 
 * Strompreis- und Raumtemperatur-Titel zeigen die Einheit jetzt in einer Klammer zusammen mit der Zusatzangabe ("Bezug, Cent/kWh" bzw. "Ziel, °C")
