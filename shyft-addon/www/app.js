@@ -1951,6 +1951,93 @@ function showShyftActionsError(container) {
     container.appendChild(error);
 }
 
+// Renders one hourly time series as a static inline SVG line chart (no charting library - the
+// data is read-only and refreshed by reloading the tab, so nothing here needs to be interactive).
+// values/labels come straight from /dashboard/chart-data - labels are ISO timestamps this addon
+// generated itself server-side (creation_date rounded down to the hour, +1h per row), so building
+// the SVG via a template string is safe here even though it isn't the DOM-builder style used
+// elsewhere in this file.
+function buildLineChart(title, unit, labels, values) {
+    const width = 600, height = 220;
+    const paddingLeft = 45, paddingRight = 15, paddingTop = 15, paddingBottom = 26;
+    const plotWidth = width - paddingLeft - paddingRight;
+    const plotHeight = height - paddingTop - paddingBottom;
+
+    if (!values || values.length === 0) {
+        return `<div class="dashboardChart"><div class="dashboardChartTitle">${title}</div><p class="shyftActionsEmpty">Keine Daten verfügbar.</p></div>`;
+    }
+
+    const minValue = Math.min(...values);
+    const maxValue = Math.max(...values);
+    const valueRange = (maxValue - minValue) || 1;
+    const yMin = minValue - valueRange * 0.1;
+    const yMax = maxValue + valueRange * 0.1;
+    const yRange = (yMax - yMin) || 1;
+    const lastIndex = values.length - 1 || 1;
+
+    const points = values.map((v, i) => [
+        paddingLeft + (i / lastIndex) * plotWidth,
+        paddingTop + plotHeight - ((v - yMin) / yRange) * plotHeight,
+    ]);
+    const linePath = points.map((p, i) => (i === 0 ? 'M' : 'L') + p[0].toFixed(1) + ',' + p[1].toFixed(1)).join(' ');
+    const baseline = (paddingTop + plotHeight).toFixed(1);
+    const areaPath = `${linePath} L${points[points.length - 1][0].toFixed(1)},${baseline} L${points[0][0].toFixed(1)},${baseline} Z`;
+
+    const tickCount = Math.min(6, labels.length);
+    const tickIndices = [...new Set(Array.from({length: tickCount}, (_, i) => Math.round(i * lastIndex / (tickCount - 1 || 1))))];
+    const xLabels = tickIndices.map(i => {
+        const x = (paddingLeft + (i / lastIndex) * plotWidth).toFixed(1);
+        const text = new Date(labels[i]).toLocaleString('de-DE', {weekday: 'short', hour: '2-digit'}).replace('.', '');
+        return `<text x="${x}" y="${height - 6}" font-size="9" fill="var(--color-text-secondary)" text-anchor="middle">${text}</text>`;
+    }).join('');
+
+    const yTicks = [yMax, (yMin + yMax) / 2, yMin];
+    const yLabels = yTicks.map(v => {
+        const y = (paddingTop + plotHeight - ((v - yMin) / yRange) * plotHeight).toFixed(1);
+        return `<text x="${paddingLeft - 8}" y="${(parseFloat(y) + 3).toFixed(1)}" font-size="9" fill="var(--color-text-secondary)" text-anchor="end">${v.toFixed(1)}</text>`;
+    }).join('');
+
+    return `
+    <div class="dashboardChart">
+        <div class="dashboardChartTitle">${title}${unit ? ` (${unit})` : ''}</div>
+        <svg viewBox="0 0 ${width} ${height}" class="dashboardChartSvg">
+            <line x1="${paddingLeft}" y1="${paddingTop}" x2="${paddingLeft}" y2="${paddingTop + plotHeight}" stroke="var(--color-border)" />
+            <line x1="${paddingLeft}" y1="${paddingTop + plotHeight}" x2="${width - paddingRight}" y2="${paddingTop + plotHeight}" stroke="var(--color-border)" />
+            <path d="${areaPath}" fill="var(--color-accent)" opacity="0.15" stroke="none" />
+            <path d="${linePath}" fill="none" stroke="var(--color-accent)" stroke-width="2" />
+            ${yLabels}
+            ${xLabels}
+        </svg>
+    </div>`;
+}
+
+async function loadDashboard() {
+    const container = document.getElementById('dashboardBody');
+    if (!container) return;
+    try {
+        const data = await getJson(insideHomeAssistant + '/dashboard/chart-data');
+        if (data.status !== 'success') {
+            container.innerHTML = '';
+            const error = document.createElement('p');
+            error.className = 'shyftActionsError';
+            error.textContent = data.message || 'Diagrammdaten konnten nicht geladen werden.';
+            container.appendChild(error);
+            return;
+        }
+        container.innerHTML =
+            buildLineChart('Strompreis (Bezug)', '€/kWh', data.labels, data.p_buy) +
+            buildLineChart('Außentemperatur', '°C', data.labels, data.temperature) +
+            buildLineChart('PV-Leistung', 'kW', data.labels, data.pv_generation);
+    } catch (err) {
+        console.log(err);
+        container.innerHTML = '';
+        const error = document.createElement('p');
+        error.className = 'shyftActionsError';
+        error.textContent = 'Diagrammdaten konnten nicht geladen werden.';
+        container.appendChild(error);
+    }
+}
+
 function setupTabs() {
     const buttons = document.querySelectorAll('.tabButton');
     for (const button of buttons) {
@@ -1971,10 +2058,12 @@ function setupTabs() {
 // have integrationsData/currentIntegrationSelections available on the very first render
 if (document.readyState === 'complete') {
     loadConfiguration().then(loadShyftActions);
+    loadDashboard();
     setupTabs();
 } else {
     window.addEventListener('load', () => {
         loadConfiguration().then(loadShyftActions);
+        loadDashboard();
         setupTabs();
     });
 }

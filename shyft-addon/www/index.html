@@ -562,6 +562,22 @@
             margin-top: 0.5em;
         }
 
+        .dashboardChart {
+            margin-bottom: 2em;
+        }
+        .dashboardChartTitle {
+            font-family: var(--font-heading);
+            font-weight: 600;
+            font-size: 1.05em;
+            color: var(--color-text);
+            margin-bottom: 0.5em;
+        }
+        .dashboardChartSvg {
+            width: 100%;
+            height: auto;
+            display: block;
+        }
+
         .toggleCell {
             width: 1%;
             white-space: nowrap;
@@ -668,8 +684,13 @@
 <h1><span class="brand">shyft</span>-power - Dein Energiemanager</h1>
 
 <div class="tabBar">
+    <button type="button" class="tabButton" data-tab="dashboard">Dashboard</button>
     <button type="button" class="tabButton active" data-tab="geraetesteuerung">Gerätesteuerung</button>
     <button type="button" class="tabButton" data-tab="konfiguration">Konfiguration</button>
+</div>
+
+<div id="tab-dashboard" class="tabPanel">
+    <div id="dashboardBody"></div>
 </div>
 
 <div id="tab-geraetesteuerung" class="tabPanel active">

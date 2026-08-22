@@ -9,7 +9,9 @@ import math
 import re
 import shutil
 import time
-from datetime import datetime, timezone
+import csv
+import io
+from datetime import datetime, timezone, timedelta
 from apscheduler.schedulers.background import BackgroundScheduler
 import logging
 import sys
@@ -124,6 +126,46 @@ def readShyftActions():
     if not user_id:
         return jsonify({"status": "error", "message": "Kein gültiger Shyft-Access-Key konfiguriert."})
     return jsonify(shyft_adapter.get_actions(user_id))
+
+
+@app.route("/dashboard/chart-data", methods=["GET"])
+def readDashboardChartData():
+    """Builds the Dashboard tab's three charts (Strompreis, Außentemperatur, PV-Leistung) from
+    shyft-power's optimizer input_csv - one row per hour, starting at creation_date rounded down
+    to the start of its hour."""
+    user_id = extract_shyft_user_id(shyft_adapter.bubble_token)
+    if not user_id:
+        return jsonify({"status": "error", "message": "Kein gültiger Shyft-Access-Key konfiguriert."})
+
+    result = shyft_adapter.get_input_output_csv(user_id)
+    response_data = (result or {}).get("response") or {}
+    input_csv = response_data.get("input_csv")
+    creation_date_ms = response_data.get("creation_date")
+    if not input_csv or creation_date_ms is None:
+        return jsonify({"status": "error", "message": "input_csv oder creation_date fehlt in der Antwort von shyft-power."})
+
+    try:
+        rows = list(csv.DictReader(io.StringIO(input_csv), delimiter=";"))
+        start = datetime.fromtimestamp(creation_date_ms / 1000, tz=timezone.utc).replace(minute=0, second=0, microsecond=0)
+        labels = []
+        pv_generation = []
+        p_buy = []
+        temperature = []
+        for i, row in enumerate(rows):
+            labels.append((start + timedelta(hours=i)).isoformat())
+            pv_generation.append(float(row.get("PV_generation") or 0))
+            p_buy.append(float(row.get("p_buy") or 0))
+            temperature.append(float(row.get("Temperature") or 0))
+    except Exception as e:
+        return jsonify({"status": "error", "message": f"input_csv konnte nicht gelesen werden: {e}"})
+
+    return jsonify({
+        "status": "success",
+        "labels": labels,
+        "pv_generation": pv_generation,
+        "p_buy": p_buy,
+        "temperature": temperature,
+    })
 
 
 def mapToResponse(response):

@@ -46,6 +46,22 @@ class ShyftAdapter:
         except Exception as e:
             return {"status": "error", "message": str(e)}
 
+    def get_input_output_csv(self, user_id: str):
+        "Pulls the optimizer's latest input/output CSV data (used to build the addon's Dashboard-tab charts) for user_id from shyft-power. Like get_actions, returns the actual response body rather than a status string."
+        try:
+            headers = {
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {self.bubble_token}"
+            }
+            complete_uri = self._create_complete_uri("provide_input_output_csv")
+            payload = json.dumps({"user": user_id})
+            self._log_info(f"get_input_output_csv uri={complete_uri}")
+            response = requests.post(complete_uri, headers=headers, data=payload)
+            response.raise_for_status()
+            return response.json()
+        except Exception as e:
+            return {"status": "error", "message": str(e)}
+
     def _call_workflow(self,
                        workflow_name: str,
                        payload: str):
