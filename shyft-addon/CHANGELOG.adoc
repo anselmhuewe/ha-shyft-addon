@@ -1,3 +1,8 @@
+== 0.0.37.0
+
+* Neu: PV-Überschussladen-Rückfalllogik fürs Auto - läuft unabhängig von shyft-powers eigener PV-Prognose-basierter "Auto laden"-Aktion. Startet, wenn der Wechselrichter ins Netz einspeist (Schwelle -0,3 kW mit Heimspeicher, -1,5 kW ohne) und das Auto ladebereit + "Auto laden" aktiviert ist, und regelt die Ladeleistung danach alle 5 Minuten anhand der aktuellen Einspeisung nach (erhöhen bei fortgesetzter Einspeisung, senken sobald keine mehr da ist). Stoppt bei Heimspeicher-SOC ≤97 % (mit Speicher) bzw. sobald die Mindestladeleistung erreicht und weiterhin keine Einspeisung da ist (ohne Speicher)
+* Die Fallback-Ladevorgänge erscheinen wie eigene shyft-Aktionen ("Auto laden" / "PV-Überschussladen") im Gerätesteuerung-Tab, inklusive aufklappbarem Log mit Ladeleistung und Uhrzeit je Regelschritt
+
 == 0.0.36.0
 
 * Unter "PV-Leistung" wird jetzt der verbleibende/volle PV-Ertrag pro Tag angezeigt ("Heute: 3 kWh | Morgen: 27 kWh"), auf ganze kWh gerundet. "Übermorgen" erscheint nur, wenn der PV-Ertrag an diesem Tag in den Daten erkennbar auf 0 gefallen ist (ab 17 Uhr geprüft, deckt auch einen frühen Wintersonnenuntergang ab)

@@ -2269,6 +2269,17 @@ function buildShyftActionCard(action) {
         subtitleEl.textContent = action['Subtitle'];
         main.appendChild(subtitleEl);
     }
+    if (action['Log']) {
+        const logDetails = document.createElement('details');
+        logDetails.className = 'shyftActionLog';
+        const logSummary = document.createElement('summary');
+        logSummary.textContent = 'Log anzeigen';
+        logDetails.appendChild(logSummary);
+        const logPre = document.createElement('pre');
+        logPre.textContent = action['Log'];
+        logDetails.appendChild(logPre);
+        main.appendChild(logDetails);
+    }
     card.appendChild(main);
 
     const statusEl = document.createElement('div');

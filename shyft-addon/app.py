@@ -1,4 +1,4 @@
-from sync_service import SyncService
+from sync_service import SyncService, convert_to_expected_unit
 from homeassistant_adapter import HomeAssistantAdapter
 from shyft_adapter import ShyftAdapter
 
@@ -53,6 +53,21 @@ CAR_PRESENCE_AWAY_CEILING_FLOOR = 0.02
 # +15% relativ zur gelernten Rate - bewusst schwach, da eine niedrige Reichweite unterwegs genauso
 # gut "fährt zum Schnelllader" bedeuten kann wie "fährt bald nach Hause".
 CAR_PRESENCE_SOC_INFLUENCE = 0.15
+PV_SURPLUS_ACTIONS_PATH = "/data/pv_surplus_actions.json"
+PV_SURPLUS_ACTIONS_MAX_DAYS = 14
+# Startschwelle (Netzeinspeisung, kW - negativ = Einspeisung): strenger ohne Heimspeicher, da dort
+# kein Puffer existiert, der einen kurzen Regel-Fehlschuss abfedern würde.
+PV_SURPLUS_START_THRESHOLD_KW = -0.3
+PV_SURPLUS_START_THRESHOLD_NO_BATTERY_KW = -1.5
+# Laufende Erhöhen/Senken-Schwelle - bewusst näher an 0 als die Startschwelle (Hysterese), da wir
+# hier "wird noch/nicht mehr eingespeist" unterscheiden, nicht "lohnt sich ein Start".
+PV_SURPLUS_REGULATION_THRESHOLD_KW = -0.2
+PV_SURPLUS_INCREASE_OVERSHOOT = 1.1
+PV_SURPLUS_NO_BATTERY_INCREASE_SCALE = 0.9
+PV_SURPLUS_DECREASE_RATIO = 0.05
+PV_SURPLUS_NO_BATTERY_DECREASE_RATIO = 0.10
+PV_SURPLUS_NO_BATTERY_MIN_DECREASE_KW = 0.3
+PV_SURPLUS_BATTERY_STOP_SOC = 97
 SUPERVISOR_TOKEN = os.getenv("SUPERVISOR_TOKEN")
 HASSIO_URI_RUNNING_ON_HAOS = "http://supervisor/core"
 HASSIO_URI_RUNNING_REMOTE = "http://homeassistant.local:8123"
@@ -136,11 +151,20 @@ def readNotificationTargets():
 
 @app.route("/shyft/actions", methods=["GET"])
 def readShyftActions():
-    "Pulls the action queue from shyft-power for display in the Gerätesteuerung tab (the actual execution against devices happens separately in process_shyft_actions)."
+    """Pulls the action queue from shyft-power for display in the Gerätesteuerung tab (the actual
+    execution against devices happens separately in process_shyft_actions), merged with the
+    addon's own PV-Überschussladen-Rückfalllogik sessions (see run_pv_surplus_charging_tick) so
+    they appear seamlessly alongside shyft-power's own actions instead of a separate list."""
     user_id = extract_shyft_user_id(shyft_adapter.bubble_token)
-    if not user_id:
-        return jsonify({"status": "error", "message": "Kein gültiger Shyft-Access-Key konfiguriert."})
-    return jsonify(shyft_adapter.get_actions(user_id))
+    result = shyft_adapter.get_actions(user_id) if user_id else {"status": "error", "message": "Kein gültiger Shyft-Access-Key konfiguriert."}
+    pv_surplus_actions = [_pv_surplus_session_to_action(s) for s in _read_pv_surplus_actions()]
+
+    if result.get("status") == "success":
+        response_data = result.setdefault("response", {})
+        response_data["actions"] = (response_data.get("actions") or []) + pv_surplus_actions
+    elif pv_surplus_actions:
+        result = {"status": "success", "response": {"actions": pv_surplus_actions}}
+    return jsonify(result)
 
 
 @app.route("/dashboard/chart-data", methods=["GET"])
@@ -737,6 +761,193 @@ def execute_car_charge_stop(target_kw=None):
         trigger_ha_automation_recipe(recipe, "stop", target_kw)
         return
     call_recipe_stage(recipe.get("control", {}), branch_key="stop")
+
+
+# PV-Überschussladen-Rückfalllogik: shyft-power schickt eigene "Auto laden"-Aktionen mit
+# Subtitle "PV-Überschussladen", basierend auf seiner PV-Prognose - die kann daneben liegen. Diese
+# Rückfalllogik beobachtet den tatsächlichen Netz-Sensor direkt und greift unabhängig davon ein,
+# ob shyft-power selbst gerade eine "Auto laden"-Aktion laufen hat (siehe run_pv_surplus_charging_tick).
+PV_SURPLUS_MIN_KW = CHARGING_MIN_AMPS * CHARGING_PHASE_VOLTAGE / 1000  # 6A/1-phasig als Untergrenze
+
+
+def read_grid_power_kw(config):
+    "Aktuelle Netzeinspeisung/-bezug in kW (negativ = Einspeisung) - konvertiert die Home-Assistant-Einheit (z.B. W) wie sync_service es auch fuer shyft-power tut. None, wenn kein Sensor zugeordnet oder nicht lesbar."
+    entity_id = config.get("sensorMappings", {}).get("photovoltaic_powerflow_grid", "")
+    if not entity_id:
+        return None
+    try:
+        state = homeassistant_adapter.load_entity_state(entity_id)
+        value, _ = convert_to_expected_unit("photovoltaic_powerflow_grid", state.state, state.unit)
+        return float(value)
+    except Exception:
+        return None
+
+
+def read_home_battery_soc(config):
+    "Aktueller Heimspeicher-SOC in %, oder None, wenn kein Sensor zugeordnet, unavailable/unknown, oder nicht lesbar - das ist gleichzeitig das Signal 'kein Heimspeicher im System' fuer den Fallback ohne Batterie."
+    entity_id = config.get("sensorMappings", {}).get("battery_state_of_charge", "")
+    if not entity_id:
+        return None
+    try:
+        state = homeassistant_adapter.load_entity_state(entity_id)
+        if state.state in (None, "unknown", "unavailable", ""):
+            return None
+        value, _ = convert_to_expected_unit("battery_state_of_charge", state.state, state.unit)
+        return float(value)
+    except Exception:
+        return None
+
+
+def is_car_ready_to_charge(config):
+    "True, wenn der aktuelle Wallbox-Verbindungsstatus als 'Auto kann laden' klassifiziert ist (siehe classify_wallbox_connection_state - dieselbe Zuordnung wie fuer die Anwesenheitsprognose)."
+    entity_id = config.get("sensorMappings", {}).get("wallbox_plugged", "")
+    if not entity_id:
+        return False
+    try:
+        state = homeassistant_adapter.load_entity_state(entity_id)
+        return classify_wallbox_connection_state(state.state, config) is True
+    except Exception:
+        return False
+
+
+def _read_pv_surplus_actions():
+    try:
+        with open(PV_SURPLUS_ACTIONS_PATH, "r") as f:
+            return json.load(f)
+    except Exception:
+        return []
+
+
+def _write_pv_surplus_actions(actions):
+    cutoff_ms = (datetime.now() - timedelta(days=PV_SURPLUS_ACTIONS_MAX_DAYS)).timestamp() * 1000
+    pruned = [a for a in actions if a.get("active") or (a.get("end_ms") or 0) >= cutoff_ms]
+    try:
+        with open(PV_SURPLUS_ACTIONS_PATH, "w") as f:
+            json.dump(pruned, f)
+    except Exception as e:
+        print("[Shyft] PV-Überschussladen: Aktionsliste konnte nicht gespeichert werden:", repr(e))
+
+
+def _find_active_pv_surplus_session(actions):
+    return next((a for a in actions if a.get("active")), None)
+
+
+def _append_pv_surplus_log(session, target_kw, note=None):
+    "Vermerkt Ladeleistung und Uhrzeit im Log-Feld der Aktion, wie shyft-power es fuer seine eigenen Aktionen auch tut."
+    timestamp = datetime.now().strftime("%d.%m. %H:%M Uhr")
+    line = f"{timestamp}: {target_kw:.1f} kW"
+    if note:
+        line += f" ({note})"
+    session.setdefault("log", []).append(line)
+    session["log"] = session["log"][-100:]
+
+
+def _pv_surplus_session_to_action(session):
+    "Formt eine Fallback-Ladesession in dieselbe Form wie shyft-powers eigene Aktionen, damit sie in der Aktionsliste (Gerätesteuerung-Tab) nahtlos mit auftaucht (siehe readShyftActions)."
+    target_kw = session.get("target_kw", 0)
+    is_active = bool(session.get("active"))
+    return {
+        "Action Name": "Auto laden",
+        "Status": "aktiv" if is_active else "beendet",
+        "Execution Status": "yes, started",
+        "Target Value": target_kw,
+        "Subtitle": f"PV-Überschussladen (Fallback, {target_kw:.1f} kW)",
+        "Date Start": session.get("start_ms"),
+        "Date End": session.get("end_ms") if not is_active else int(time.time() * 1000),
+        "Savings": None,
+        "Log": "\n".join(session.get("log", [])),
+    }
+
+
+def stop_pv_surplus_charging(actions, session, config, reason=None):
+    try:
+        execute_car_charge_stop(session.get("target_kw"))
+        _append_pv_surplus_log(session, session.get("target_kw", 0), note=reason or "beendet")
+    except Exception as e:
+        _append_pv_surplus_log(session, session.get("target_kw", 0), note=f"Stop fehlgeschlagen: {e}")
+        print("[Shyft] PV-Überschussladen: Stop fehlgeschlagen:", repr(e))
+    session["active"] = False
+    session["end_ms"] = int(time.time() * 1000)
+    _write_pv_surplus_actions(actions)
+    notify_action_event(config, _pv_surplus_session_to_action(session), "beendet")
+
+
+def run_pv_surplus_charging_tick():
+    """Regelkreis fuer die PV-Überschussladen-Rückfalllogik, alle 5 Minuten aufgerufen (siehe
+    Scheduler). Reagiert direkt auf den Netz-Sensor statt auf shyft-powers PV-Prognose, und läuft
+    unabhängig davon, ob shyft-power selbst gerade eine "Auto laden"-Aktion laufen hat (siehe
+    Kommentar oben) - die "Auto laden"-Logik wandert perspektivisch ohnehin vollständig ins Addon."""
+    config = _read_current_config()
+    actions = _read_pv_surplus_actions()
+    session = _find_active_pv_surplus_session(actions)
+
+    toggle_enabled = config.get("actionTypeEnabled", {}).get("car_charge_start", True)
+    if not toggle_enabled:
+        if session:
+            stop_pv_surplus_charging(actions, session, config, reason="Auto laden deaktiviert")
+        return
+
+    car_ready = is_car_ready_to_charge(config)
+    battery_soc = read_home_battery_soc(config)
+    has_battery = battery_soc is not None
+    grid_kw = read_grid_power_kw(config)
+
+    if session:
+        if not car_ready:
+            stop_pv_surplus_charging(actions, session, config, reason="Auto nicht mehr ladebereit")
+            return
+        if has_battery and battery_soc <= PV_SURPLUS_BATTERY_STOP_SOC:
+            stop_pv_surplus_charging(actions, session, config, reason=f"Heimspeicher-SOC auf {battery_soc:.0f}% gefallen")
+            return
+        if grid_kw is None:
+            return  # kein aktueller Messwert - Zielwert unveraendert bis zum naechsten Tick
+
+        target_kw = session.get("target_kw", PV_SURPLUS_MIN_KW)
+        if grid_kw <= PV_SURPLUS_REGULATION_THRESHOLD_KW:
+            increase = abs(grid_kw) * PV_SURPLUS_INCREASE_OVERSHOOT
+            if not has_battery:
+                increase *= PV_SURPLUS_NO_BATTERY_INCREASE_SCALE
+            new_target = target_kw + increase
+        else:
+            if not has_battery and target_kw <= PV_SURPLUS_MIN_KW + 1e-6:
+                stop_pv_surplus_charging(actions, session, config, reason="keine Einspeisung mehr, Minimum erreicht")
+                return
+            if has_battery:
+                new_target = target_kw * (1 - PV_SURPLUS_DECREASE_RATIO)
+            else:
+                decrease = max(target_kw * PV_SURPLUS_NO_BATTERY_DECREASE_RATIO, PV_SURPLUS_NO_BATTERY_MIN_DECREASE_KW)
+                new_target = target_kw - decrease
+        new_target = max(PV_SURPLUS_MIN_KW, new_target)
+
+        try:
+            execute_car_charge_start(new_target)
+            _append_pv_surplus_log(session, new_target)
+        except Exception as e:
+            _append_pv_surplus_log(session, new_target, note=f"Fehler: {e}")
+            print("[Shyft] PV-Überschussladen: Update fehlgeschlagen:", repr(e))
+        session["target_kw"] = new_target
+        session["has_battery"] = has_battery
+        _write_pv_surplus_actions(actions)
+    else:
+        if grid_kw is None or not car_ready:
+            return
+        start_threshold = PV_SURPLUS_START_THRESHOLD_KW if has_battery else PV_SURPLUS_START_THRESHOLD_NO_BATTERY_KW
+        if grid_kw > start_threshold:
+            return
+
+        target_kw = max(PV_SURPLUS_MIN_KW, abs(grid_kw))
+        try:
+            execute_car_charge_start(target_kw)
+        except Exception as e:
+            print("[Shyft] PV-Überschussladen: Start fehlgeschlagen:", repr(e))
+            return
+
+        new_session = {"active": True, "target_kw": target_kw, "has_battery": has_battery,
+                        "start_ms": int(time.time() * 1000), "log": []}
+        _append_pv_surplus_log(new_session, target_kw, note="gestartet")
+        actions.append(new_session)
+        _write_pv_surplus_actions(actions)
+        notify_action_event(config, _pv_surplus_session_to_action(new_session), "gestartet")
 
 
 def execute_hot_water_activate():
@@ -1465,6 +1676,10 @@ def sync_car_presence_log_periodically():
     with app.app_context():
         sync_car_presence_log()
 
+def run_pv_surplus_charging_tick_periodically():
+    with app.app_context():
+        run_pv_surplus_charging_tick()
+
 
 scheduler = BackgroundScheduler()
 scheduler.add_job(sync_sensors_periodically, 'cron', minute="55")
@@ -1478,6 +1693,8 @@ scheduler.add_job(process_shyft_actions_periodically, 'cron', minute="0,15,30,45
 # on the hour, alongside the other hourly syncs - one snapshot per hour is exactly the
 # resolution the Anwesenheitsprognose needs (see compute_car_presence_forecast)
 scheduler.add_job(sync_car_presence_log_periodically, 'cron', minute="0")
+# PV-Überschussladen-Regelkreis - alle 5 Minuten, siehe run_pv_surplus_charging_tick
+scheduler.add_job(run_pv_surplus_charging_tick_periodically, 'interval', minutes=5)
 scheduler.start()
 
 
@@ -1520,5 +1737,10 @@ if __name__ == "__main__":
         sync_car_presence_log()
     except Exception as e:
         print("Failed to sync car presence log at startup:", repr(e))
+
+    try:
+        run_pv_surplus_charging_tick()
+    except Exception as e:
+        print("Failed to run PV-Überschussladen tick at startup:", repr(e))
 
     app.run(host="0.0.0.0", port=8080)
