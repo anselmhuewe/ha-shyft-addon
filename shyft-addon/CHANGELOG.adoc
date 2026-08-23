@@ -1,3 +1,8 @@
+== 0.0.38.0
+
+* Neu: dauerhafte Websocket-Verbindung zu Home Assistant (live_entity_watcher.py) - reagiert sofort auf Sensoränderungen statt auf den nächsten Polling-Zyklus zu warten. Aktuell angeschlossen: Netzeinspeisung (löst ab 0,1 kW Änderung sofort eine PV-Überschussladen-Neubewertung aus, statt bis zu 5 Minuten zu warten) und Wallbox-Verbindungsstatus (sofortiger Log-Eintrag für die Anwesenheitsprognose + sofortige PV-Überschuss-Neubewertung, z.B. bei Abstecken). Die bisherigen Polling-Jobs laufen als Sicherheitsnetz weiter, falls die Websocket-Verbindung mal steht; die Sensor-Zuordnung wird bei jedem automatischen Reconnect (alle 30 Minuten oder bei Verbindungsabbruch) neu aus der Konfiguration gelesen, wirkt eine Änderung also ohne Addon-Neustart
+* Eine Sperre verhindert, dass ein live ausgelöster und ein zeitgesteuerter Regelkreis-Tick gleichzeitig laufen und sich dabei gegenseitig überschreiben (z.B. zwei parallel gestartete Ladesessions)
+
 == 0.0.37.0
 
 * Neu: PV-Überschussladen-Rückfalllogik fürs Auto - läuft unabhängig von shyft-powers eigener PV-Prognose-basierter "Auto laden"-Aktion. Startet, wenn der Wechselrichter ins Netz einspeist (Schwelle -0,3 kW mit Heimspeicher, -1,5 kW ohne) und das Auto ladebereit + "Auto laden" aktiviert ist, und regelt die Ladeleistung danach alle 5 Minuten anhand der aktuellen Einspeisung nach (erhöhen bei fortgesetzter Einspeisung, senken sobald keine mehr da ist). Stoppt bei Heimspeicher-SOC ≤97 % (mit Speicher) bzw. sobald die Mindestladeleistung erreicht und weiterhin keine Einspeisung da ist (ohne Speicher)

@@ -1,6 +1,7 @@
 from sync_service import SyncService, convert_to_expected_unit
 from homeassistant_adapter import HomeAssistantAdapter
 from shyft_adapter import ShyftAdapter
+from live_entity_watcher import LiveEntityWatcher
 
 import os
 from flask import Flask, send_from_directory, jsonify, request, Response
@@ -11,6 +12,7 @@ import shutil
 import time
 import csv
 import io
+import threading
 from datetime import datetime, timezone, timedelta
 from apscheduler.schedulers.background import BackgroundScheduler
 import logging
@@ -90,6 +92,10 @@ homeassistant_adapter = HomeAssistantAdapter(
     supervisor_token=SUPERVISOR_TOKEN)
 shyft_adapter = ShyftAdapter()
 sync_service = SyncService(homeassistant_adapter, shyft_adapter)
+# lambda statt der Funktion direkt, da _read_current_config erst weiter unten in dieser Datei
+# definiert wird - zum Zeitpunkt dieses Aufrufs zaehlt nur, dass der Name bis zum ersten
+# tatsaechlichen Aufruf (beim ersten (Re-)Connect, lange nach dem Modul-Import) existiert.
+live_entity_watcher = LiveEntityWatcher(homeassistant_adapter, lambda: _read_current_config())
 
 @app.after_request
 def add_no_cache_headers(response):
@@ -270,7 +276,16 @@ def classify_wallbox_connection_state(state_value, config=None):
     return config.get("wallboxConnectionStatusMapping", {}).get(state_value)
 
 
+_car_presence_log_lock = threading.Lock()
+
+
 def sync_car_presence_log():
+    "Serialisiert _sync_car_presence_log_impl-Aufrufe - jetzt sowohl vom stuendlichen Cron-Job als auch live vom Websocket-Handler bei jeder Wallbox-Statusaenderung aufgerufen, siehe live_entity_watcher.py."
+    with _car_presence_log_lock:
+        _sync_car_presence_log_impl()
+
+
+def _sync_car_presence_log_impl():
     """Hourly snapshot of the classified Wallbox-Verbindungsstatus (siehe
     classify_wallbox_connection_state) - die Grundlage der Anwesenheitsprognose. Ein noch nicht
     zugeordneter Statuswert wird übersprungen statt geraten, damit die Historie nicht mit falschen
@@ -872,11 +887,25 @@ def stop_pv_surplus_charging(actions, session, config, reason=None):
     notify_action_event(config, _pv_surplus_session_to_action(session), "beendet")
 
 
+_pv_surplus_lock = threading.Lock()
+
+
 def run_pv_surplus_charging_tick():
+    """Serialisiert _run_pv_surplus_charging_tick_impl-Aufrufe - der Tick kann jetzt sowohl vom
+    5-Minuten-Cron-Job als auch live vom Websocket-Handler bei einer Netz- oder
+    Wallbox-Statusaenderung ausgeloest werden (siehe live_entity_watcher.py); ohne diese Sperre
+    koennten zwei gleichzeitige Ticks dieselbe Sessions-Datei inkonsistent lesen/schreiben oder
+    versehentlich zwei aktive Ladesessions gleichzeitig anlegen."""
+    with _pv_surplus_lock:
+        _run_pv_surplus_charging_tick_impl()
+
+
+def _run_pv_surplus_charging_tick_impl():
     """Regelkreis fuer die PV-Überschussladen-Rückfalllogik, alle 5 Minuten aufgerufen (siehe
-    Scheduler). Reagiert direkt auf den Netz-Sensor statt auf shyft-powers PV-Prognose, und läuft
-    unabhängig davon, ob shyft-power selbst gerade eine "Auto laden"-Aktion laufen hat (siehe
-    Kommentar oben) - die "Auto laden"-Logik wandert perspektivisch ohnehin vollständig ins Addon."""
+    Scheduler) sowie live bei relevanten Sensoraenderungen. Reagiert direkt auf den Netz-Sensor
+    statt auf shyft-powers PV-Prognose, und läuft unabhängig davon, ob shyft-power selbst gerade
+    eine "Auto laden"-Aktion laufen hat (siehe Kommentar oben) - die "Auto laden"-Logik wandert
+    perspektivisch ohnehin vollständig ins Addon."""
     config = _read_current_config()
     actions = _read_pv_surplus_actions()
     session = _find_active_pv_surplus_session(actions)
@@ -1681,6 +1710,50 @@ def run_pv_surplus_charging_tick_periodically():
         run_pv_surplus_charging_tick()
 
 
+# Live-Reaktion via Websocket (siehe live_entity_watcher.py) - ergaenzt, ersetzt aber nicht die
+# obigen Cron-Jobs (sync_car_presence_log_periodically, run_pv_surplus_charging_tick_periodically),
+# die als Sicherheitsnetz weiterlaufen, falls die Websocket-Verbindung mal laenger steht.
+PV_SURPLUS_LIVE_UPDATE_THRESHOLD_KW = 0.1
+_last_live_grid_kw = {"value": None}
+
+
+def _on_grid_power_live_update(entity_id, old_state, new_state):
+    "Reagiert auf jede Aenderung des Netz-Sensors, sobald sie um mindestens PV_SURPLUS_LIVE_UPDATE_THRESHOLD_KW vom letzten verarbeiteten Wert abweicht - fuer Sensoren, die alle paar Sekunden aktualisieren, statt auf den naechsten 5-Minuten-Tick zu warten."
+    with app.app_context():
+        try:
+            raw_state = (new_state or {}).get("state")
+            unit = ((new_state or {}).get("attributes") or {}).get("unit_of_measurement")
+            value, _ = convert_to_expected_unit("photovoltaic_powerflow_grid", raw_state, unit)
+            new_kw = float(value)
+        except (TypeError, ValueError):
+            return
+        last_kw = _last_live_grid_kw["value"]
+        _last_live_grid_kw["value"] = new_kw
+        if last_kw is not None and abs(new_kw - last_kw) < PV_SURPLUS_LIVE_UPDATE_THRESHOLD_KW:
+            return
+        try:
+            run_pv_surplus_charging_tick()
+        except Exception as e:
+            print("[Shyft] Live-getriggerter PV-Ueberschuss-Tick fehlgeschlagen:", repr(e))
+
+
+def _on_wallbox_state_live_update(entity_id, old_state, new_state):
+    "Reagiert sofort auf einen geaenderten Wallbox-Verbindungsstatus: loggt ihn fuer die Anwesenheitsprognose (die aktuelle Stunde spiegelt beim naechsten Abruf ohnehin den Live-Status, aber ein sofortiger Log-Eintrag verbessert die Verweildauer-Genauigkeit fuer die Sicherheitsheuristik) und wertet die PV-Ueberschuss-Regelung neu aus (z.B. sofortiger Stopp statt bis zu 5 Minuten Verzoegerung, wenn das Auto gerade abgesteckt wurde)."
+    with app.app_context():
+        try:
+            sync_car_presence_log()
+        except Exception as e:
+            print("[Shyft] Live-getriggertes Anwesenheits-Log fehlgeschlagen:", repr(e))
+        try:
+            run_pv_surplus_charging_tick()
+        except Exception as e:
+            print("[Shyft] Live-getriggerter PV-Ueberschuss-Tick (Wallbox-Aenderung) fehlgeschlagen:", repr(e))
+
+
+live_entity_watcher.register("photovoltaic_powerflow_grid", _on_grid_power_live_update)
+live_entity_watcher.register("wallbox_plugged", _on_wallbox_state_live_update)
+
+
 scheduler = BackgroundScheduler()
 scheduler.add_job(sync_sensors_periodically, 'cron', minute="55")
 scheduler.add_job(sync_pv_history_periodically, 'cron', hour="21", minute="0")
@@ -1742,5 +1815,7 @@ if __name__ == "__main__":
         run_pv_surplus_charging_tick()
     except Exception as e:
         print("Failed to run PV-Überschussladen tick at startup:", repr(e))
+
+    live_entity_watcher.start()
 
     app.run(host="0.0.0.0", port=8080)
