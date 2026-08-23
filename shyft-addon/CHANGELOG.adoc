@@ -1,3 +1,8 @@
+== 0.0.35.1
+
+* Anwesenheitsprognose: neue feste Sicherheits-Heuristik - je länger das Auto ununterbrochen abwesend ist (über eine normale Tagesabwesenheit hinaus), desto stärker wird die gelernte Rückkehrwahrscheinlichkeit gedeckelt, unabhängig davon, ob dafür schon eine vergleichbar lange Abwesenheit in der Historie beobachtet wurde (z.B. beim ersten Urlaub)
+* Anwesenheitsprognose berücksichtigt jetzt zusätzlich den Akkustand (falls "EV - SOC" zugeordnet ist): ein leerer Akku erhöht die Einsteck-Wahrscheinlichkeit leicht, bewusst mit begrenztem Einfluss
+
 == 0.0.35.0
 
 * Neu: Anwesenheitsprognose fürs Auto (erste Version) - lernt aus der Historie des Sensors "Wallbox: Auto verbunden?", wann das Auto typischerweise eingesteckt ist (Wochentag/Stunde-Muster, reagiert auch kurzfristig auf eine unerwartete aktuelle Abwesenheit/Anwesenheit)

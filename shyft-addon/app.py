@@ -42,6 +42,17 @@ DASHBOARD_CACHE_PATH = "/data/dashboard_cache.json"
 CAR_PRESENCE_LOG_PATH = "/data/car_presence_log.json"
 CAR_PRESENCE_LOG_MAX_DAYS = 180
 CAR_PRESENCE_MIN_SAMPLES = 3
+# Feste Sicherheits-Heuristik (siehe away_return_ceiling): eine normale Tages-Abwesenheit bleibt
+# unangetastet (GRACE_HOURS), danach halbiert sich die zulässige Rückkehrwahrscheinlichkeit je
+# weitere HALF_LIFE_HOURS - unabhängig davon, ob die gelernte Tabelle für so eine lange
+# Abwesenheit überhaupt schon Beobachtungen hat (z.B. beim allerersten Urlaub).
+CAR_PRESENCE_AWAY_GRACE_HOURS = 8
+CAR_PRESENCE_AWAY_HALF_LIFE_HOURS = 24
+CAR_PRESENCE_AWAY_CEILING_FLOOR = 0.02
+# Begrenzter Einfluss des Akkustands auf die Einsteck-Wahrscheinlichkeit: bei leerem Akku maximal
+# +15% relativ zur gelernten Rate - bewusst schwach, da eine niedrige Reichweite unterwegs genauso
+# gut "fährt zum Schnelllader" bedeuten kann wie "fährt bald nach Hause".
+CAR_PRESENCE_SOC_INFLUENCE = 0.15
 SUPERVISOR_TOKEN = os.getenv("SUPERVISOR_TOKEN")
 HASSIO_URI_RUNNING_ON_HAOS = "http://supervisor/core"
 HASSIO_URI_RUNNING_REMOTE = "http://homeassistant.local:8123"
@@ -274,12 +285,45 @@ def sync_car_presence_log():
         print("[Shyft] Anwesenheits-Log konnte nicht gespeichert werden:", repr(e))
 
 
+def away_return_ceiling(hours_away):
+    """Feste Sicherheits-Heuristik, unabhängig von der gelernten Tabelle: innerhalb einer normalen
+    Tages-Abwesenheit (bis CAR_PRESENCE_AWAY_GRACE_HOURS) keine Einschränkung, danach halbiert
+    sich die zulässige Rückkehrwahrscheinlichkeit je weitere CAR_PRESENCE_AWAY_HALF_LIFE_HOURS -
+    greift auch dann, wenn die Tabelle mangels Beobachtung (z.B. beim allerersten Urlaub)
+    fälschlich eine hohe Rückkehrwahrscheinlichkeit vorschlagen würde."""
+    if hours_away <= CAR_PRESENCE_AWAY_GRACE_HOURS:
+        return 1.0
+    decayed = 0.5 ** ((hours_away - CAR_PRESENCE_AWAY_GRACE_HOURS) / CAR_PRESENCE_AWAY_HALF_LIFE_HOURS)
+    return max(CAR_PRESENCE_AWAY_CEILING_FLOOR, decayed)
+
+
+def car_soc_connect_factor(soc_percent):
+    "Je leerer der Akku, desto eher wird eingesteckt - bewusst nur ein begrenzter Faktor (siehe CAR_PRESENCE_SOC_INFLUENCE)."
+    soc_percent = max(0.0, min(100.0, soc_percent))
+    return 1 + CAR_PRESENCE_SOC_INFLUENCE * (1 - soc_percent / 100)
+
+
+def compute_hours_away(by_hour, current_connected, now_hour):
+    "Anzahl zusammenhängender Stunden (rückwärts ab jetzt), die das Auto als abwesend geloggt ist - stoppt bei der ersten geloggten Anwesenheit oder einer Lücke im Log (die könnte eine unbeobachtete Rückkehr verbergen)."
+    if current_connected is not False:
+        return 0
+    hours = 1
+    cursor = now_hour - timedelta(hours=1)
+    while by_hour.get(cursor) is False:
+        hours += 1
+        cursor -= timedelta(hours=1)
+    return hours
+
+
 def compute_car_presence_forecast():
     """Builds a 48h-ahead, hourly Anwesenheitsprognose ("wird das Auto eingesteckt sein") from
     CAR_PRESENCE_LOG_PATH - a time-inhomogeneous Markov chain keyed by (Wochentag, Stunde,
     aktueller Zustand), forward-simuliert Stunde für Stunde ab dem live beobachteten Zustand. Ein
     Bucket mit zu wenigen historischen Beobachtungen fällt auf eine gröbere Ebene zurück (erst
-    ohne Zustand, dann auf die Gesamtquote) statt eine unsichere Zahl vorzutäuschen."""
+    ohne Zustand, dann auf die Gesamtquote) statt eine unsichere Zahl vorzutäuschen. Zusätzlich
+    wird die gelernte away->home-Übergangswahrscheinlichkeit durch eine feste Verweildauer-
+    Sicherheitsheuristik gedeckelt (away_return_ceiling) und leicht durch den aktuellen Akkustand
+    moduliert (car_soc_connect_factor)."""
     try:
         with open(CAR_PRESENCE_LOG_PATH, "r") as f:
             log = json.load(f)
@@ -320,7 +364,9 @@ def compute_car_presence_forecast():
         return marginal_rate(weekday, hour)
 
     config = _read_current_config()
-    entity_id = config.get("sensorMappings", {}).get("wallbox_plugged", "")
+    sensor_mappings = config.get("sensorMappings", {})
+
+    entity_id = sensor_mappings.get("wallbox_plugged", "")
     current_connected = None
     if entity_id:
         try:
@@ -329,8 +375,17 @@ def compute_car_presence_forecast():
         except Exception as e:
             print("[Shyft] Anwesenheitsprognose: aktueller Wallbox-Status konnte nicht gelesen werden:", repr(e))
 
+    soc_entity_id = sensor_mappings.get("electronicvehicle_state_of_charge", "")
+    soc_factor = 1.0
+    if soc_entity_id:
+        try:
+            soc_factor = car_soc_connect_factor(homeassistant_adapter.read_entity_numeric_value(soc_entity_id))
+        except Exception as e:
+            print("[Shyft] Anwesenheitsprognose: Akkustand konnte nicht gelesen werden:", repr(e))
+
     start = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
     labels = [(start + timedelta(hours=i)).isoformat() for i in range(48)]
+    hours_away_now = compute_hours_away(by_hour, current_connected, start)
 
     probabilities = []
     p = 1.0 if current_connected is True else (0.0 if current_connected is False else marginal_rate(start.weekday(), start.hour))
@@ -338,7 +393,10 @@ def compute_car_presence_forecast():
     for i in range(1, 48):
         source_ts = start + timedelta(hours=i - 1)
         p_home_given_home = transition_rate(source_ts.weekday(), source_ts.hour, True)
-        p_home_given_away = transition_rate(source_ts.weekday(), source_ts.hour, False)
+        p_home_given_away = transition_rate(source_ts.weekday(), source_ts.hour, False) * soc_factor
+        if hours_away_now > 0:
+            p_home_given_away = min(p_home_given_away, away_return_ceiling(hours_away_now + i))
+        p_home_given_away = min(1.0, p_home_given_away)
         p = p * p_home_given_home + (1 - p) * p_home_given_away
         probabilities.append(p)
 
