@@ -2364,6 +2364,38 @@ function showShyftActionsError(container) {
     container.appendChild(error);
 }
 
+// "Heute: 3 kWh | Morgen: 23 kWh | Übermorgen: 22 kWh" - the remaining/full PV-Ertrag per
+// Kalendertag (lokale Zeit), summiert aus den stündlichen kW-Werten (ein kW-Wert über eine Stunde
+// ist per Definition eine kWh). "Heute" zählt nur noch nicht vergangene Stunden. "Übermorgen"
+// erscheint nur, wenn alle 24 Stunden dieses Tages tatsächlich in den Daten stecken (sonst wäre es
+// eine irreführend niedrige Teilsumme, die wie der volle Tagesertrag aussähe).
+function formatPvEnergySummary(labels, values) {
+    const now = new Date();
+    const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const currentHourStart = new Date(now.getFullYear(), now.getMonth(), now.getDate(), now.getHours());
+    const dayLabels = ['Heute', 'Morgen', 'Übermorgen'];
+    const sums = [0, 0, 0];
+    const hoursSeen = [new Set(), new Set(), new Set()];
+
+    for (let i = 0; i < labels.length; i++) {
+        const d = new Date(labels[i]);
+        const startOfThatDay = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+        const dayOffset = Math.round((startOfThatDay - startOfToday) / (24 * 60 * 60 * 1000));
+        if (dayOffset < 0 || dayOffset > 2) continue;
+        if (dayOffset === 0 && d < currentHourStart) continue; // schon vergangene Stunde
+        sums[dayOffset] += values[i];
+        hoursSeen[dayOffset].add(d.getHours());
+    }
+
+    const parts = [];
+    for (let offset = 0; offset < 3; offset++) {
+        if (hoursSeen[offset].size === 0) continue;
+        if (offset === 2 && hoursSeen[2].size < 24) continue;
+        parts.push(`${dayLabels[offset]}: ${Math.round(sums[offset])} kWh`);
+    }
+    return parts.join(' | ');
+}
+
 // Renders one hourly time series as an interactive inline SVG line chart (no charting library).
 // values/labels come straight from /dashboard/chart-data - labels are ISO timestamps this addon
 // generated itself server-side (creation_date rounded down to the hour, +1h per row).
@@ -2629,6 +2661,13 @@ async function loadDashboard() {
         }));
         container.appendChild(buildLineChart('Außentemperatur', '°C', data.labels, data.temperature));
         container.appendChild(buildLineChart('PV-Leistung', 'kW', data.labels, data.pv_generation, {minY: 0}));
+        const pvEnergySummaryText = formatPvEnergySummary(data.labels, data.pv_generation);
+        if (pvEnergySummaryText) {
+            const pvEnergySummary = document.createElement('div');
+            pvEnergySummary.className = 'dashboardPvEnergySummary';
+            pvEnergySummary.textContent = pvEnergySummaryText;
+            container.appendChild(pvEnergySummary);
+        }
         container.appendChild(buildLineChart('Raumtemperatur', '°C', data.output_labels, data.t_i_target, {
             subtitle: 'Ziel',
             stepped: true,

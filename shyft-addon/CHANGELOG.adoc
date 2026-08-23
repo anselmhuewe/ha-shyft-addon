@@ -1,3 +1,7 @@
+== 0.0.36.0
+
+* Unter "PV-Leistung" wird jetzt der verbleibende/volle PV-Ertrag pro Tag angezeigt ("Heute: 3 kWh | Morgen: 27 kWh"), auf ganze kWh gerundet. "Übermorgen" erscheint nur, wenn dieser Tag vollständig (alle 24 Stunden) in den Daten enthalten ist
+
 == 0.0.35.1
 
 * Anwesenheitsprognose: neue feste Sicherheits-Heuristik - je länger das Auto ununterbrochen abwesend ist (über eine normale Tagesabwesenheit hinaus), desto stärker wird die gelernte Rückkehrwahrscheinlichkeit gedeckelt, unabhängig davon, ob dafür schon eine vergleichbar lange Abwesenheit in der Historie beobachtet wurde (z.B. beim ersten Urlaub)
