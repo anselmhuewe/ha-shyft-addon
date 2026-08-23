@@ -1,3 +1,9 @@
+== 0.0.39.0
+
+* Neu: Fahrverhalten-/Verbrauchsprognose fürs Auto (erste Version) - erweitert die Anwesenheitsprognose um eine dritte Unterscheidung während "nicht eingesteckt": steht (nur Vampire Drain) vs. unterwegs (echter Fahrverbrauch), abgeleitet aus dem Akkustand-Verlauf (Rückgang ≥1%/h = unterwegs). Ein SOC-Anstieg während der Abwesenheit (Laden an einem Schnelllader o.ä., nicht der eigenen Wallbox) wird komplett herausgerechnet, verzerrt also weder die Zustands- noch die Verbrauchsstatistik
+* Neu: Eingabefeld "Akkukapazität (kWh)" unter "Auto" - wird benötigt, um Ladestandsänderungen der Autobatterie in kWh umzurechnen
+* Die Anwesenheitsprognose im "Ladestand Auto"-Chart zeigt jetzt drei Farben statt einer (grün eingesteckt, grau steht, rot unterwegs); darunter ein aufklappbarer 48h-Zahlenvektor mit der prognostizierten stündlichen Verbrauchsprognose (kWh) - vorerst nur zur Ansicht, das Einspeisen in shyft-powers input_csv folgt erst mit der geplanten Verlagerung der Optimierungslogik ins Addon
+
 == 0.0.38.0
 
 * Neu: dauerhafte Websocket-Verbindung zu Home Assistant (live_entity_watcher.py) - reagiert sofort auf Sensoränderungen statt auf den nächsten Polling-Zyklus zu warten. Aktuell angeschlossen: Netzeinspeisung (löst ab 0,1 kW Änderung sofort eine PV-Überschussladen-Neubewertung aus, statt bis zu 5 Minuten zu warten) und Wallbox-Verbindungsstatus (sofortiger Log-Eintrag für die Anwesenheitsprognose + sofortige PV-Überschuss-Neubewertung, z.B. bei Abstecken). Die bisherigen Polling-Jobs laufen als Sicherheitsnetz weiter, falls die Websocket-Verbindung mal steht; die Sensor-Zuordnung wird bei jedem automatischen Reconnect (alle 30 Minuten oder bei Verbindungsabbruch) neu aus der Konfiguration gelesen, wirkt eine Änderung also ohne Addon-Neustart

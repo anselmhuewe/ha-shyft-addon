@@ -505,7 +505,8 @@ async function saveConfigurationNow() {
         "hotWaterRecipe": hotWaterRecipe,
         "notificationTargets": notificationTargets,
         "notificationsEnabled": notificationsEnabled,
-        "wallboxConnectionStatusMapping": configData["wallboxConnectionStatusMapping"] || {}
+        "wallboxConnectionStatusMapping": configData["wallboxConnectionStatusMapping"] || {},
+        "carBatteryCapacityKwh": configData["carBatteryCapacityKwh"] ?? null
     };
     const response = await putJson(configUri, toBeWritten);
     configData = response;
@@ -1012,6 +1013,9 @@ function renderSectionBody(bodyDiv, section, entryIds) {
         if (section.key === 'wallbox') {
             bodyDiv.appendChild(buildWallboxConnectionStatusMapping());
         }
+        if (section.key === 'auto') {
+            bodyDiv.appendChild(buildCarBatteryCapacityField());
+        }
     }
 
     const manualActions = section.actions.filter(key => !AUTO_MANAGED_ACTION_KEYS.has(key) && !CAR_CHARGE_ACTION_KEYS.has(key) && !HOT_WATER_ACTION_KEYS.has(key));
@@ -1127,6 +1131,39 @@ function buildWallboxConnectionStatusMapping() {
         }
     })();
 
+    return wrapper;
+}
+
+// Reine Konfigurationszahl (keine Entity-Zuordnung) - Shyft braucht sie, um Ladestandsänderungen
+// der Autobatterie in kWh umzurechnen (siehe Verbrauchsprognose).
+function buildCarBatteryCapacityField() {
+    const wrapper = document.createElement('div');
+    const table = document.createElement('table');
+    const tbody = document.createElement('tbody');
+    const row = document.createElement('tr');
+    const labelCell = document.createElement('td');
+    labelCell.textContent = 'Akkukapazität (kWh)';
+    labelCell.appendChild(buildTooltip('Diese Angabe benötigt Shyft zur Umrechnung von Ladestandsänderungen der Autobatterie in Stromverbrauch.'));
+    const valueCell = document.createElement('td');
+    const input = document.createElement('input');
+    input.type = 'number';
+    input.id = 'car_battery_capacity_kwh';
+    input.className = 'sensorInput';
+    input.min = '0';
+    input.step = '0.1';
+    input.placeholder = 'z.B. 60';
+    input.value = configData['carBatteryCapacityKwh'] || '';
+    input.addEventListener('change', () => {
+        const parsed = parseFloat(input.value);
+        configData['carBatteryCapacityKwh'] = isNaN(parsed) ? null : parsed;
+        autoSave();
+    });
+    valueCell.appendChild(input);
+    row.appendChild(labelCell);
+    row.appendChild(valueCell);
+    tbody.appendChild(row);
+    table.appendChild(tbody);
+    wrapper.appendChild(table);
     return wrapper;
 }
 
@@ -2462,7 +2499,7 @@ function buildLineChart(title, unit, labels, values, options = {}) {
     if (presenceForecast) {
         const caption = document.createElement('div');
         caption.className = 'dashboardChartCaption';
-        caption.textContent = 'Balken: Prognose "Auto eingesteckt" (nächste 48h)';
+        caption.textContent = 'Balken: Anwesenheitsprognose (nächste 48h) - grün eingesteckt, grau steht, rot unterwegs';
         wrapper.appendChild(caption);
     }
 
@@ -2604,17 +2641,26 @@ function buildLineChart(title, unit, labels, values, options = {}) {
     // Anwesenheitsprognose overlay: one cell per point in THIS chart's own x-scale (not the
     // forecast's own 48-point grid) - looked up by exact ISO-hour label match - so it stays
     // pixel-aligned with the SOC line above it instead of drawing a second, slightly-offset axis.
-    // Cells with no matching forecast hour (out of the 48h window) are simply left blank.
+    // Cells with no matching forecast hour (out of the 48h window) are simply left blank. Each
+    // cell shows the single MOST LIKELY of the three Zustände (eingesteckt/steht/unterwegs) in its
+    // own color, opacity = that state's own probability - a proportional 3-way stacked bar would
+    // be unreadable at this strip height (10px).
     let presenceMarkup = '';
     if (presenceForecast) {
         const barY = baseline + 6;
         const cellWidth = plotWidth / (points.length - 1 || 1);
         for (let i = 0; i < points.length; i++) {
-            const probability = presenceForecast.labelToProbability[labels[i]];
-            if (probability === undefined) continue;
-            const opacity = (0.1 + Math.max(0, Math.min(1, probability)) * 0.8).toFixed(2);
+            const byLabel = presenceForecast.byLabel[labels[i]];
+            if (byLabel === undefined) continue;
+            const states = [
+                {p: byLabel.connected, color: 'var(--color-accent)'},
+                {p: byLabel.standing, color: 'var(--color-text-secondary)'},
+                {p: byLabel.driving, color: 'var(--color-error)'},
+            ];
+            const best = states.reduce((a, b) => (b.p > a.p ? b : a));
+            const opacity = (0.1 + Math.max(0, Math.min(1, best.p)) * 0.8).toFixed(2);
             const x = (points[i][0] - cellWidth / 2).toFixed(1);
-            presenceMarkup += `<rect x="${x}" y="${barY.toFixed(1)}" width="${cellWidth.toFixed(1)}" height="10" fill="var(--color-accent)" opacity="${opacity}" />`;
+            presenceMarkup += `<rect x="${x}" y="${barY.toFixed(1)}" width="${cellWidth.toFixed(1)}" height="10" fill="${best.color}" opacity="${opacity}" />`;
         }
     }
 
@@ -2660,6 +2706,23 @@ function buildLineChart(title, unit, labels, values, options = {}) {
     svgEl.addEventListener('touchmove', e => { if (e.touches[0]) showTooltip(e.touches[0].clientX); }, {passive: true});
 
     return wrapper;
+}
+
+// Einfacher, aufklappbarer Zahlenvektor der für die nächsten 48h prognostizierten Verbräuche
+// (kWh) - erstmal ohne eigenes Diagramm, bis die input.csv-Erzeugung selbst ins Addon wandert.
+function buildCarConsumptionForecastDetails(labels, consumptionKwh) {
+    const details = document.createElement('details');
+    details.className = 'dashboardConsumptionForecast';
+    const summary = document.createElement('summary');
+    summary.textContent = 'Verbrauchsprognose (48h) anzeigen';
+    details.appendChild(summary);
+    const pre = document.createElement('pre');
+    pre.textContent = labels.map((label, i) => {
+        const timeText = new Date(label).toLocaleString('de-DE', {weekday: 'short', hour: '2-digit', minute: '2-digit'}).replace('.', '');
+        return `${timeText}: ${consumptionKwh[i].toFixed(2)} kWh`;
+    }).join('\n');
+    details.appendChild(pre);
+    return details;
 }
 
 async function loadDashboard() {
@@ -2710,12 +2773,20 @@ async function loadDashboard() {
         // gepflegt, oder noch keine Historie vorhanden) just means the chart renders without the
         // overlay bar, not that the whole Dashboard-tab fails
         let presenceForecast = null;
+        let consumptionForecast = null;
         try {
             const presenceData = await getJson(insideHomeAssistant + '/dashboard/car-presence-forecast');
             if (presenceData.status === 'success') {
-                const labelToProbability = {};
-                presenceData.labels.forEach((label, i) => { labelToProbability[label] = presenceData.probabilities[i]; });
-                presenceForecast = {labelToProbability};
+                const byLabel = {};
+                presenceData.labels.forEach((label, i) => {
+                    byLabel[label] = {
+                        connected: presenceData.probabilities[i],
+                        standing: presenceData.standingProbabilities[i],
+                        driving: presenceData.drivingProbabilities[i],
+                    };
+                });
+                presenceForecast = {byLabel};
+                consumptionForecast = {labels: presenceData.labels, consumptionKwh: presenceData.consumptionKwh};
             }
         } catch (err) {
             console.log(err);
@@ -2727,6 +2798,9 @@ async function loadDashboard() {
             slopeBands: {riseColor: 'var(--color-accent)', dropColor: 'var(--color-error)', flatColor: 'var(--color-text-secondary)', bigDropThreshold: 0.1},
             presenceForecast,
         }));
+        if (consumptionForecast) {
+            container.appendChild(buildCarConsumptionForecastDetails(consumptionForecast.labels, consumptionForecast.consumptionKwh));
+        }
     } catch (err) {
         console.log(err);
         container.innerHTML = '';

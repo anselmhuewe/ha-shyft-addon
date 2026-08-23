@@ -55,6 +55,16 @@ CAR_PRESENCE_AWAY_CEILING_FLOOR = 0.02
 # +15% relativ zur gelernten Rate - bewusst schwach, da eine niedrige Reichweite unterwegs genauso
 # gut "fährt zum Schnelllader" bedeuten kann wie "fährt bald nach Hause".
 CAR_PRESENCE_SOC_INFLUENCE = 0.15
+# Feste Grenze (nicht gelernt) zwischen "steht nur" (Vampire Drain) und "unterwegs" - ein SOC-
+# Rückgang pro Stunde unterhalb dieser Schwelle zählt als Standzeit, darüber als Fahrt. Der
+# tatsächliche kWh-Verbrauchswert unterscheidet sich dadurch NICHT (ein kleiner Fahrt-Verbrauch
+# sieht rechnerisch genauso aus wie Vampire Drain) - die Schwelle dient nur der Einfärbung.
+CAR_VAMPIRE_DRAIN_THRESHOLD_PCT_PER_HOUR = 1.0
+# Ein SOC-Delta wird nur einer einzelnen Stunde zugerechnet, wenn der vorherige Log-Eintrag nicht
+# allzu lange zurückliegt - sonst würde z.B. ein mehrtägiger Addon-Ausfall faelschlich als ein
+# einzelner Mega-Verbrauch in einer Stunde verbucht und würde die gelernten Durchschnittswerte
+# verzerren.
+CAR_PRESENCE_MAX_GAP_HOURS_FOR_DELTA = 2
 PV_SURPLUS_ACTIONS_PATH = "/data/pv_surplus_actions.json"
 PV_SURPLUS_ACTIONS_MAX_DAYS = 14
 # Startschwelle (Netzeinspeisung, kW - negativ = Einspeisung): strenger ohne Heimspeicher, da dort
@@ -285,11 +295,48 @@ def sync_car_presence_log():
         _sync_car_presence_log_impl()
 
 
+def _classify_away_state_and_consumption(prev_entry, hour_dt, current_soc, battery_capacity_kwh):
+    """Leitet aus dem SOC-Verlauf ab, ob eine abwesende Stunde "steht" oder "unterwegs" war, und
+    den dabei verbrauchten Strom (kWh) - dieselbe Zahl unabhängig von der Einfärbung (siehe
+    CAR_VAMPIRE_DRAIN_THRESHOLD_PCT_PER_HOUR). Ein SOC-ANSTIEG während der Abwesenheit ist eine
+    Fremdladung (Schnelllader o.ä., nicht die eigene Wallbox) - wird komplett ausgeklammert statt
+    als "kein/negativer Verbrauch" gezählt, damit weder die Fahrleistungs-Statistik noch die
+    Zustands-Klassifikation dadurch verfälscht wird. Gibt (state, consumption_kwh) zurück, beides
+    None, wenn sich aus den Daten nichts Belastbares ableiten lässt."""
+    if current_soc is None or prev_entry is None:
+        return None, None
+    prev_soc = prev_entry.get("soc")
+    if prev_soc is None:
+        return None, None
+    try:
+        prev_hour_dt = datetime.fromisoformat(prev_entry["hour"])
+    except Exception:
+        return None, None
+    gap_hours = (hour_dt - prev_hour_dt).total_seconds() / 3600
+    if gap_hours <= 0 or gap_hours > CAR_PRESENCE_MAX_GAP_HOURS_FOR_DELTA:
+        return None, None
+
+    delta_pct = current_soc - prev_soc
+    if delta_pct > 0:
+        return None, None  # Fremdladung waehrend der Abwesenheit - ausklammern
+
+    drop_pct = -delta_pct
+    state = "unterwegs" if drop_pct >= CAR_VAMPIRE_DRAIN_THRESHOLD_PCT_PER_HOUR else "steht"
+    consumption_kwh = round(drop_pct / 100 * battery_capacity_kwh, 3) if battery_capacity_kwh else None
+    return state, consumption_kwh
+
+
 def _sync_car_presence_log_impl():
     """Hourly snapshot of the classified Wallbox-Verbindungsstatus (siehe
     classify_wallbox_connection_state) - die Grundlage der Anwesenheitsprognose. Ein noch nicht
     zugeordneter Statuswert wird übersprungen statt geraten, damit die Historie nicht mit falschen
-    Labels verunreinigt wird."""
+    Labels verunreinigt wird. Solange nicht eingesteckt, wird zusätzlich der Autobatterie-SOC
+    mitgeloggt (siehe _classify_away_state_and_consumption) - Grundlage für die Fahrverhalten-/
+    Verbrauchsprognose. Der SOC wird IMMER mitgeloggt (auch eingesteckt, siehe unten der Vollständigkeit
+    halber - Ladevorgänge selbst fließen nicht in die Verbrauchsschätzung ein, siehe oben), damit
+    für jede Stunde ein Vorwert für die Delta-Berechnung existiert. Vampire Drain kann übrigens
+    auch bei eingestecktem, aber gerade nicht ladendem Stecker auftreten - das ändert nichts an der
+    Klassifikation "eingesteckt", nur die Konsequenz "kein State/kein Verbrauch wird dafür berechnet"."""
     config = _read_current_config()
     entity_id = config.get("sensorMappings", {}).get("wallbox_plugged", "")
     if not entity_id:
@@ -304,18 +351,38 @@ def _sync_car_presence_log_impl():
     if connected is None:
         return
 
-    hour_iso = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0).isoformat()
+    hour_dt = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
+    hour_iso = hour_dt.isoformat()
     try:
         with open(CAR_PRESENCE_LOG_PATH, "r") as f:
             log = json.load(f)
     except Exception:
         log = []
 
-    log = [entry for entry in log if entry.get("hour") != hour_iso]
-    log.append({"hour": hour_iso, "connected": connected})
+    prev_entry = max((e for e in log if e.get("hour", "") < hour_iso), key=lambda e: e["hour"], default=None)
+
+    soc_entity_id = config.get("sensorMappings", {}).get("electronicvehicle_state_of_charge", "")
+    current_soc = None
+    if soc_entity_id:
+        try:
+            current_soc = homeassistant_adapter.read_entity_numeric_value(soc_entity_id)
+        except Exception:
+            current_soc = None
+
+    entry = {"hour": hour_iso, "connected": connected, "soc": current_soc}
+    if not connected:
+        battery_capacity_kwh = config.get("carBatteryCapacityKwh")
+        state, consumption_kwh = _classify_away_state_and_consumption(prev_entry, hour_dt, current_soc, battery_capacity_kwh)
+        if state is not None:
+            entry["state"] = state
+        if consumption_kwh is not None:
+            entry["consumption_kwh"] = consumption_kwh
+
+    log = [e for e in log if e.get("hour") != hour_iso]
+    log.append(entry)
     cutoff = (datetime.now(timezone.utc) - timedelta(days=CAR_PRESENCE_LOG_MAX_DAYS)).isoformat()
-    log = [entry for entry in log if entry.get("hour", "") >= cutoff]
-    log.sort(key=lambda entry: entry["hour"])
+    log = [e for e in log if e.get("hour", "") >= cutoff]
+    log.sort(key=lambda e: e["hour"])
 
     try:
         with open(CAR_PRESENCE_LOG_PATH, "w") as f:
@@ -354,15 +421,25 @@ def compute_hours_away(by_hour, current_connected, now_hour):
     return hours
 
 
+# Cold-Start-Defaults, bevor genug eigene Fahrhistorie existiert - bewusst konservativ (die
+# meisten abwesenden Stunden sind Standzeit anderswo, nicht aktives Fahren) statt eine Zahl ohne
+# Datengrundlage vorzutäuschen.
+CAR_DRIVING_FRACTION_DEFAULT = 0.15
+CAR_CONSUMPTION_DEFAULT_KWH = 0.0
+
+
 def compute_car_presence_forecast():
-    """Builds a 48h-ahead, hourly Anwesenheitsprognose ("wird das Auto eingesteckt sein") from
-    CAR_PRESENCE_LOG_PATH - a time-inhomogeneous Markov chain keyed by (Wochentag, Stunde,
-    aktueller Zustand), forward-simuliert Stunde für Stunde ab dem live beobachteten Zustand. Ein
-    Bucket mit zu wenigen historischen Beobachtungen fällt auf eine gröbere Ebene zurück (erst
-    ohne Zustand, dann auf die Gesamtquote) statt eine unsichere Zahl vorzutäuschen. Zusätzlich
-    wird die gelernte away->home-Übergangswahrscheinlichkeit durch eine feste Verweildauer-
-    Sicherheitsheuristik gedeckelt (away_return_ceiling) und leicht durch den aktuellen Akkustand
-    moduliert (car_soc_connect_factor)."""
+    """Builds a 48h-ahead, hourly Anwesenheits- UND Fahrverhalten-/Verbrauchsprognose aus
+    CAR_PRESENCE_LOG_PATH. Der eingesteckt/abwesend-Teil ist eine time-inhomogene Markov-Kette
+    (Wochentag, Stunde, aktueller Zustand), forward-simuliert ab dem live beobachteten Zustand -
+    unverändert gegenüber der ursprünglichen Anwesenheitsprognose. Zusätzlich wird jede als
+    "abwesend" geloggte Stunde (siehe _classify_away_state_and_consumption) in "steht" vs.
+    "unterwegs" aufgeteilt: die abwesend-Wahrscheinlichkeit einer Stunde wird mit dem historischen
+    Anteil "unterwegs" an diesem (Wochentag, Stunde)-Bucket multipliziert (reine Randverteilung,
+    kein eigenes Markov-Modell - "innerhalb der bestehenden Pipeline", nicht komplexer als nötig),
+    und die erwarteten kWh sind diese Wahrscheinlichkeit mal der historisch durchschnittliche
+    Verbrauch in diesem Bucket. Ein Bucket mit zu wenigen historischen Beobachtungen fällt auf eine
+    gröbere Ebene zurück statt eine unsichere Zahl vorzutäuschen."""
     try:
         with open(CAR_PRESENCE_LOG_PATH, "r") as f:
             log = json.load(f)
@@ -372,23 +449,46 @@ def compute_car_presence_forecast():
     entries = []
     for item in log:
         try:
-            entries.append((datetime.fromisoformat(item["hour"]), bool(item["connected"])))
+            entries.append((datetime.fromisoformat(item["hour"]), bool(item["connected"]), item))
         except Exception:
             continue
     entries.sort(key=lambda e: e[0])
-    by_hour = {ts: connected for ts, connected in entries}
+    by_hour = {ts: connected for ts, connected, _ in entries}
 
     transitions_by_state = {}  # (weekday, hour, from_connected) -> [outcomes]
     marginal = {}              # (weekday, hour) -> [outcomes]
     overall = []
-    for ts, connected in entries:
+    away_state_counts = {}     # (weekday, hour) -> {"steht": n, "unterwegs": n}
+    consumption_samples = {}   # (weekday, hour) -> [kWh, nur "unterwegs"]
+    overall_away_states = []   # alle "steht"/"unterwegs"-Labels, fuer den globalen Fallback-Anteil
+    overall_consumption = []   # alle kWh-Werte "unterwegs", fuer den globalen Fallback-Durchschnitt
+
+    for ts, connected, item in entries:
         overall.append(connected)
         marginal.setdefault((ts.weekday(), ts.hour), []).append(connected)
         next_ts = ts + timedelta(hours=1)
         if next_ts in by_hour:
             transitions_by_state.setdefault((ts.weekday(), ts.hour, connected), []).append(by_hour[next_ts])
 
+        away_state = item.get("state")
+        if not connected and away_state in ("steht", "unterwegs"):
+            bucket = away_state_counts.setdefault((ts.weekday(), ts.hour), {"steht": 0, "unterwegs": 0})
+            bucket[away_state] += 1
+            overall_away_states.append(away_state)
+            consumption_kwh = item.get("consumption_kwh")
+            if away_state == "unterwegs" and consumption_kwh is not None:
+                consumption_samples.setdefault((ts.weekday(), ts.hour), []).append(consumption_kwh)
+                overall_consumption.append(consumption_kwh)
+
     overall_rate = (sum(overall) / len(overall)) if overall else 0.5
+    overall_driving_fraction = (
+        overall_away_states.count("unterwegs") / len(overall_away_states)
+        if overall_away_states else CAR_DRIVING_FRACTION_DEFAULT
+    )
+    overall_avg_consumption = (
+        sum(overall_consumption) / len(overall_consumption)
+        if overall_consumption else CAR_CONSUMPTION_DEFAULT_KWH
+    )
 
     def marginal_rate(weekday, hour):
         samples = marginal.get((weekday, hour), [])
@@ -401,6 +501,19 @@ def compute_car_presence_forecast():
         if len(samples) >= CAR_PRESENCE_MIN_SAMPLES:
             return sum(samples) / len(samples)
         return marginal_rate(weekday, hour)
+
+    def driving_fraction(weekday, hour):
+        counts = away_state_counts.get((weekday, hour))
+        total = (counts["steht"] + counts["unterwegs"]) if counts else 0
+        if not counts or total < CAR_PRESENCE_MIN_SAMPLES:
+            return overall_driving_fraction
+        return counts["unterwegs"] / total
+
+    def expected_consumption_when_driving(weekday, hour):
+        samples = consumption_samples.get((weekday, hour), [])
+        if len(samples) < CAR_PRESENCE_MIN_SAMPLES:
+            return overall_avg_consumption
+        return sum(samples) / len(samples)
 
     config = _read_current_config()
     sensor_mappings = config.get("sensorMappings", {})
@@ -439,13 +552,33 @@ def compute_car_presence_forecast():
         p = p * p_home_given_home + (1 - p) * p_home_given_away
         probabilities.append(p)
 
-    return labels, probabilities
+    standing_probabilities = []
+    driving_probabilities = []
+    consumption_kwh_forecast = []
+    for i in range(48):
+        ts_i = start + timedelta(hours=i)
+        p_away = 1 - probabilities[i]
+        frac_driving = driving_fraction(ts_i.weekday(), ts_i.hour)
+        p_driving = p_away * frac_driving
+        p_standing = p_away * (1 - frac_driving)
+        standing_probabilities.append(p_standing)
+        driving_probabilities.append(p_driving)
+        consumption_kwh_forecast.append(p_driving * expected_consumption_when_driving(ts_i.weekday(), ts_i.hour))
+
+    return labels, probabilities, standing_probabilities, driving_probabilities, consumption_kwh_forecast
 
 
 @app.route("/dashboard/car-presence-forecast", methods=["GET"])
 def carPresenceForecast():
-    labels, probabilities = compute_car_presence_forecast()
-    return jsonify({"status": "success", "labels": labels, "probabilities": [round(p, 3) for p in probabilities]})
+    labels, probabilities, standing_probabilities, driving_probabilities, consumption_kwh_forecast = compute_car_presence_forecast()
+    return jsonify({
+        "status": "success",
+        "labels": labels,
+        "probabilities": [round(p, 3) for p in probabilities],
+        "standingProbabilities": [round(p, 3) for p in standing_probabilities],
+        "drivingProbabilities": [round(p, 3) for p in driving_probabilities],
+        "consumptionKwh": [round(v, 3) for v in consumption_kwh_forecast],
+    })
 
 
 def mapToResponse(response):
