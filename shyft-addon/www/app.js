@@ -2366,16 +2366,26 @@ function showShyftActionsError(container) {
 
 // "Heute: 3 kWh | Morgen: 23 kWh | Übermorgen: 22 kWh" - the remaining/full PV-Ertrag per
 // Kalendertag (lokale Zeit), summiert aus den stündlichen kW-Werten (ein kW-Wert über eine Stunde
-// ist per Definition eine kWh). "Heute" zählt nur noch nicht vergangene Stunden. "Übermorgen"
-// erscheint nur, wenn alle 24 Stunden dieses Tages tatsächlich in den Daten stecken (sonst wäre es
-// eine irreführend niedrige Teilsumme, die wie der volle Tagesertrag aussähe).
+// ist per Definition eine kWh). "Heute" zählt nur noch nicht vergangene Stunden.
+//
+// Ein 48h-Fenster kann rechnerisch NIE alle 24 Kalenderstunden von "Übermorgen" enthalten (Heute
+// + Morgen allein verbrauchen schon mindestens 24h davon) - "vollständig" heißt hier deshalb
+// nicht "Mitternacht bis Mitternacht", sondern "die PV-Erzeugung ist erkennbar auf 0 gefallen":
+// sobald ab PV_COMPLETE_CHECK_FROM_HOUR (17 Uhr - spätestens 21 Uhr wäre auch im Hochsommer sicher,
+// im Winter geht die Sonne aber teils schon um 17 Uhr unter) ein Wert nahe 0 auftaucht, gilt der
+// Tag als abgeschlossen; ein erneuter Anstieg danach ist im selben Kalendertag praktisch
+// ausgeschlossen. "Morgen" bekommt dieselbe Prüfung (schadet nicht, greift im 48h-Fenster aber
+// nie), nur "Heute" ist bewusst ausgenommen, da dort absichtlich nur die Teilsumme gezeigt wird.
 function formatPvEnergySummary(labels, values) {
+    const PV_ZERO_THRESHOLD_KW = 0.05;
+    const PV_COMPLETE_CHECK_FROM_HOUR = 17;
     const now = new Date();
     const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
     const currentHourStart = new Date(now.getFullYear(), now.getMonth(), now.getDate(), now.getHours());
     const dayLabels = ['Heute', 'Morgen', 'Übermorgen'];
     const sums = [0, 0, 0];
-    const hoursSeen = [new Set(), new Set(), new Set()];
+    const hasData = [false, false, false];
+    const reachedZeroInEvening = [false, false, false];
 
     for (let i = 0; i < labels.length; i++) {
         const d = new Date(labels[i]);
@@ -2384,13 +2394,16 @@ function formatPvEnergySummary(labels, values) {
         if (dayOffset < 0 || dayOffset > 2) continue;
         if (dayOffset === 0 && d < currentHourStart) continue; // schon vergangene Stunde
         sums[dayOffset] += values[i];
-        hoursSeen[dayOffset].add(d.getHours());
+        hasData[dayOffset] = true;
+        if (d.getHours() >= PV_COMPLETE_CHECK_FROM_HOUR && values[i] <= PV_ZERO_THRESHOLD_KW) {
+            reachedZeroInEvening[dayOffset] = true;
+        }
     }
 
     const parts = [];
     for (let offset = 0; offset < 3; offset++) {
-        if (hoursSeen[offset].size === 0) continue;
-        if (offset === 2 && hoursSeen[2].size < 24) continue;
+        if (!hasData[offset]) continue;
+        if (offset > 0 && !reachedZeroInEvening[offset]) continue;
         parts.push(`${dayLabels[offset]}: ${Math.round(sums[offset])} kWh`);
     }
     return parts.join(' | ');
