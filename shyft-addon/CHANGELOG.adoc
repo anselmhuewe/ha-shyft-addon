@@ -1,3 +1,9 @@
+== 0.0.35.0
+
+* Neu: Anwesenheitsprognose fürs Auto (erste Version) - lernt aus der Historie des Sensors "Wallbox: Auto verbunden?", wann das Auto typischerweise eingesteckt ist (Wochentag/Stunde-Muster, reagiert auch kurzfristig auf eine unerwartete aktuelle Abwesenheit/Anwesenheit)
+* Neu: unter "Wallbox: Auto verbunden?" können die bei dir tatsächlich vorkommenden Sensor-Statuswerte (z.B. "awaiting_authorization") einmalig als "Auto kann laden" oder "Auto kann nicht laden" zugeordnet werden - nötig, weil jede Wallbox-Integration ihr eigenes Vokabular für diesen Status verwendet
+* Die Prognose für die nächsten 48 Stunden wird als Balken im "Ladestand Auto"-Diagramm auf dem Dashboard angezeigt (dunkler = wahrscheinlicher eingesteckt)
+
 == 0.0.34.1
 
 * Ladestand Heimspeicher/Auto: Y-Achse ist jetzt fix auf 0-100 % skaliert, statt sich am tatsächlichen Wertebereich zu orientieren

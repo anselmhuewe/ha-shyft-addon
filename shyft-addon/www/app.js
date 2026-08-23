@@ -504,7 +504,8 @@ async function saveConfigurationNow() {
         "carChargeRecipe": carChargeRecipe,
         "hotWaterRecipe": hotWaterRecipe,
         "notificationTargets": notificationTargets,
-        "notificationsEnabled": notificationsEnabled
+        "notificationsEnabled": notificationsEnabled,
+        "wallboxConnectionStatusMapping": configData["wallboxConnectionStatusMapping"] || {}
     };
     const response = await putJson(configUri, toBeWritten);
     configData = response;
@@ -1007,6 +1008,10 @@ function renderSectionBody(bodyDiv, section, entryIds) {
         bodyDiv.appendChild(sensorsHeading);
 
         bodyDiv.appendChild(buildMappingTable(section.sensors, configData["sensorMappings"] || {}, helpinformation, VALUE_POSTFIX, key => sensorDatalistIds[key], true));
+
+        if (section.key === 'wallbox') {
+            bodyDiv.appendChild(buildWallboxConnectionStatusMapping());
+        }
     }
 
     const manualActions = section.actions.filter(key => !AUTO_MANAGED_ACTION_KEYS.has(key) && !CAR_CHARGE_ACTION_KEYS.has(key) && !HOT_WATER_ACTION_KEYS.has(key));
@@ -1036,6 +1041,93 @@ function renderSectionBody(bodyDiv, section, entryIds) {
     if (hasHotWater) {
         bodyDiv.appendChild(buildHotWaterControl());
     }
+}
+
+// Lets the user classify each status value that has actually shown up on their "Wallbox: Auto
+// verbunden?" sensor as "Auto kann laden" (physisch eingesteckt) oder "Auto kann nicht laden"
+// (abwesend) - needed because most Wallbox-Integrationen ihren eigenen, nicht standardisierten
+// Wortschatz für diesen Status verwenden (z.B. "awaiting_authorization"), den das Addon nicht im
+// Voraus kennen kann. Diese Zuordnung speist die Anwesenheitsprognose (siehe
+// /dashboard/car-presence-forecast).
+function buildWallboxConnectionStatusMapping() {
+    const wrapper = document.createElement('div');
+    wrapper.className = 'wallboxStatusMapping';
+
+    const heading = document.createElement('div');
+    heading.className = 'sectionSubHeading';
+    heading.textContent = 'Status-Zuordnung für Anwesenheitsprognose';
+    heading.appendChild(buildTooltip('Ordne jedem bei dir tatsächlich vorkommenden Wert von "Wallbox: Auto verbunden?" zu, ob er bedeutet, dass das Auto gerade laden kann (physisch eingesteckt) oder nicht (abwesend). Daraus lernt shyft-power mit der Zeit, wann dein Auto typischerweise eingesteckt ist.'));
+    wrapper.appendChild(heading);
+
+    const table = document.createElement('table');
+    const tbody = document.createElement('tbody');
+    table.appendChild(tbody);
+    wrapper.appendChild(table);
+
+    function renderMessageRow(text) {
+        tbody.innerHTML = '';
+        const row = document.createElement('tr');
+        const cell = document.createElement('td');
+        cell.colSpan = 2;
+        cell.textContent = text;
+        row.appendChild(cell);
+        tbody.appendChild(row);
+    }
+
+    renderMessageRow('Lade beobachtete Status-Werte...');
+
+    (async () => {
+        let options = [];
+        try {
+            options = await getJson(insideHomeAssistant + '/wallbox-connection-status-options');
+        } catch (err) {
+            console.log(err);
+        }
+        if (options.length === 0) {
+            renderMessageRow('Noch keine Status-Werte beobachtet - sobald "Wallbox: Auto verbunden?" befüllt ist und Werte vorliegen, erscheinen sie hier.');
+            return;
+        }
+        tbody.innerHTML = '';
+        const mapping = configData['wallboxConnectionStatusMapping'] || {};
+        for (const value of options) {
+            const row = document.createElement('tr');
+            const labelCell = document.createElement('td');
+            labelCell.textContent = value;
+            const selectCell = document.createElement('td');
+            const select = document.createElement('select');
+            select.className = 'sensorInput';
+            const unsetOption = document.createElement('option');
+            unsetOption.value = '';
+            unsetOption.textContent = '– noch nicht zugeordnet –';
+            select.appendChild(unsetOption);
+            const canChargeOption = document.createElement('option');
+            canChargeOption.value = 'true';
+            canChargeOption.textContent = 'Auto kann laden';
+            select.appendChild(canChargeOption);
+            const cannotChargeOption = document.createElement('option');
+            cannotChargeOption.value = 'false';
+            cannotChargeOption.textContent = 'Auto kann nicht laden';
+            select.appendChild(cannotChargeOption);
+            const current = mapping[value];
+            select.value = current === true ? 'true' : (current === false ? 'false' : '');
+            select.addEventListener('change', () => {
+                const updatedMapping = {...(configData['wallboxConnectionStatusMapping'] || {})};
+                if (select.value === '') {
+                    delete updatedMapping[value];
+                } else {
+                    updatedMapping[value] = select.value === 'true';
+                }
+                configData['wallboxConnectionStatusMapping'] = updatedMapping;
+                autoSave();
+            });
+            selectCell.appendChild(select);
+            row.appendChild(labelCell);
+            row.appendChild(selectCell);
+            tbody.appendChild(row);
+        }
+    })();
+
+    return wrapper;
 }
 
 function buildAutoActionTitle(control, toggleKey) {
@@ -2295,9 +2387,11 @@ function showShyftActionsError(container) {
 //                 should always show its full possible range (Ladestand)
 //   decimals    - digits shown in the hover/tap tooltip
 function buildLineChart(title, unit, labels, values, options = {}) {
-    const {stepped = false, colorBands = null, slopeBands = null, valueScale = 1, minY = null, fixedMin = null, fixedMax = null, decimals = 1, round = false, subtitle = ''} = options;
+    const {stepped = false, colorBands = null, slopeBands = null, valueScale = 1, minY = null, fixedMin = null, fixedMax = null, decimals = 1, round = false, subtitle = '', presenceForecast = null} = options;
     const width = 600, height = 220;
-    const paddingLeft = 45, paddingRight = 15, paddingTop = 15, paddingBottom = 26;
+    // presenceForecast reserves an extra strip just above the x-axis labels for the
+    // Anwesenheitsprognose overlay bar (see below)
+    const paddingLeft = 45, paddingRight = 15, paddingTop = 15, paddingBottom = presenceForecast ? 38 : 26;
     const plotWidth = width - paddingLeft - paddingRight;
     const plotHeight = height - paddingTop - paddingBottom;
 
@@ -2308,6 +2402,13 @@ function buildLineChart(title, unit, labels, values, options = {}) {
     const parenthetical = [subtitle, unit].filter(Boolean).join(', ');
     titleEl.textContent = title + (parenthetical ? ` (${parenthetical})` : '');
     wrapper.appendChild(titleEl);
+
+    if (presenceForecast) {
+        const caption = document.createElement('div');
+        caption.className = 'dashboardChartCaption';
+        caption.textContent = 'Balken: Prognose "Auto eingesteckt" (nächste 48h)';
+        wrapper.appendChild(caption);
+    }
 
     if (!values || values.length === 0) {
         const empty = document.createElement('p');
@@ -2444,6 +2545,23 @@ function buildLineChart(title, unit, labels, values, options = {}) {
         }
     }
 
+    // Anwesenheitsprognose overlay: one cell per point in THIS chart's own x-scale (not the
+    // forecast's own 48-point grid) - looked up by exact ISO-hour label match - so it stays
+    // pixel-aligned with the SOC line above it instead of drawing a second, slightly-offset axis.
+    // Cells with no matching forecast hour (out of the 48h window) are simply left blank.
+    let presenceMarkup = '';
+    if (presenceForecast) {
+        const barY = baseline + 6;
+        const cellWidth = plotWidth / (points.length - 1 || 1);
+        for (let i = 0; i < points.length; i++) {
+            const probability = presenceForecast.labelToProbability[labels[i]];
+            if (probability === undefined) continue;
+            const opacity = (0.1 + Math.max(0, Math.min(1, probability)) * 0.8).toFixed(2);
+            const x = (points[i][0] - cellWidth / 2).toFixed(1);
+            presenceMarkup += `<rect x="${x}" y="${barY.toFixed(1)}" width="${cellWidth.toFixed(1)}" height="10" fill="var(--color-accent)" opacity="${opacity}" />`;
+        }
+    }
+
     const chartContainer = document.createElement('div');
     chartContainer.className = 'dashboardChartContainer';
     chartContainer.innerHTML = `
@@ -2452,6 +2570,7 @@ function buildLineChart(title, unit, labels, values, options = {}) {
             <line x1="${paddingLeft}" y1="${baseline.toFixed(1)}" x2="${width - paddingRight}" y2="${baseline.toFixed(1)}" stroke="var(--color-border)" />
             ${areaMarkup}
             ${lineMarkup}
+            ${presenceMarkup}
             ${dayBoundaryMarkup}
             ${yLabels}
             ${xLabels}
@@ -2524,11 +2643,26 @@ async function loadDashboard() {
             fixedMax: 100,
             slopeBands: {riseColor: 'var(--color-accent)', dropColor: 'var(--color-error)', flatColor: 'var(--color-text-secondary)', bigDropThreshold: 0.1},
         }));
+        // best-effort: a missing/failed Anwesenheitsprognose (e.g. no wallbox-Status-Zuordnung
+        // gepflegt, oder noch keine Historie vorhanden) just means the chart renders without the
+        // overlay bar, not that the whole Dashboard-tab fails
+        let presenceForecast = null;
+        try {
+            const presenceData = await getJson(insideHomeAssistant + '/dashboard/car-presence-forecast');
+            if (presenceData.status === 'success') {
+                const labelToProbability = {};
+                presenceData.labels.forEach((label, i) => { labelToProbability[label] = presenceData.probabilities[i]; });
+                presenceForecast = {labelToProbability};
+            }
+        } catch (err) {
+            console.log(err);
+        }
         container.appendChild(buildLineChart('Ladestand Auto', '%', data.output_labels, data.soc_ev, {
             fixedMin: 0,
             fixedMax: 100,
             valueScale: 100,
             slopeBands: {riseColor: 'var(--color-accent)', dropColor: 'var(--color-error)', flatColor: 'var(--color-text-secondary)', bigDropThreshold: 0.1},
+            presenceForecast,
         }));
     } catch (err) {
         console.log(err);

@@ -39,6 +39,9 @@ DEVELOPMENT_MODE = False
 OPTIONS_PATH = "/data/options.json"
 CONFIG_PATH = "/data/config.json"
 DASHBOARD_CACHE_PATH = "/data/dashboard_cache.json"
+CAR_PRESENCE_LOG_PATH = "/data/car_presence_log.json"
+CAR_PRESENCE_LOG_MAX_DAYS = 180
+CAR_PRESENCE_MIN_SAMPLES = 3
 SUPERVISOR_TOKEN = os.getenv("SUPERVISOR_TOKEN")
 HASSIO_URI_RUNNING_ON_HAOS = "http://supervisor/core"
 HASSIO_URI_RUNNING_REMOTE = "http://homeassistant.local:8123"
@@ -191,6 +194,161 @@ def readDashboardChartData():
         "soc_b": soc_b,
         "soc_ev": soc_ev,
     })
+
+
+def get_wallbox_connection_status_options():
+    """Distinct state values ever observed for the mapped "Wallbox: Auto verbunden?" sensor.
+    Home Assistant only sometimes declares a sensor's possible states in advance (device_class
+    "enum" plus an "options" attribute) and most Wallbox-Integrationen don't bother - so this
+    falls back to whatever's actually shown up in HA's own recent history (however much the
+    recorder happens to retain), plus the entity's current live state so there's always at least
+    one value to classify, even right after a HA restart with a freshly purged recorder."""
+    entity_id = _read_current_config().get("sensorMappings", {}).get("wallbox_plugged", "")
+    if not entity_id:
+        return []
+    values = set()
+    try:
+        end = datetime.now(timezone.utc)
+        start = end - timedelta(days=10)
+        for element in homeassistant_adapter.load_entity_history(entity_id, start, end):
+            if element.state not in (None, "unknown", "unavailable"):
+                values.add(element.state)
+    except Exception as e:
+        print("[Shyft] Wallbox-Status-Historie konnte nicht geladen werden:", repr(e))
+    try:
+        current = homeassistant_adapter.load_entity_state(entity_id)
+        if current.state not in (None, "unknown", "unavailable"):
+            values.add(current.state)
+    except Exception as e:
+        print("[Shyft] Aktueller Wallbox-Status konnte nicht geladen werden:", repr(e))
+    return sorted(values)
+
+
+@app.route("/wallbox-connection-status-options", methods=["GET"])
+def wallboxConnectionStatusOptions():
+    return jsonify(get_wallbox_connection_status_options())
+
+
+def classify_wallbox_connection_state(state_value, config=None):
+    "True = Auto kann laden (physisch eingesteckt), False = Auto kann nicht laden (abwesend), None = vom Nutzer noch nicht zugeordnet"
+    config = config or _read_current_config()
+    return config.get("wallboxConnectionStatusMapping", {}).get(state_value)
+
+
+def sync_car_presence_log():
+    """Hourly snapshot of the classified Wallbox-Verbindungsstatus (siehe
+    classify_wallbox_connection_state) - die Grundlage der Anwesenheitsprognose. Ein noch nicht
+    zugeordneter Statuswert wird übersprungen statt geraten, damit die Historie nicht mit falschen
+    Labels verunreinigt wird."""
+    config = _read_current_config()
+    entity_id = config.get("sensorMappings", {}).get("wallbox_plugged", "")
+    if not entity_id:
+        return
+    try:
+        current = homeassistant_adapter.load_entity_state(entity_id)
+    except Exception as e:
+        print("[Shyft] Anwesenheits-Log: Wallbox-Status konnte nicht gelesen werden:", repr(e))
+        return
+
+    connected = classify_wallbox_connection_state(current.state, config)
+    if connected is None:
+        return
+
+    hour_iso = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0).isoformat()
+    try:
+        with open(CAR_PRESENCE_LOG_PATH, "r") as f:
+            log = json.load(f)
+    except Exception:
+        log = []
+
+    log = [entry for entry in log if entry.get("hour") != hour_iso]
+    log.append({"hour": hour_iso, "connected": connected})
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=CAR_PRESENCE_LOG_MAX_DAYS)).isoformat()
+    log = [entry for entry in log if entry.get("hour", "") >= cutoff]
+    log.sort(key=lambda entry: entry["hour"])
+
+    try:
+        with open(CAR_PRESENCE_LOG_PATH, "w") as f:
+            json.dump(log, f)
+    except Exception as e:
+        print("[Shyft] Anwesenheits-Log konnte nicht gespeichert werden:", repr(e))
+
+
+def compute_car_presence_forecast():
+    """Builds a 48h-ahead, hourly Anwesenheitsprognose ("wird das Auto eingesteckt sein") from
+    CAR_PRESENCE_LOG_PATH - a time-inhomogeneous Markov chain keyed by (Wochentag, Stunde,
+    aktueller Zustand), forward-simuliert Stunde für Stunde ab dem live beobachteten Zustand. Ein
+    Bucket mit zu wenigen historischen Beobachtungen fällt auf eine gröbere Ebene zurück (erst
+    ohne Zustand, dann auf die Gesamtquote) statt eine unsichere Zahl vorzutäuschen."""
+    try:
+        with open(CAR_PRESENCE_LOG_PATH, "r") as f:
+            log = json.load(f)
+    except Exception:
+        log = []
+
+    entries = []
+    for item in log:
+        try:
+            entries.append((datetime.fromisoformat(item["hour"]), bool(item["connected"])))
+        except Exception:
+            continue
+    entries.sort(key=lambda e: e[0])
+    by_hour = {ts: connected for ts, connected in entries}
+
+    transitions_by_state = {}  # (weekday, hour, from_connected) -> [outcomes]
+    marginal = {}              # (weekday, hour) -> [outcomes]
+    overall = []
+    for ts, connected in entries:
+        overall.append(connected)
+        marginal.setdefault((ts.weekday(), ts.hour), []).append(connected)
+        next_ts = ts + timedelta(hours=1)
+        if next_ts in by_hour:
+            transitions_by_state.setdefault((ts.weekday(), ts.hour, connected), []).append(by_hour[next_ts])
+
+    overall_rate = (sum(overall) / len(overall)) if overall else 0.5
+
+    def marginal_rate(weekday, hour):
+        samples = marginal.get((weekday, hour), [])
+        if len(samples) >= CAR_PRESENCE_MIN_SAMPLES:
+            return sum(samples) / len(samples)
+        return overall_rate
+
+    def transition_rate(weekday, hour, from_connected):
+        samples = transitions_by_state.get((weekday, hour, from_connected), [])
+        if len(samples) >= CAR_PRESENCE_MIN_SAMPLES:
+            return sum(samples) / len(samples)
+        return marginal_rate(weekday, hour)
+
+    config = _read_current_config()
+    entity_id = config.get("sensorMappings", {}).get("wallbox_plugged", "")
+    current_connected = None
+    if entity_id:
+        try:
+            current_state = homeassistant_adapter.load_entity_state(entity_id)
+            current_connected = classify_wallbox_connection_state(current_state.state, config)
+        except Exception as e:
+            print("[Shyft] Anwesenheitsprognose: aktueller Wallbox-Status konnte nicht gelesen werden:", repr(e))
+
+    start = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
+    labels = [(start + timedelta(hours=i)).isoformat() for i in range(48)]
+
+    probabilities = []
+    p = 1.0 if current_connected is True else (0.0 if current_connected is False else marginal_rate(start.weekday(), start.hour))
+    probabilities.append(p)
+    for i in range(1, 48):
+        source_ts = start + timedelta(hours=i - 1)
+        p_home_given_home = transition_rate(source_ts.weekday(), source_ts.hour, True)
+        p_home_given_away = transition_rate(source_ts.weekday(), source_ts.hour, False)
+        p = p * p_home_given_home + (1 - p) * p_home_given_away
+        probabilities.append(p)
+
+    return labels, probabilities
+
+
+@app.route("/dashboard/car-presence-forecast", methods=["GET"])
+def carPresenceForecast():
+    labels, probabilities = compute_car_presence_forecast()
+    return jsonify({"status": "success", "labels": labels, "probabilities": [round(p, 3) for p in probabilities]})
 
 
 def mapToResponse(response):
@@ -1245,6 +1403,10 @@ def sync_dashboard_chart_data_periodically():
     with app.app_context():
         sync_dashboard_chart_data()
 
+def sync_car_presence_log_periodically():
+    with app.app_context():
+        sync_car_presence_log()
+
 
 scheduler = BackgroundScheduler()
 scheduler.add_job(sync_sensors_periodically, 'cron', minute="55")
@@ -1255,6 +1417,9 @@ scheduler.add_job(sync_dashboard_chart_data_periodically, 'cron', minute="0")
 # on the hour and every 15 min after - actions can be created mid-hour for the current hour
 # and start immediately, so a coarser schedule would miss those until the next hour
 scheduler.add_job(process_shyft_actions_periodically, 'cron', minute="0,15,30,45")
+# on the hour, alongside the other hourly syncs - one snapshot per hour is exactly the
+# resolution the Anwesenheitsprognose needs (see compute_car_presence_forecast)
+scheduler.add_job(sync_car_presence_log_periodically, 'cron', minute="0")
 scheduler.start()
 
 
@@ -1292,5 +1457,10 @@ if __name__ == "__main__":
         sync_dashboard_chart_data()
     except Exception as e:
         print("Failed to sync dashboard chart data at startup:", repr(e))
+
+    try:
+        sync_car_presence_log()
+    except Exception as e:
+        print("Failed to sync car presence log at startup:", repr(e))
 
     app.run(host="0.0.0.0", port=8080)
