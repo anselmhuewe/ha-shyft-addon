@@ -1,3 +1,7 @@
+== 0.0.39.1
+
+* Behoben: die Erkennung der beobachteten Status-Werte für "Wallbox: Auto verbunden?" (Status-Zuordnung) konnte nie mehr als den gerade aktuellen Wert anzeigen. Ursache war ein fehlendes URL-Encoding beim Abruf der Sensor-Historie - ein "+" in der Zeitzonenangabe wurde von Home Assistant als Leerzeichen interpretiert und die Anfrage deshalb abgelehnt. Betroffene Nutzer sollten unter "Status-Zuordnung" erneut nachsehen, jetzt sollten alle in den letzten 10 Tagen beobachteten Werte auftauchen
+
 == 0.0.39.0
 
 * Neu: Fahrverhalten-/Verbrauchsprognose fürs Auto (erste Version) - erweitert die Anwesenheitsprognose um eine dritte Unterscheidung während "nicht eingesteckt": steht (nur Vampire Drain) vs. unterwegs (echter Fahrverbrauch), abgeleitet aus dem Akkustand-Verlauf (Rückgang ≥1%/h = unterwegs). Ein SOC-Anstieg während der Abwesenheit (Laden an einem Schnelllader o.ä., nicht der eigenen Wallbox) wird komplett herausgerechnet, verzerrt also weder die Zustands- noch die Verbrauchsstatistik

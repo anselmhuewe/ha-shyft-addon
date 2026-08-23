@@ -7,6 +7,7 @@ import requests
 import websocket
 import json
 import logging
+import urllib.parse
 
 UNIT_OF_MEASUREMENT_W = "W"
 UNIT_OF_MEASUREMENT_KW = "kW"
@@ -65,7 +66,16 @@ class HomeAssistantAdapter:
     def load_entity_history(self, sensor_id: str,
                             start_timestamp: datetime,
                             end_timestamp: datetime) -> [PeriodElement]:
-        query = "/api/history/period/" + start_timestamp.isoformat() + "?end_time=" + end_timestamp.isoformat() + "&filter_entity_id=" + sensor_id + "&minimal_response"
+        # start_timestamp sits in the URL PATH (before "?"), where a literal "+" (from the UTC
+        # offset, e.g. "+00:00") is not touched by query-string decoding, so it round-trips fine
+        # unescaped. end_time/filter_entity_id sit in the QUERY STRING though, where Home
+        # Assistant's request parsing treats "+" as a space (standard
+        # application/x-www-form-urlencoded semantics) - without escaping, "...+00:00" silently
+        # becomes "... 00:00", which HA then rejects as an invalid end_time. quote() with an empty
+        # safe-set escapes "+" (and ":") to their %XX form so they decode back correctly.
+        end_time_encoded = urllib.parse.quote(end_timestamp.isoformat(), safe="")
+        sensor_id_encoded = urllib.parse.quote(sensor_id, safe="")
+        query = "/api/history/period/" + start_timestamp.isoformat() + "?end_time=" + end_time_encoded + "&filter_entity_id=" + sensor_id_encoded + "&minimal_response"
         self._log_info("load_entity_history query " + query)
         response = self.get_from_homeassistant(query)
         self._log_info("load_entity_history result " + str(response))
@@ -78,8 +88,13 @@ class HomeAssistantAdapter:
             logger.info(log_message)
 
     def _map_to_period_element(self, response) -> [PeriodElement]:
+        if not isinstance(response, list):
+            # HA's history endpoint returns a list of lists on success; anything else (e.g. an
+            # error dict like {"message": "Invalid end_time"}) means the request itself failed -
+            # raise clearly here instead of letting a confusing KeyError(0)/TypeError surface
+            # further up.
+            raise Exception(f"Unexpected history response from Home Assistant (expected a list): {response}")
         time_buckets = {}
-        first_entry = response[0]
         unit = DEFAULT_UNIT_OF_MEASUREMENT
         try:
             unit = response[0][0]['attributes']['unit_of_measurement']
