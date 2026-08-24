@@ -1,3 +1,7 @@
+== 0.0.40.1
+
+* Der Warnhinweis zur Wallbox-Status-Zuordnung ist jetzt allgemein oben auf der Konfigurationsseite zu finden (statt als Banner nur unter "Status-Zuordnung") und erste Instanz einer künftig wachsenden Sammlung an "muss behoben werden, bevor Shyft funktioniert"-Hinweisen (/config/warnings). Er greift jetzt auch bei jedem noch nicht zugeordneten, aus der Integration (deklarierte Statuswerte) oder der Historie bekannten Statuswert, nicht mehr nur beim gerade aktuellen - und erscheint nur, wenn überhaupt eine Wallbox als Gerät ausgewählt ist
+
 == 0.0.40.0
 
 * Neu: Anwesenheits-/Verbrauchsprognose fürs Auto muss nicht mehr wochenlang organisch anwachsen - sobald eine (neue oder geänderte) Status-Zuordnung für "Wallbox: Auto verbunden?" gespeichert wird, rekonstruiert das Addon die Historie rückwirkend direkt aus Home Assistants Sensor-Historie (so weit der Recorder zurückreicht, i.d.R. mindestens 10 Tage)

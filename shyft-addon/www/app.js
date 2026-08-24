@@ -519,6 +519,29 @@ async function saveConfigurationNow() {
 
 let saveStatusTimeout = null;
 
+// Sammelstelle fuer Konfigurations-Warnhinweise ("muss behoben werden, bevor Shyft
+// funktioniert") oben auf der Konfigurationsseite - aktuell nur die unvollstaendige
+// Wallbox-Status-Zuordnung, siehe compute_config_warnings in app.py fuer den Ausbau.
+async function renderConfigWarnings() {
+    const container = document.getElementById('configWarnings');
+    if (!container) return;
+    let warnings = [];
+    try {
+        const result = await getJson(insideHomeAssistant + '/config/warnings');
+        warnings = result.warnings || [];
+    } catch (err) {
+        console.log(err);
+        return;
+    }
+    container.innerHTML = '';
+    for (const warning of warnings) {
+        const item = document.createElement('div');
+        item.className = 'configWarningItem';
+        item.textContent = '⚠ ' + warning.message;
+        container.appendChild(item);
+    }
+}
+
 async function autoSave() {
     const statusElement = document.getElementById('saveStatus');
     try {
@@ -527,6 +550,7 @@ async function autoSave() {
             statusElement.textContent = 'Speichere...';
         }
         await saveConfigurationNow();
+        renderConfigWarnings();
         if (statusElement) {
             statusElement.classList.remove('status-error');
             statusElement.classList.add('status-saved');
@@ -575,6 +599,7 @@ const loadConfiguration = async (event) => {
 
         renderIntegrationSections();
         renderNotificationSection();
+        renderConfigWarnings();
     } catch (err) {
         console.log(err);
     }
@@ -1078,28 +1103,14 @@ function buildWallboxConnectionStatusMapping() {
         tbody.appendChild(row);
     }
 
-    const warningBanner = document.createElement('p');
-    warningBanner.className = 'shyftActionsError';
-    warningBanner.hidden = true;
-    wrapper.insertBefore(warningBanner, table);
-
     renderMessageRow('Lade beobachtete Status-Werte...');
 
     (async () => {
         let options = [];
-        let currentState = null;
-        let currentStateMapped = null;
         try {
-            const result = await getJson(insideHomeAssistant + '/wallbox-connection-status-options');
-            options = result.options || [];
-            currentState = result.currentState;
-            currentStateMapped = result.currentStateMapped;
+            options = await getJson(insideHomeAssistant + '/wallbox-connection-status-options');
         } catch (err) {
             console.log(err);
-        }
-        if (currentState && currentStateMapped === false) {
-            warningBanner.textContent = `⚠ Aktueller Wallbox-Status "${currentState}" ist noch nicht zugeordnet - die Auto-laden-Automatik (inkl. PV-Überschussladen) reagiert deshalb gerade nicht. Bitte unten zuordnen.`;
-            warningBanner.hidden = false;
         }
         if (options.length === 0) {
             renderMessageRow('Noch keine Status-Werte beobachtet - sobald "Wallbox: Auto verbunden?" befüllt ist und Werte vorliegen, erscheinen sie hier.');
@@ -1110,10 +1121,7 @@ function buildWallboxConnectionStatusMapping() {
         for (const value of options) {
             const row = document.createElement('tr');
             const labelCell = document.createElement('td');
-            labelCell.textContent = value === currentState ? `${value} (aktuell)` : value;
-            if (value === currentState) {
-                labelCell.style.fontWeight = 'bold';
-            }
+            labelCell.textContent = value;
             const selectCell = document.createElement('td');
             const select = document.createElement('select');
             select.className = 'sensorInput';

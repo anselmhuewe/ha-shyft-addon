@@ -248,12 +248,13 @@ def readDashboardChartData():
 
 
 def get_wallbox_connection_status_options():
-    """Distinct state values ever observed for the mapped "Wallbox: Auto verbunden?" sensor.
-    Home Assistant only sometimes declares a sensor's possible states in advance (device_class
-    "enum" plus an "options" attribute) and most Wallbox-Integrationen don't bother - so this
-    falls back to whatever's actually shown up in HA's own recent history (however much the
-    recorder happens to retain), plus the entity's current live state so there's always at least
-    one value to classify, even right after a HA restart with a freshly purged recorder."""
+    """Distinct state values known for the mapped "Wallbox: Auto verbunden?" sensor, from three
+    sources: (1) HA's own recent history (however much the recorder happens to retain), (2) the
+    entity's current live state, so there's always at least one value even right after a HA
+    restart with a freshly purged recorder, and (3) if the entity declares its possible values in
+    advance (device_class "enum" plus an "options" attribute - not every Wallbox-Integration
+    bothers), those too - this can surface a value that simply hasn't occurred yet, so it gets
+    classified before it ever causes a silent gap."""
     entity_id = _read_current_config().get("sensorMappings", {}).get("wallbox_plugged", "")
     if not entity_id:
         return []
@@ -267,9 +268,12 @@ def get_wallbox_connection_status_options():
     except Exception as e:
         print("[Shyft] Wallbox-Status-Historie konnte nicht geladen werden:", repr(e))
     try:
-        current = homeassistant_adapter.load_entity_state(entity_id)
-        if current.state not in (None, "unknown", "unavailable"):
-            values.add(current.state)
+        current_state = homeassistant_adapter.get_from_homeassistant(f"/api/states/{entity_id}")
+        state_value = current_state.get("state")
+        if state_value not in (None, "unknown", "unavailable"):
+            values.add(state_value)
+        for option in (current_state.get("attributes") or {}).get("options") or []:
+            values.add(option)
     except Exception as e:
         print("[Shyft] Aktueller Wallbox-Status konnte nicht geladen werden:", repr(e))
     return sorted(values)
@@ -277,26 +281,47 @@ def get_wallbox_connection_status_options():
 
 @app.route("/wallbox-connection-status-options", methods=["GET"])
 def wallboxConnectionStatusOptions():
-    """Neben den bekannten Statuswerten auch der GERADE AKTUELLE Wert und ob der zugeordnet ist -
-    ein unzugeordneter aktueller Status ist kein theoretisches Problem: is_car_ready_to_charge()
-    liefert dafuer still False, wodurch z.B. die PV-Ueberschussladen-Rueckfalllogik gar nicht erst
-    startet, ohne jede Fehlermeldung. Das Frontend warnt damit sichtbar genau dann, wenn es gerade
-    wirklich relevant ist, statt nur beim erstmaligen Einrichten."""
-    config = _read_current_config()
+    return jsonify(get_wallbox_connection_status_options())
+
+
+# Sammelstelle fuer Konfigurations-Warnhinweise, die oben auf der Konfigurationsseite angezeigt
+# werden (siehe readConfigWarnings) - bewusst als Liste kleiner, unabhaengiger Pruefungen gebaut,
+# damit sich das zukuenftig zu einer groesseren Sammlung an "muss behoben werden, bevor Shyft
+# funktioniert"-Hinweisen ausbauen laesst, ohne die Struktur zu aendern.
+def _wallbox_status_mapping_warning(config):
+    "Jeder aus Integration/Historie bekannte Statuswert, der noch keiner Ladebereitschaft zugeordnet ist - nicht nur der gerade aktuelle: is_car_ready_to_charge() liefert fuer JEDEN unzugeordneten Wert still False, das blockiert z.B. die PV-Ueberschussladen-Rueckfalllogik ohne jede Fehlermeldung, sobald dieser Wert mal auftritt."
     entity_id = config.get("sensorMappings", {}).get("wallbox_plugged", "")
-    current_state = None
-    if entity_id:
-        try:
-            current = homeassistant_adapter.load_entity_state(entity_id)
-            if current.state not in (None, "unknown", "unavailable"):
-                current_state = current.state
-        except Exception as e:
-            print("[Shyft] Aktueller Wallbox-Status konnte nicht geladen werden:", repr(e))
-    return jsonify({
-        "options": get_wallbox_connection_status_options(),
-        "currentState": current_state,
-        "currentStateMapped": (classify_wallbox_connection_state(current_state, config) is not None) if current_state else None,
-    })
+    if not entity_id:
+        return None
+    try:
+        options = get_wallbox_connection_status_options()
+    except Exception as e:
+        print("[Shyft] Konfigurations-Warnhinweise: Wallbox-Status-Optionen konnten nicht geladen werden:", repr(e))
+        return None
+    mapping = config.get("wallboxConnectionStatusMapping", {})
+    unmapped = [value for value in options if value not in mapping]
+    if not unmapped:
+        return None
+    return {
+        "key": "wallbox_status_unmapped",
+        "message": f"Wallbox-Status-Zuordnung unvollständig: {', '.join(unmapped)} noch nicht zugeordnet - betrifft Anwesenheitsprognose und automatische Ladesteuerung (z.B. PV-Überschussladen).",
+    }
+
+
+def compute_config_warnings():
+    config = _read_current_config()
+    checks = [_wallbox_status_mapping_warning]
+    warnings = []
+    for check in checks:
+        warning = check(config)
+        if warning:
+            warnings.append(warning)
+    return warnings
+
+
+@app.route("/config/warnings", methods=["GET"])
+def readConfigWarnings():
+    return jsonify({"warnings": compute_config_warnings()})
 
 
 def classify_wallbox_connection_state(state_value, config=None):
