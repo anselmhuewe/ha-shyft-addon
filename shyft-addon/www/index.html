@@ -18,6 +18,7 @@
             --color-error: #e74c3c;
             --color-tooltip-bg: #091747;
             --color-tooltip-text: #ffffff;
+            --page-padding: 24px;
         }
 
         @media (prefers-color-scheme: dark) {
@@ -37,7 +38,10 @@
         }
 
         html {
-            overflow-x: hidden;
+            /* "clip" (not "hidden") so this doesn't implicitly turn overflow-y into "auto" and
+               create its own scroll container - that would break position:sticky on .topBar,
+               which needs to stick relative to the real viewport scroll. */
+            overflow-x: clip;
         }
         body {
             background-color: var(--color-bg);
@@ -46,18 +50,8 @@
             line-height: 1.5;
             max-width: 960px;
             margin: 0 auto;
-            padding: 24px;
-            overflow-x: hidden;
-        }
-
-        h1 {
-            font-family: var(--font-heading);
-            font-weight: 700;
-            letter-spacing: -0.01em;
-        }
-
-        .brand {
-            color: var(--color-accent);
+            padding: var(--page-padding);
+            overflow-x: clip;
         }
 
         .intro {
@@ -81,6 +75,9 @@
             outline: none;
             border-color: var(--color-accent);
             box-shadow: 0 0 0 3px rgba(46, 204, 113, 0.2);
+        }
+        .sensorInput.status-error {
+            border-color: var(--color-error);
         }
 
         .clearableInput {
@@ -438,13 +435,37 @@
             font-size: 0.85em;
         }
 
+        .topBar {
+            position: sticky;
+            top: 0;
+            z-index: 20;
+            display: flex;
+            align-items: center;
+            gap: 1em;
+            background: var(--color-bg);
+            border-bottom: 1px solid var(--color-border);
+            margin: 0 calc(-1 * var(--page-padding)) 1.5em;
+            padding: 0 var(--page-padding);
+        }
+        .topBarLogo {
+            flex: 0 0 auto;
+            display: flex;
+            align-items: center;
+        }
+        .topBarLogo img {
+            height: 28px;
+            width: auto;
+            display: block;
+        }
         .tabBar {
             display: flex;
             gap: 0.5em;
-            border-bottom: 1px solid var(--color-border);
-            margin-bottom: 1.5em;
             overflow-x: auto;
             -webkit-overflow-scrolling: touch;
+            scrollbar-width: none;
+        }
+        .tabBar::-webkit-scrollbar {
+            display: none;
         }
         .tabButton {
             background: none;
@@ -639,6 +660,25 @@
             margin-bottom: 0.5em;
             margin-top: -0.3em;
         }
+        .dashboardChartLegend {
+            display: flex;
+            gap: 1em;
+            font-size: 0.85em;
+            color: var(--color-text-secondary);
+            margin-bottom: 0.5em;
+            margin-top: -0.3em;
+        }
+        .dashboardChartLegendItem {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.4em;
+        }
+        .dashboardChartLegendDot {
+            width: 0.7em;
+            height: 0.7em;
+            border-radius: 50%;
+            flex-shrink: 0;
+        }
         .dashboardChartContainer {
             position: relative;
         }
@@ -738,8 +778,8 @@
            horizontally. Stacking each row's cells (label above its input) keeps every field at
            full, readable width instead. */
         @media (max-width: 600px) {
-            body {
-                padding: 16px;
+            :root {
+                --page-padding: 16px;
             }
             #deviceSections table,
             #deviceSections tbody,
@@ -773,12 +813,15 @@
     <title>shyft addon</title>
 </head>
 <body>
-<h1><span class="brand">shyft</span>-power - Dein Energiemanager</h1>
-
-<div class="tabBar">
-    <button type="button" class="tabButton active" data-tab="dashboard">Dashboard</button>
-    <button type="button" class="tabButton" data-tab="geraetesteuerung">Gerätesteuerung</button>
-    <button type="button" class="tabButton" data-tab="konfiguration">Konfiguration</button>
+<div class="topBar">
+    <a href="https://shyft-power.com/" target="_blank" rel="noopener" class="topBarLogo">
+        <img src="assets/shyft-logo.png" alt="shyft-power">
+    </a>
+    <div class="tabBar">
+        <button type="button" class="tabButton active" data-tab="dashboard">Dashboard</button>
+        <button type="button" class="tabButton" data-tab="geraetesteuerung">Gerätesteuerung</button>
+        <button type="button" class="tabButton" data-tab="konfiguration">Konfiguration</button>
+    </div>
 </div>
 
 <div id="tab-dashboard" class="tabPanel active">

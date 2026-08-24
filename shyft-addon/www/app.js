@@ -1131,7 +1131,7 @@ function buildWallboxConnectionStatusMapping() {
             select.appendChild(unsetOption);
             const canChargeOption = document.createElement('option');
             canChargeOption.value = 'true';
-            canChargeOption.textContent = 'Auto kann laden';
+            canChargeOption.textContent = 'Auto kann laden / lädt';
             select.appendChild(canChargeOption);
             const cannotChargeOption = document.createElement('option');
             cannotChargeOption.value = 'false';
@@ -1147,12 +1147,17 @@ function buildWallboxConnectionStatusMapping() {
                     updatedMapping[value] = select.value === 'true';
                 }
                 configData['wallboxConnectionStatusMapping'] = updatedMapping;
+                select.classList.toggle('status-error', select.value === '');
                 autoSave();
             });
             selectCell.appendChild(select);
             row.appendChild(labelCell);
             row.appendChild(selectCell);
             tbody.appendChild(row);
+            // erst NACH dem Einhaengen in den (schon von watchForErrorsToExpand beobachteten) Baum
+            // togglen, sonst wird die bereits beim Erzeugen gesetzte Klasse nicht als Mutation
+            // erkannt und die Kachel klappt sich bei einer fehlenden Zuordnung nicht automatisch auf
+            select.classList.toggle('status-error', select.value === '');
         }
     })();
 
@@ -2522,10 +2527,23 @@ function buildLineChart(title, unit, labels, values, options = {}) {
     wrapper.appendChild(titleEl);
 
     if (presenceForecast) {
-        const caption = document.createElement('div');
-        caption.className = 'dashboardChartCaption';
-        caption.textContent = 'Balken: Anwesenheitsprognose (nächste 48h) - grün eingesteckt, grau steht, rot unterwegs';
-        wrapper.appendChild(caption);
+        const legend = document.createElement('div');
+        legend.className = 'dashboardChartLegend';
+        for (const [color, label] of [
+            ['var(--color-accent)', 'eingesteckt'],
+            ['var(--color-text-secondary)', 'steht'],
+            ['var(--color-error)', 'unterwegs'],
+        ]) {
+            const item = document.createElement('span');
+            item.className = 'dashboardChartLegendItem';
+            const dot = document.createElement('span');
+            dot.className = 'dashboardChartLegendDot';
+            dot.style.background = color;
+            item.appendChild(dot);
+            item.appendChild(document.createTextNode(label));
+            legend.appendChild(item);
+        }
+        wrapper.appendChild(legend);
     }
 
     if (!values || values.length === 0) {

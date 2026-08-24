@@ -263,20 +263,25 @@ def get_wallbox_connection_status_options():
         end = datetime.now(timezone.utc)
         start = end - timedelta(days=10)
         for element in homeassistant_adapter.load_entity_history(entity_id, start, end):
-            if element.state not in (None, "unknown", "unavailable"):
+            if _is_real_wallbox_state(element.state):
                 values.add(element.state)
     except Exception as e:
         print("[Shyft] Wallbox-Status-Historie konnte nicht geladen werden:", repr(e))
     try:
         current_state = homeassistant_adapter.get_from_homeassistant(f"/api/states/{entity_id}")
         state_value = current_state.get("state")
-        if state_value not in (None, "unknown", "unavailable"):
+        if _is_real_wallbox_state(state_value):
             values.add(state_value)
         for option in (current_state.get("attributes") or {}).get("options") or []:
             values.add(option)
     except Exception as e:
         print("[Shyft] Aktueller Wallbox-Status konnte nicht geladen werden:", repr(e))
     return sorted(values)
+
+
+def _is_real_wallbox_state(state_value):
+    "Excludes not just the exact HA placeholder states but also glitchy variants (e.g. a transient 'unknown 0' seen from an Easee integration reload) - anything starting with 'unknown' is a placeholder, not a real classifiable status value."
+    return bool(state_value) and state_value != "unavailable" and not state_value.startswith("unknown")
 
 
 @app.route("/wallbox-connection-status-options", methods=["GET"])

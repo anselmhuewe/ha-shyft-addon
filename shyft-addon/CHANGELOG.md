@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.0.41.0
+
+* Noch nicht zugeordnete Werte in "Status-Zuordnung" sind jetzt rot umrandet; das Gerät "Wallbox" klappt sich beim Öffnen der Konfiguration automatisch auf, solange eine Zuordnung fehlt (wie bei allen anderen Geräten mit fehlenden Angaben)
+* Behoben: ein einmaliger, kaputter Sensorwert ("unknown 0", von einem Easee-Integration-Reload) wurde fälschlich als zuzuordnender Status-Wert angezeigt - Werte, die mit "unknown" beginnen, werden jetzt komplett ignoriert
+* Kopf der Seite ist jetzt eine schlanke, beim Scrollen fixierte Leiste mit dem shyft-Logo (verlinkt auf shyft-power.com) statt der großen Überschrift; die kleine Scrollleiste unter den Tabs auf breiten Bildschirmen ist weg (das Swipen der Tab-Leiste auf schmalen Bildschirmen bleibt erhalten)
+* Die Anwesenheitsprognose im "Ladestand Auto"-Chart hat jetzt eine kleine Farb-Legende statt eines Bildunterschrift-Texts
+
 ## 0.0.40.2
 
 * Changelog liegt jetzt als CHANGELOG.md statt CHANGELOG.adoc vor - Home Assistant Supervisor zeigt diese Datei automatisch im "Changelog"-Dialog des Addons an, damit Updates direkt in Home Assistant nachvollziehbar sind, ohne extra ins GitHub-Repo schauen zu müssen
