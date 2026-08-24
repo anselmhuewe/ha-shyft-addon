@@ -80,6 +80,12 @@ PV_SURPLUS_DECREASE_RATIO = 0.05
 PV_SURPLUS_NO_BATTERY_DECREASE_RATIO = 0.10
 PV_SURPLUS_NO_BATTERY_MIN_DECREASE_KW = 0.3
 PV_SURPLUS_BATTERY_STOP_SOC = 97
+# Batterie-Vorzeichen ist nicht herstellerunabhaengig standardisiert (siehe
+# detect_battery_flow_sign_convention) - 7 Tage Historie reichen normalerweise fuer mehrere klare
+# Lade-/Entladewechsel; unter BATTERY_SIGN_MIN_SAMPLES eindeutigen Stunden gilt die Erkennung als
+# nicht belastbar (lieber "noch unbekannt" als eine Zufalls-Mehrheit aus 1-2 Stunden).
+BATTERY_SIGN_DETECTION_DAYS = 7
+BATTERY_SIGN_MIN_SAMPLES = 6
 SUPERVISOR_TOKEN = os.getenv("SUPERVISOR_TOKEN")
 HASSIO_URI_RUNNING_ON_HAOS = "http://supervisor/core"
 HASSIO_URI_RUNNING_REMOTE = "http://homeassistant.local:8123"
@@ -1134,6 +1140,273 @@ def is_car_ready_to_charge(config):
         return False
 
 
+def _read_mapped_numeric(config, sensor_key):
+    "Generischer Live-Zahlenwert fuer einen beliebigen sensorMappings-Eintrag, konvertiert in die erwartete Einheit (siehe convert_to_expected_unit) - None, wenn nicht zugeordnet/unavailable/nicht lesbar. Fuer das Energiefluss-Widget (siehe compute_energy_flow_data), das viele verschiedene Sensoren auf dieselbe Art liest."
+    entity_id = config.get("sensorMappings", {}).get(sensor_key, "")
+    if not entity_id:
+        return None
+    try:
+        state = homeassistant_adapter.load_entity_state(entity_id)
+        if state.state in (None, "unknown", "unavailable", ""):
+            return None
+        value, _ = convert_to_expected_unit(sensor_key, state.state, state.unit)
+        return float(value)
+    except Exception:
+        return None
+
+
+def _read_mapped_raw_state(config, sensor_key):
+    "Wie _read_mapped_numeric, aber der rohe (unkonvertierte) Zustandswert als String - fuer Modus-/An-Aus-Sensoren ohne numerische Einheit."
+    entity_id = config.get("sensorMappings", {}).get(sensor_key, "")
+    if not entity_id:
+        return None
+    try:
+        state = homeassistant_adapter.load_entity_state(entity_id)
+        if state.state in (None, "unknown", "unavailable", ""):
+            return None
+        return state.state
+    except Exception:
+        return None
+
+
+def _read_mapped_bool_on(config, sensor_key):
+    "Interpretiert einen zugeordneten binary_sensor/switch als An/Aus (HA's uebliche 'on'/'off'-Zustaende) - None, wenn nicht zugeordnet/nicht lesbar."
+    raw = _read_mapped_raw_state(config, sensor_key)
+    if raw is None:
+        return None
+    return raw.lower() == "on"
+
+
+def detect_battery_flow_sign_convention():
+    """Bestimmt empirisch, ob am rohen photovoltaic_powerflow_battery-Sensor ein negativer oder
+    positiver Wert das Laden des Heimspeichers bedeutet - das ist (anders als beim Netz-Sensor)
+    nicht herstellerunabhaengig standardisiert. Vergleicht dazu stundenweise den SOC-Verlauf
+    (steigt/faellt) mit dem Rohwert in derselben Stunde, ueber BATTERY_SIGN_DETECTION_DAYS Tage
+    Historie - per load_entity_history_raw + _forward_fill_hourly, denselben Bausteinen wie der
+    Anwesenheits-Backfill (siehe backfill_car_presence_log). Gibt "raw_positive_is_charging",
+    "raw_negative_is_charging" oder None (zu wenig/keine eindeutige Datenbasis) zurueck - schreibt
+    NICHT selbst in die Config, das macht maybe_detect_battery_flow_sign_convention."""
+    config = _read_current_config()
+    flow_entity_id = config.get("sensorMappings", {}).get("photovoltaic_powerflow_battery", "")
+    soc_entity_id = config.get("sensorMappings", {}).get("battery_state_of_charge", "")
+    if not flow_entity_id or not soc_entity_id:
+        return None
+
+    now_hour = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
+    start = now_hour - timedelta(days=BATTERY_SIGN_DETECTION_DAYS)
+    hours = [start + timedelta(hours=i) for i in range(int((now_hour - start).total_seconds() // 3600))]
+
+    try:
+        flow_events = homeassistant_adapter.load_entity_history_raw(flow_entity_id, start, now_hour)
+        soc_events = homeassistant_adapter.load_entity_history_raw(soc_entity_id, start, now_hour)
+    except Exception as e:
+        print("[Shyft] Batterie-Vorzeichen-Erkennung: Historie konnte nicht geladen werden:", repr(e))
+        return None
+
+    flow_by_hour = _forward_fill_hourly(flow_events, hours)
+    soc_by_hour = {}
+    for hour_dt, soc_state in _forward_fill_hourly(soc_events, hours).items():
+        try:
+            soc_by_hour[hour_dt] = float(soc_state)
+        except (TypeError, ValueError):
+            pass
+
+    positive_votes = 0  # "Rohwert positiv waehrend SOC steigt" (bzw. negativ waehrend SOC faellt)
+    negative_votes = 0  # "Rohwert negativ waehrend SOC steigt" (bzw. positiv waehrend SOC faellt)
+    for i in range(len(hours) - 1):
+        hour_dt, next_hour = hours[i], hours[i + 1]
+        if hour_dt not in flow_by_hour or hour_dt not in soc_by_hour or next_hour not in soc_by_hour:
+            continue
+        try:
+            flow_value = float(flow_by_hour[hour_dt])
+        except (TypeError, ValueError):
+            continue
+        soc_delta = soc_by_hour[next_hour] - soc_by_hour[hour_dt]
+        if soc_delta == 0 or flow_value == 0:
+            continue  # kein eindeutiges Signal in dieser Stunde
+        if (soc_delta > 0) == (flow_value > 0):
+            positive_votes += 1
+        else:
+            negative_votes += 1
+
+    if positive_votes + negative_votes < BATTERY_SIGN_MIN_SAMPLES:
+        return None
+    return "raw_positive_is_charging" if positive_votes >= negative_votes else "raw_negative_is_charging"
+
+
+def maybe_detect_battery_flow_sign_convention():
+    "Versucht detect_battery_flow_sign_convention, aber nur wenn noch kein Ergebnis vorliegt und kein manueller Override gesetzt ist - re-triggerbar (Config-Save, Addon-Start, taeglicher Cron), bis genug Datenbasis vorhanden ist."
+    config = _read_current_config()
+    if config.get("batteryFlowSignOverride") is not None:
+        return
+    if config.get("batteryFlowSignConvention") is not None:
+        return
+    convention = detect_battery_flow_sign_convention()
+    if convention is None:
+        return
+    config = _read_current_config()  # frisch lesen, falls sich die Config zwischenzeitlich geaendert hat
+    config["batteryFlowSignConvention"] = convention
+    _write_current_config(config)
+    print(f"[Shyft] Batterie-Vorzeichen erkannt: {convention}")
+
+
+def _normalized_battery_kw(config, raw_kw):
+    "Wendet die erkannte/uebersteuerte Vorzeichen-Konvention an, damit compute_energy_flow_data immer 'positiv = laedt, negativ = entlaedt' liefert, unabhaengig vom rohen Sensor-Vorzeichen."
+    if raw_kw is None:
+        return None
+    override = config.get("batteryFlowSignOverride")
+    if override is True:
+        return -raw_kw
+    if override is False:
+        return raw_kw
+    convention = config.get("batteryFlowSignConvention")
+    if convention == "raw_negative_is_charging":
+        return -raw_kw
+    return raw_kw  # Default/"raw_positive_is_charging": roh uebernehmen, solange nichts erkannt/uebersteuert wurde
+
+
+PRICE_HIGH_THRESHOLD_CENT = 35
+PRICE_LOW_THRESHOLD_CENT = 25
+
+
+def _read_current_price_info():
+    "Aktueller Strompreis (Cent/kWh) + Einstufung, aus dem stuendlich gecachten dashboard_cache.json (siehe sync_dashboard_chart_data) - dieselbe Quelle und dieselben Schwellen wie der Strompreis-Chart, kein zusaetzlicher shyft-Call. None, wenn noch kein Cache vorhanden oder die aktuelle Stunde darin nicht abgedeckt ist."
+    try:
+        with open(DASHBOARD_CACHE_PATH, "r") as f:
+            cache = json.load(f)
+    except Exception:
+        return None
+    input_csv = cache.get("input_csv")
+    creation_date_ms = cache.get("creation_date")
+    if not input_csv or creation_date_ms is None:
+        return None
+    start = datetime.fromtimestamp(creation_date_ms / 1000, tz=timezone.utc).replace(minute=0, second=0, microsecond=0)
+    now_hour = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
+    index = int((now_hour - start).total_seconds() // 3600)
+    try:
+        rows = list(csv.DictReader(io.StringIO(input_csv), delimiter=";"))
+    except Exception:
+        return None
+    if index < 0 or index >= len(rows):
+        return None
+    try:
+        price_cent = round(float(rows[index].get("p_buy") or 0) * 100, 1)
+    except (TypeError, ValueError):
+        return None
+    if price_cent > PRICE_HIGH_THRESHOLD_CENT:
+        level = "hoch"
+    elif price_cent < PRICE_LOW_THRESHOLD_CENT:
+        level = "niedrig"
+    else:
+        level = "mittel"
+    return {"cent": price_cent, "level": level}
+
+
+def compute_energy_flow_data():
+    """Aggregiert alle Live-Werte fuers Energiefluss-Widget auf dem Dashboard (siehe
+    buildEnergyFlowWidget im Frontend) in einem Response - jedes Geraet nur, wenn es ueberhaupt als
+    Integration ausgewaehlt ist (integrationMappings), damit das Frontend nicht konfigurierte
+    Geraete gar nicht erst zeichnet."""
+    config = _read_current_config()
+    integration_mappings = config.get("integrationMappings", {})
+
+    def configured(section_key):
+        return bool(integration_mappings.get(section_key))
+
+    result = {}
+
+    pv_configured = configured("wechselrichter")
+    price_info = _read_current_price_info() if pv_configured else None
+    result["grid"] = {
+        "configured": pv_configured,
+        "kw": _read_mapped_numeric(config, "photovoltaic_powerflow_grid") if pv_configured else None,
+        "priceCent": price_info["cent"] if price_info else None,
+        "priceLevel": price_info["level"] if price_info else None,
+    }
+    result["pv"] = {
+        "configured": pv_configured,
+        "kw": _read_mapped_numeric(config, "photovoltaic_powerflow_pv") if pv_configured else None,
+    }
+    load_kw = _read_mapped_numeric(config, "photovoltaic_powerflow_load") if pv_configured else None
+    wallbox_kw = _read_mapped_numeric(config, "wallbox_current_charging_power")
+    heatpump_kw = _read_mapped_numeric(config, "heatpump_current_power_elect")
+    residual_kw = load_kw
+    if load_kw is not None and (wallbox_kw is not None or heatpump_kw is not None):
+        residual_kw = max(0.0, load_kw - (wallbox_kw or 0.0) - (heatpump_kw or 0.0))
+    result["household"] = {
+        "configured": pv_configured,
+        "kw": load_kw,
+        "residualKw": residual_kw,
+    }
+
+    battery_configured = configured("batterie")
+    result["battery"] = {
+        "configured": battery_configured,
+        "soc": _read_mapped_numeric(config, "battery_state_of_charge") if battery_configured else None,
+        "mode": _read_mapped_raw_state(config, "battery_storage_command_mode") if battery_configured else None,
+        "kw": _normalized_battery_kw(config, _read_mapped_numeric(config, "photovoltaic_powerflow_battery")) if battery_configured and pv_configured else None,
+    }
+
+    heatpump_configured = configured("waermepumpe")
+    result["heatpump"] = {
+        "configured": heatpump_configured,
+        "on": _read_mapped_bool_on(config, "heatpump_on_off") if heatpump_configured else None,
+        "heatingOn": _read_mapped_bool_on(config, "heatpump_heating_activated") if heatpump_configured else None,
+        "supplyTempC": _read_mapped_numeric(config, "heatpump_supply_temp_hp") if heatpump_configured else None,
+        "dhwTankTempC": _read_mapped_numeric(config, "heatpump_dhw_tank_temp") if heatpump_configured else None,
+        "targetTempC": _read_mapped_numeric(config, "heatpump_heating_target_temp_normal") if heatpump_configured else None,
+        "kw": heatpump_kw if heatpump_configured else None,
+    }
+
+    raumtemperatur_configured = configured("raumtemperatur")
+    result["indoorTemp"] = {
+        "configured": raumtemperatur_configured,
+        "tempC": _read_mapped_numeric(config, "heatpump_temp_indoor_measured") if raumtemperatur_configured else None,
+    }
+
+    car_configured = configured("auto")
+    wallbox_configured = configured("wallbox")
+    car_state = None
+    if wallbox_configured:
+        connected = is_car_ready_to_charge(config)
+        if not connected:
+            car_state = "away"
+        elif wallbox_kw and wallbox_kw > 0:
+            car_state = "charging"
+        else:
+            car_state = "connected"
+    battery_capacity_kwh = config.get("carBatteryCapacityKwh")
+    consumption_kwh_per_100km = config.get("carConsumptionKwhPer100km")
+    car_soc = _read_mapped_numeric(config, "electronicvehicle_state_of_charge") if car_configured else None
+    range_km = None
+    if car_soc is not None and battery_capacity_kwh and consumption_kwh_per_100km:
+        try:
+            range_km = round(battery_capacity_kwh * car_soc / consumption_kwh_per_100km)
+        except (TypeError, ZeroDivisionError):
+            range_km = None
+    result["car"] = {
+        "configured": car_configured,
+        "soc": car_soc,
+        "rangeKm": range_km,
+        "wallboxConfigured": wallbox_configured,
+        "state": car_state,
+        "chargingKw": wallbox_kw if car_state == "charging" else None,
+    }
+
+    sonstiger_verbraucher_configured = configured("sonstiger_verbraucher")
+    result["sonstigerVerbraucher"] = {
+        "configured": sonstiger_verbraucher_configured,
+        "on": _read_mapped_bool_on(config, "sonstiger_verbraucher_switch_entity") if sonstiger_verbraucher_configured else None,
+    }
+
+    return result
+
+
+@app.route("/dashboard/energy-flow", methods=["GET"])
+def dashboardEnergyFlow():
+    return jsonify(compute_energy_flow_data())
+
+
 def _read_pv_surplus_actions():
     try:
         with open(PV_SURPLUS_ACTIONS_PATH, "r") as f:
@@ -1497,6 +1770,10 @@ def writeConfig():
     data = _read_current_config()
     old_action_type_enabled = data.get("actionTypeEnabled", {})
     old_wallbox_mapping = data.get("wallboxConnectionStatusMapping", {})
+    old_battery_sensors = (
+        data.get("sensorMappings", {}).get("battery_state_of_charge"),
+        data.get("sensorMappings", {}).get("photovoltaic_powerflow_battery"),
+    )
     data.update(incoming)
 
     script_sync_errors = {}
@@ -1526,6 +1803,21 @@ def writeConfig():
             backfill_car_presence_log()
         except Exception as e:
             print("[Shyft] Anwesenheits-Backfill fehlgeschlagen:", repr(e))
+
+    new_battery_sensors = (
+        data.get("sensorMappings", {}).get("battery_state_of_charge"),
+        data.get("sensorMappings", {}).get("photovoltaic_powerflow_battery"),
+    )
+    if new_battery_sensors != old_battery_sensors:
+        # die Zuordnung hat sich geaendert - eine evtl. bereits erkannte Konvention galt fuer den
+        # alten Sensor und ist jetzt nicht mehr belastbar, ausser bei einem manuellen Override
+        data["batteryFlowSignConvention"] = None
+        _write_current_config(data)
+    if all(new_battery_sensors):
+        try:
+            maybe_detect_battery_flow_sign_convention()
+        except Exception as e:
+            print("[Shyft] Batterie-Vorzeichen-Erkennung fehlgeschlagen:", repr(e))
 
     response_data = dict(data)
     response_data["scriptSyncErrors"] = script_sync_errors
@@ -2026,6 +2318,10 @@ def run_pv_surplus_charging_tick_periodically():
     with app.app_context():
         run_pv_surplus_charging_tick()
 
+def maybe_detect_battery_flow_sign_convention_periodically():
+    with app.app_context():
+        maybe_detect_battery_flow_sign_convention()
+
 
 # Live-Reaktion via Websocket (siehe live_entity_watcher.py) - ergaenzt, ersetzt aber nicht die
 # obigen Cron-Jobs (sync_car_presence_log_periodically, run_pv_surplus_charging_tick_periodically),
@@ -2085,6 +2381,10 @@ scheduler.add_job(process_shyft_actions_periodically, 'cron', minute="0,15,30,45
 scheduler.add_job(sync_car_presence_log_periodically, 'cron', minute="0")
 # PV-Überschussladen-Regelkreis - alle 5 Minuten, siehe run_pv_surplus_charging_tick
 scheduler.add_job(run_pv_surplus_charging_tick_periodically, 'interval', minutes=5)
+# einmal taeglich erneut versuchen, solange noch keine Batterie-Vorzeichen-Konvention erkannt
+# wurde (siehe maybe_detect_battery_flow_sign_convention) - z.B. weil bei der Ersteinrichtung noch
+# nicht genug Lade-/Entladewechsel in der Historie vorlagen
+scheduler.add_job(maybe_detect_battery_flow_sign_convention_periodically, 'cron', hour="3", minute="30")
 scheduler.start()
 
 
@@ -2132,6 +2432,11 @@ if __name__ == "__main__":
         run_pv_surplus_charging_tick()
     except Exception as e:
         print("Failed to run PV-Überschussladen tick at startup:", repr(e))
+
+    try:
+        maybe_detect_battery_flow_sign_convention()
+    except Exception as e:
+        print("Failed to detect battery flow sign convention at startup:", repr(e))
 
     live_entity_watcher.start()
 

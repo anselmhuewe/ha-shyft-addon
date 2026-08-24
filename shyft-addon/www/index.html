@@ -620,6 +620,42 @@
         .dashboardChart {
             margin-bottom: 2em;
         }
+        .energyFlowWidget svg {
+            display: block;
+            width: 100%;
+            height: auto;
+        }
+        .energyFlowLabel {
+            font-family: var(--font-body);
+            font-size: 13px;
+            fill: var(--color-text);
+        }
+        @keyframes energyFlowDash {
+            to {
+                stroke-dashoffset: -24;
+            }
+        }
+        .energyFlowLine {
+            stroke-width: 3;
+            stroke-dasharray: 6 6;
+            stroke-linecap: round;
+            animation-name: energyFlowDash;
+            animation-timing-function: linear;
+            animation-iteration-count: infinite;
+        }
+        .energyFlowLine-reverse {
+            animation-direction: reverse;
+        }
+        @keyframes energyFlowSpin {
+            to {
+                transform: rotate(360deg);
+            }
+        }
+        .energyFlowFan.spinning {
+            transform-box: fill-box;
+            transform-origin: center;
+            animation: energyFlowSpin 2.2s linear infinite;
+        }
         .dashboardPvEnergySummary {
             font-weight: 600;
             color: var(--color-text);

@@ -506,7 +506,9 @@ async function saveConfigurationNow() {
         "notificationTargets": notificationTargets,
         "notificationsEnabled": notificationsEnabled,
         "wallboxConnectionStatusMapping": configData["wallboxConnectionStatusMapping"] || {},
-        "carBatteryCapacityKwh": configData["carBatteryCapacityKwh"] ?? null
+        "carBatteryCapacityKwh": configData["carBatteryCapacityKwh"] ?? null,
+        "carConsumptionKwhPer100km": configData["carConsumptionKwhPer100km"] ?? null,
+        "batteryFlowSignOverride": configData["batteryFlowSignOverride"] ?? null
     };
     const response = await putJson(configUri, toBeWritten);
     configData = response;
@@ -1038,8 +1040,12 @@ function renderSectionBody(bodyDiv, section, entryIds) {
         if (section.key === 'wallbox') {
             bodyDiv.appendChild(buildWallboxConnectionStatusMapping());
         }
+        if (section.key === 'batterie') {
+            bodyDiv.appendChild(buildBatteryFlowSignOverrideField());
+        }
         if (section.key === 'auto') {
             bodyDiv.appendChild(buildCarBatteryCapacityField());
+            bodyDiv.appendChild(buildCarConsumptionField());
         }
     }
 
@@ -1164,31 +1170,99 @@ function buildWallboxConnectionStatusMapping() {
     return wrapper;
 }
 
-// Reine Konfigurationszahl (keine Entity-Zuordnung) - Shyft braucht sie, um Ladestandsänderungen
-// der Autobatterie in kWh umzurechnen (siehe Verbrauchsprognose).
-function buildCarBatteryCapacityField() {
+// Reine Konfigurationszahl (keine Entity-Zuordnung), gleiches Muster fuer mehrere Felder unter
+// "Auto" (Akkukapazitaet, Verbrauch/100km) - siehe buildCarBatteryCapacityField/buildCarConsumptionField.
+function buildConfigNumberField({label, tooltip, id, configKey, placeholder, step = '0.1'}) {
     const wrapper = document.createElement('div');
     const table = document.createElement('table');
     const tbody = document.createElement('tbody');
     const row = document.createElement('tr');
     const labelCell = document.createElement('td');
-    labelCell.textContent = 'Akkukapazität (kWh)';
-    labelCell.appendChild(buildTooltip('Diese Angabe benötigt Shyft zur Umrechnung von Ladestandsänderungen der Autobatterie in Stromverbrauch.'));
+    labelCell.textContent = label;
+    labelCell.appendChild(buildTooltip(tooltip));
     const valueCell = document.createElement('td');
     const input = document.createElement('input');
     input.type = 'number';
-    input.id = 'car_battery_capacity_kwh';
+    input.id = id;
     input.className = 'sensorInput';
     input.min = '0';
-    input.step = '0.1';
-    input.placeholder = 'z.B. 60';
-    input.value = configData['carBatteryCapacityKwh'] || '';
+    input.step = step;
+    input.placeholder = placeholder;
+    input.value = configData[configKey] || '';
     input.addEventListener('change', () => {
         const parsed = parseFloat(input.value);
-        configData['carBatteryCapacityKwh'] = isNaN(parsed) ? null : parsed;
+        configData[configKey] = isNaN(parsed) ? null : parsed;
         autoSave();
     });
     valueCell.appendChild(input);
+    row.appendChild(labelCell);
+    row.appendChild(valueCell);
+    tbody.appendChild(row);
+    table.appendChild(tbody);
+    wrapper.appendChild(table);
+    return wrapper;
+}
+
+function buildCarBatteryCapacityField() {
+    return buildConfigNumberField({
+        label: 'Akkukapazität (kWh)',
+        tooltip: 'Diese Angabe benötigt Shyft zur Umrechnung von Ladestandsänderungen der Autobatterie in Stromverbrauch.',
+        id: 'car_battery_capacity_kwh',
+        configKey: 'carBatteryCapacityKwh',
+        placeholder: 'z.B. 60',
+    });
+}
+
+// Zusammen mit der Akkukapazität die Grundlage für die Reichweitenanzeige (Akkukapazität × SOC ÷
+// Verbrauch) im Energiefluss-Widget - und künftig auch umgekehrt: eine gewünschte Reichweite in
+// benötigte kWh umrechnen.
+function buildCarConsumptionField() {
+    return buildConfigNumberField({
+        label: 'Verbrauch (kWh/100km)',
+        tooltip: 'Diese Angabe benötigt Shyft, um zusammen mit der Akkukapazität die aktuelle Reichweite zu berechnen (und künftig umgekehrt, um eine gewünschte Reichweite in kWh umzurechnen).',
+        id: 'car_consumption_kwh_per_100km',
+        configKey: 'carConsumptionKwhPer100km',
+        placeholder: 'z.B. 18',
+    });
+}
+
+// Batterie-Fluss-Vorzeichen ist herstellerabhaengig (manche Integrationen melden Laden als
+// positiv, andere als negativ) - shyft-power erkennt es automatisch aus dem SOC-Verlauf (siehe
+// detect_battery_flow_sign_convention), diese Auswahl ist nur die manuelle Notbremse, falls die
+// Erkennung mal danebenliegt oder noch keine Datenbasis hat.
+function buildBatteryFlowSignOverrideField() {
+    const wrapper = document.createElement('div');
+    const table = document.createElement('table');
+    const tbody = document.createElement('tbody');
+    const row = document.createElement('tr');
+    const labelCell = document.createElement('td');
+    labelCell.textContent = 'Batterie-Vorzeichen';
+    labelCell.appendChild(buildTooltip('Positiv soll immer "lädt", negativ "entlädt" bedeuten. Shyft erkennt automatisch, ob dein Sensor das schon so meldet oder umgekehrt (aus dem Verlauf von Ladestand und Leistung). Falls die Darstellung im Dashboard trotzdem falsch herum wirkt, kannst du das Vorzeichen hier manuell umkehren.'));
+    const valueCell = document.createElement('td');
+    const select = document.createElement('select');
+    select.id = 'battery_flow_sign_override';
+    select.className = 'sensorInput';
+    const detected = configData['batteryFlowSignConvention'];
+    const detectedLabel = detected === 'raw_negative_is_charging' ? ' (aktuell erkannt: negativ = lädt)'
+        : detected === 'raw_positive_is_charging' ? ' (aktuell erkannt: positiv = lädt)'
+        : ' (noch nicht erkannt)';
+    for (const [value, text] of [
+        ['', 'Automatisch erkennen' + detectedLabel],
+        ['false', 'So wie vom Sensor gemeldet (nicht umkehren)'],
+        ['true', 'Umgekehrt zum Sensor (Vorzeichen umkehren)'],
+    ]) {
+        const option = document.createElement('option');
+        option.value = value;
+        option.textContent = text;
+        select.appendChild(option);
+    }
+    const override = configData['batteryFlowSignOverride'];
+    select.value = override === true ? 'true' : (override === false ? 'false' : '');
+    select.addEventListener('change', () => {
+        configData['batteryFlowSignOverride'] = select.value === '' ? null : select.value === 'true';
+        autoSave();
+    });
+    valueCell.appendChild(select);
     row.appendChild(labelCell);
     row.appendChild(valueCell);
     tbody.appendChild(row);
@@ -2776,6 +2850,304 @@ function buildCarConsumptionForecastDetails(labels, consumptionKwh, lowDataBasis
     return details;
 }
 
+// ============================================================================
+// Energiefluss-Widget: live-animierte Haus-Grafik oben auf dem Dashboard (siehe
+// GET /dashboard/energy-flow, compute_energy_flow_data in app.py). Alle Icons sind selbst
+// gezeichnete, einfache Flat-Shapes (Pfade/Formen direkt hier im Code) statt externer Grafiken -
+// lizenzfrei per Konstruktion. Zeigt jedes Geraet nur, wenn es tatsaechlich als Integration
+// ausgewaehlt ist (data.<gerät>.configured).
+// ============================================================================
+
+const SVG_NS = 'http://www.w3.org/2000/svg';
+
+function svgEl(tag, attrs = {}, children = []) {
+    const el = document.createElementNS(SVG_NS, tag);
+    for (const [key, value] of Object.entries(attrs)) {
+        if (value !== undefined && value !== null) el.setAttribute(key, value);
+    }
+    for (const child of children) {
+        if (child) el.appendChild(child);
+    }
+    return el;
+}
+
+function formatKwValue(kw) {
+    if (kw === null || kw === undefined) return '–';
+    return kw.toLocaleString('de-DE', {minimumFractionDigits: 1, maximumFractionDigits: 1}) + ' kW';
+}
+
+// Animationsdauer einer Flusslinie: schneller/kuerzere Dauer bei hoeherer Leistung, aber nie
+// komplett angehalten - auch bei 0 kW (bzw. beim Haushaltsstrom, siehe compute_energy_flow_data's
+// residualKw) bewegt sich die Linie noch leicht, wie gewuenscht ("ständig einen leichten
+// Stromverbrauch simulieren").
+function flowAnimationDuration(kw) {
+    const absKw = Math.min(Math.abs(kw || 0), 3);
+    const minDuration = 0.6, maxDuration = 3.2;
+    return maxDuration - (absKw / 3) * (maxDuration - minDuration);
+}
+
+// Gerade Linie (Netz/Batterie) oder eine Spine-mit-Abzweigung (rechte Spalte: erst waagerecht bis
+// zur Spalten-x, dann senkrecht zur Ziel-Reihe) - je nach dem, ob y1 und y2 gleich sind.
+function buildFlowPath(x1, y1, x2, y2) {
+    if (y1 === y2) return `M ${x1},${y1} L ${x2},${y2}`;
+    return `M ${x1},${y1} H ${x2} V ${y2}`;
+}
+
+function buildFlowLine(x1, y1, x2, y2, kw, {reversed = false, colorVar = 'var(--color-accent)'} = {}) {
+    if (kw === null || kw === undefined) return null;
+    const path = svgEl('path', {
+        d: buildFlowPath(x1, y1, x2, y2),
+        class: 'energyFlowLine' + (reversed ? ' energyFlowLine-reverse' : ''),
+        stroke: colorVar,
+        fill: 'none',
+    });
+    path.style.animationDuration = flowAnimationDuration(kw) + 's';
+    return path;
+}
+
+function buildHouseIcon(cx, cy, {withSolar} = {}) {
+    const wallW = 100, wallH = 66, roofRise = 58, roofOverhang = 12;
+    const wallX = cx - wallW / 2, wallY = cy - wallH / 2;
+    const roofLeftX = wallX - roofOverhang, roofRightX = wallX + wallW + roofOverhang;
+    const apexX = cx, apexY = wallY - roofRise;
+    const g = svgEl('g', {class: 'energyFlowHouse'});
+    g.appendChild(svgEl('polygon', {
+        points: `${roofLeftX},${wallY} ${apexX},${apexY} ${roofRightX},${wallY}`,
+        fill: 'var(--color-text)',
+    }));
+    g.appendChild(svgEl('rect', {
+        x: wallX, y: wallY, width: wallW, height: wallH,
+        fill: 'var(--color-bg-card)', stroke: 'var(--color-border)', 'stroke-width': 2,
+    }));
+    g.appendChild(svgEl('rect', {
+        x: cx - 10, y: wallY + wallH - 28, width: 20, height: 28, fill: 'var(--color-text-secondary)',
+    }));
+    if (withSolar) {
+        const slopeSteps = 4;
+        const angleDeg = Math.atan2(roofLeftX - apexX, wallY - apexY) * 180 / Math.PI;
+        for (let i = 1; i <= slopeSteps; i++) {
+            const t = i / (slopeSteps + 1);
+            const px = apexX + t * (roofLeftX - apexX);
+            const py = apexY + t * (wallY - apexY);
+            g.appendChild(svgEl('rect', {
+                x: px - 8, y: py - 4, width: 15, height: 8,
+                fill: '#1c3d6b', stroke: '#0a1f3d', 'stroke-width': 0.6,
+                transform: `rotate(${angleDeg} ${px} ${py})`,
+            }));
+        }
+    }
+    return g;
+}
+
+function buildPylonIcon(cx, cy) {
+    const g = svgEl('g', {stroke: 'var(--color-text-secondary)', 'stroke-width': 2.5, fill: 'none', 'stroke-linecap': 'round'});
+    g.appendChild(svgEl('path', {d: `M ${cx - 22},${cy + 40} L ${cx},${cy - 40} L ${cx + 22},${cy + 40}`}));
+    g.appendChild(svgEl('path', {d: `M ${cx - 14},${cy + 40} L ${cx + 14},${cy - 4} M ${cx + 14},${cy + 40} L ${cx - 14},${cy - 4}`}));
+    for (const yOff of [-30, -10, 12]) {
+        g.appendChild(svgEl('line', {x1: cx - (22 * (1 - (yOff + 40) / 80)), y1: cy + yOff, x2: cx + (22 * (1 - (yOff + 40) / 80)), y2: cy + yOff}));
+    }
+    return g;
+}
+
+function buildBatteryIcon(cx, cy, socPercent) {
+    const w = 44, h = 64;
+    const x = cx - w / 2, y = cy - h / 2;
+    const g = svgEl('g');
+    g.appendChild(svgEl('rect', {x: cx - 10, y: y - 8, width: 20, height: 8, fill: 'var(--color-text-secondary)'}));
+    g.appendChild(svgEl('rect', {x, y, width: w, height: h, rx: 6, fill: 'var(--color-bg-card)', stroke: 'var(--color-text-secondary)', 'stroke-width': 2.5}));
+    const soc = Math.max(0, Math.min(100, socPercent ?? 0));
+    const fillH = (h - 8) * (soc / 100);
+    g.appendChild(svgEl('rect', {
+        x: x + 4, y: y + h - 4 - fillH, width: w - 8, height: fillH, rx: 3,
+        fill: soc < 20 ? 'var(--color-error)' : 'var(--color-accent)',
+    }));
+    return g;
+}
+
+function buildHeatpumpIcon(cx, cy, on) {
+    const g = svgEl('g');
+    g.appendChild(svgEl('rect', {x: cx - 26, y: cy - 22, width: 52, height: 44, rx: 6, fill: 'var(--color-bg-card)', stroke: 'var(--color-border)', 'stroke-width': 2}));
+    const fan = svgEl('g', {class: 'energyFlowFan' + (on ? ' spinning' : '')});
+    for (const angle of [0, 90, 180, 270]) {
+        fan.appendChild(svgEl('ellipse', {
+            cx: cx, cy: cy, rx: 3, ry: 12, fill: on ? 'var(--color-accent)' : 'var(--color-text-secondary)',
+            transform: `rotate(${angle + 45} ${cx} ${cy})`,
+        }));
+    }
+    fan.appendChild(svgEl('circle', {cx, cy, r: 4, fill: 'var(--color-text)'}));
+    g.appendChild(fan);
+    return g;
+}
+
+function buildCarIcon(cx, cy, faded) {
+    const g = svgEl('g', {opacity: faded ? 0.35 : 1});
+    g.appendChild(svgEl('rect', {x: cx - 26, y: cy - 6, width: 52, height: 16, rx: 6, fill: 'var(--color-error)'}));
+    g.appendChild(svgEl('path', {d: `M ${cx - 16},${cy - 6} L ${cx - 10},${cy - 16} L ${cx + 12},${cy - 16} L ${cx + 18},${cy - 6} Z`, fill: 'var(--color-error)'}));
+    for (const dx of [-14, 14]) {
+        g.appendChild(svgEl('circle', {cx: cx + dx, cy: cy + 11, r: 6, fill: 'var(--color-text)'}));
+    }
+    return g;
+}
+
+function buildPlugIcon(cx, cy, on) {
+    const color = on ? 'var(--color-accent)' : 'var(--color-text-secondary)';
+    const g = svgEl('g', {opacity: on ? 1 : 0.4});
+    g.appendChild(svgEl('rect', {x: cx - 10, y: cy - 14, width: 20, height: 22, rx: 4, fill: 'none', stroke: color, 'stroke-width': 2.5}));
+    g.appendChild(svgEl('line', {x1: cx - 4, y1: cy - 14, x2: cx - 4, y2: cy - 20, stroke: color, 'stroke-width': 2.5, 'stroke-linecap': 'round'}));
+    g.appendChild(svgEl('line', {x1: cx + 4, y1: cy - 14, x2: cx + 4, y2: cy - 20, stroke: color, 'stroke-width': 2.5, 'stroke-linecap': 'round'}));
+    g.appendChild(svgEl('line', {x1: cx, y1: cy + 8, x2: cx, y2: cy + 16, stroke: color, 'stroke-width': 2.5, 'stroke-linecap': 'round'}));
+    return g;
+}
+
+function buildLightningIcon(cx, cy) {
+    return svgEl('path', {
+        d: `M ${cx - 4},${cy - 12} L ${cx - 10},${cy + 2} L ${cx - 2},${cy + 2} L ${cx - 6},${cy + 14} L ${cx + 10},${cy - 3} L ${cx + 2},${cy - 3} Z`,
+        fill: 'var(--color-accent)',
+    });
+}
+
+// Reiner Tag/Nacht-Indikator nach lokaler Uhrzeit - Platzhalter, bis ein Mapping von shyft's
+// Wetterdaten auf Icons vorliegt (dann ersetzt diese Funktion, der Rest des Widgets bleibt gleich).
+function renderSkyIcon(cx, cy) {
+    const hour = new Date().getHours();
+    const isDaytime = hour >= 6 && hour < 20;
+    const g = svgEl('g');
+    if (isDaytime) {
+        g.appendChild(svgEl('circle', {cx, cy, r: 14, fill: '#f4c542'}));
+        for (let i = 0; i < 8; i++) {
+            const angle = (i / 8) * 2 * Math.PI;
+            const x1 = cx + Math.cos(angle) * 19, y1 = cy + Math.sin(angle) * 19;
+            const x2 = cx + Math.cos(angle) * 25, y2 = cy + Math.sin(angle) * 25;
+            g.appendChild(svgEl('line', {x1, y1, x2, y2, stroke: '#f4c542', 'stroke-width': 2.5, 'stroke-linecap': 'round'}));
+        }
+    } else {
+        g.appendChild(svgEl('path', {
+            d: `M ${cx + 8},${cy - 14} A 14 14 0 1 0 ${cx + 8},${cy + 14} A 11 11 0 1 1 ${cx + 8},${cy - 14} Z`,
+            fill: '#c9d3e8',
+        }));
+        for (const [dx, dy] of [[22, -10], [28, 4], [18, 12]]) {
+            g.appendChild(svgEl('circle', {cx: cx + dx, cy: cy + dy, r: 1.4, fill: '#c9d3e8'}));
+        }
+    }
+    return g;
+}
+
+function buildEnergyFlowLabel(x, y, lines, {anchor = 'start'} = {}) {
+    const text = svgEl('text', {x, y, 'text-anchor': anchor, class: 'energyFlowLabel'});
+    lines.forEach((line, i) => {
+        text.appendChild(svgEl('tspan', {x, dy: i === 0 ? 0 : 14}, [document.createTextNode(line)]));
+    });
+    return text;
+}
+
+function buildEnergyFlowWidget(data) {
+    const wrapper = document.createElement('div');
+    wrapper.className = 'energyFlowWidget dashboardChart';
+    const svg = svgEl('svg', {viewBox: '0 0 920 480'});
+
+    const houseCx = 300, houseCy = 230;
+    svg.appendChild(renderSkyIcon(850, 45));
+
+    if (data.grid && data.grid.configured) {
+        const line = buildFlowLine(132, houseCy, 246, houseCy, data.grid.kw, {reversed: (data.grid.kw || 0) < 0});
+        if (line) svg.appendChild(line);
+        svg.appendChild(buildPylonIcon(90, houseCy));
+        const priceColor = data.grid.priceLevel === 'hoch' ? 'var(--color-error)' : data.grid.priceLevel === 'niedrig' ? 'var(--color-accent)' : 'var(--color-text-secondary)';
+        const priceText = data.grid.priceCent !== null ? `${data.grid.priceCent.toLocaleString('de-DE')} Cent` : '';
+        const label = buildEnergyFlowLabel(90, 300, [formatKwValue(data.grid.kw)], {anchor: 'middle'});
+        svg.appendChild(label);
+        if (priceText) {
+            const priceLabel = svgEl('text', {x: 90, y: 318, 'text-anchor': 'middle', class: 'energyFlowLabel', fill: priceColor}, [document.createTextNode(priceText)]);
+            svg.appendChild(priceLabel);
+        }
+    }
+
+    svg.appendChild(buildHouseIcon(houseCx, houseCy, {withSolar: data.pv && data.pv.configured}));
+    if (data.pv && data.pv.configured) {
+        const line = buildFlowLine(houseCx, 148, houseCx, 197, data.pv.kw);
+        if (line) svg.appendChild(line);
+        svg.appendChild(buildEnergyFlowLabel(houseCx, 128, [formatKwValue(data.pv.kw)], {anchor: 'middle'}));
+    }
+    if (data.household && data.household.configured) {
+        svg.appendChild(buildEnergyFlowLabel(houseCx + 66, houseCy + 4, [formatKwValue(data.household.kw)]));
+    }
+
+    if (data.battery && data.battery.configured) {
+        const batteryCy = 400;
+        const line = buildFlowLine(houseCx, houseCy + 33, houseCx, batteryCy - 40, data.battery.kw, {reversed: (data.battery.kw || 0) < 0});
+        if (line) svg.appendChild(line);
+        svg.appendChild(buildBatteryIcon(houseCx, batteryCy, data.battery.soc));
+        const modeLine = data.battery.mode ? [`${Math.round(data.battery.soc ?? 0)} %`, data.battery.mode] : [`${Math.round(data.battery.soc ?? 0)} %`];
+        svg.appendChild(buildEnergyFlowLabel(houseCx + 34, batteryCy - 4, [formatKwValue(data.battery.kw), ...modeLine], {anchor: 'start'}));
+    }
+
+    const columnX = 700;
+    const houseRightX = houseCx + 62;
+
+    if (data.heatpump && data.heatpump.configured) {
+        const rowY = 100;
+        const line = buildFlowLine(houseRightX, houseCy - 20, columnX - 40, rowY, data.heatpump.kw);
+        if (line) svg.appendChild(line);
+        svg.appendChild(buildHeatpumpIcon(columnX, rowY, data.heatpump.on));
+        const statusLines = [
+            data.heatpump.on === null ? 'Wärmepumpe' : (data.heatpump.on ? 'An' : 'Aus'),
+            data.heatpump.targetTempC !== null ? `Soll: ${data.heatpump.targetTempC.toLocaleString('de-DE')} °C` : null,
+            data.indoorTemp && data.indoorTemp.configured && data.indoorTemp.tempC !== null ? `Ist: ${data.indoorTemp.tempC.toLocaleString('de-DE')} °C` : null,
+            data.heatpump.dhwTankTempC !== null ? `WW-Speicher: ${data.heatpump.dhwTankTempC.toLocaleString('de-DE')} °C` : null,
+            (data.heatpump.heatingOn !== null || data.heatpump.supplyTempC !== null)
+                ? `Heizung: ${data.heatpump.heatingOn ? 'An' : 'Aus'}` + (data.heatpump.supplyTempC !== null ? ` (${data.heatpump.supplyTempC.toLocaleString('de-DE')} °C)` : '')
+                : null,
+        ].filter(Boolean);
+        svg.appendChild(buildEnergyFlowLabel(columnX + 36, rowY - 14, statusLines));
+    }
+
+    if (data.car && data.car.configured) {
+        const rowY = 220;
+        const isAway = data.car.state === 'away';
+        const isCharging = data.car.state === 'charging';
+        if (isCharging) {
+            // laedt: animierte Linie mit der tatsaechlichen Ladeleistung (Platzhalter 0.5 kW nur,
+            // falls die Wallbox-Ladeleistung selbst nicht zugeordnet/lesbar ist)
+            const line = buildFlowLine(houseRightX, houseCy, columnX - 40, rowY, data.car.chargingKw || 0.5);
+            if (line) svg.appendChild(line);
+        } else if (!isAway && data.car.state !== null) {
+            // eingesteckt, aber laedt gerade nicht: ruhige, unbewegte Verbindungslinie statt der animierten Flusslinie
+            svg.appendChild(svgEl('path', {d: buildFlowPath(houseRightX, houseCy, columnX - 40, rowY), stroke: 'var(--color-border)', 'stroke-width': 2, fill: 'none'}));
+        }
+        svg.appendChild(buildCarIcon(columnX, rowY, isAway));
+        const carLines = [];
+        if (data.car.soc !== null) carLines.push(`${Math.round(data.car.soc)} %` + (data.car.rangeKm !== null ? ` (${data.car.rangeKm} km)` : ''));
+        if (data.car.state === 'away') carLines.push('abwesend');
+        else if (data.car.state === 'charging') carLines.push('lädt');
+        else if (data.car.state === 'connected') carLines.push('eingesteckt');
+        svg.appendChild(buildEnergyFlowLabel(columnX + 36, rowY - 4, carLines));
+    }
+
+    if (data.sonstigerVerbraucher && data.sonstigerVerbraucher.configured) {
+        const rowY = 340;
+        const on = !!data.sonstigerVerbraucher.on;
+        if (on) {
+            // kein Leistungssensor fuer "Sonstiger Verbraucher" vorgesehen (nur an/aus) - fester
+            // Platzhalterwert nur fuer eine plausible Animationsgeschwindigkeit, keine echte Messung
+            const line = buildFlowLine(houseRightX, houseCy + 20, columnX - 40, rowY, 0.3);
+            if (line) svg.appendChild(line);
+        }
+        svg.appendChild(buildPlugIcon(columnX, rowY, on));
+        svg.appendChild(buildEnergyFlowLabel(columnX + 26, rowY + 4, ['Sonstiges Gerät']));
+    }
+
+    if (data.household && data.household.configured) {
+        const rowY = 430;
+        const line = buildFlowLine(houseRightX, houseCy + 30, columnX - 40, rowY, data.household.residualKw ?? 0.1);
+        if (line) svg.appendChild(line);
+        svg.appendChild(buildLightningIcon(columnX, rowY));
+        svg.appendChild(buildEnergyFlowLabel(columnX + 24, rowY + 4, ['Haushaltsstrom']));
+    }
+
+    wrapper.appendChild(svg);
+    return wrapper;
+}
+
 async function loadDashboard() {
     const container = document.getElementById('dashboardBody');
     if (!container) return;
@@ -2790,6 +3162,13 @@ async function loadDashboard() {
             return;
         }
         container.innerHTML = '';
+        try {
+            const flowData = await getJson(insideHomeAssistant + '/dashboard/energy-flow');
+            container.appendChild(buildEnergyFlowWidget(flowData));
+        } catch (err) {
+            // best-effort: ein fehlgeschlagenes Energiefluss-Widget darf die restlichen Charts nicht verhindern
+            console.log(err);
+        }
         container.appendChild(buildLineChart('Strompreis', 'Cent/kWh', data.labels, data.p_buy, {
             subtitle: 'Bezug',
             stepped: true,

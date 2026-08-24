@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.0.42.0
+
+* Neu: Energiefluss-Widget oben auf dem Dashboard - eine live-animierte Hausgrafik mit den aktuellen Werten von Netz, PV, Batterie, Wärmepumpe, Auto/Wallbox, Sonstigem Verbraucher und Haushaltsstrom. Stromfluss-Linien sind animiert (schneller bei mehr Leistung, nie ganz angehalten), der Wärmepumpen-Ventilator dreht sich, wenn sie läuft, und das Auto wird je nach Status anders dargestellt (abwesend/eingesteckt/lädt). Jedes Gerät erscheint nur, wenn es tatsächlich als Integration ausgewählt ist. Alle Icons sind selbst gezeichnet (kein externes Bildmaterial)
+* Neu: Eingabefeld "Verbrauch (kWh/100km)" unter "Auto" - zusammen mit der Akkukapazität die Grundlage für die Reichweitenanzeige im neuen Widget (künftig auch für die Umkehrung: gewünschte Reichweite in kWh)
+* Neu: Batterie-Vorzeichen (lädt/entlädt) wird automatisch aus dem Verlauf von Ladestand und Leistung erkannt, da das je nach Wechselrichter-Integration unterschiedlich gemeldet wird - mit manuellem Override unter "Batterie", falls die Erkennung mal danebenliegt oder noch keine Datenbasis hat
+
 ## 0.0.41.0
 
 * Noch nicht zugeordnete Werte in "Status-Zuordnung" sind jetzt rot umrandet; das Gerät "Wallbox" klappt sich beim Öffnen der Konfiguration automatisch auf, solange eine Zuordnung fehlt (wie bei allen anderen Geräten mit fehlenden Angaben)
