@@ -1,53 +1,59 @@
-== 0.0.40.1
+# Changelog
+
+## 0.0.40.2
+
+* Changelog liegt jetzt als CHANGELOG.md statt CHANGELOG.adoc vor - Home Assistant Supervisor zeigt diese Datei automatisch im "Changelog"-Dialog des Addons an, damit Updates direkt in Home Assistant nachvollziehbar sind, ohne extra ins GitHub-Repo schauen zu müssen
+
+## 0.0.40.1
 
 * Der Warnhinweis zur Wallbox-Status-Zuordnung ist jetzt allgemein oben auf der Konfigurationsseite zu finden (statt als Banner nur unter "Status-Zuordnung") und erste Instanz einer künftig wachsenden Sammlung an "muss behoben werden, bevor Shyft funktioniert"-Hinweisen (/config/warnings). Er greift jetzt auch bei jedem noch nicht zugeordneten, aus der Integration (deklarierte Statuswerte) oder der Historie bekannten Statuswert, nicht mehr nur beim gerade aktuellen - und erscheint nur, wenn überhaupt eine Wallbox als Gerät ausgewählt ist
 
-== 0.0.40.0
+## 0.0.40.0
 
 * Neu: Anwesenheits-/Verbrauchsprognose fürs Auto muss nicht mehr wochenlang organisch anwachsen - sobald eine (neue oder geänderte) Status-Zuordnung für "Wallbox: Auto verbunden?" gespeichert wird, rekonstruiert das Addon die Historie rückwirkend direkt aus Home Assistants Sensor-Historie (so weit der Recorder zurückreicht, i.d.R. mindestens 10 Tage)
 * Neu: Warnhinweis unter "Status-Zuordnung", wenn der gerade aktuelle Wallbox-Status noch nicht zugeordnet ist - das blockiert nämlich nicht nur die Prognose, sondern lässt z.B. auch die PV-Überschussladen-Rückfalllogik ohne jede Fehlermeldung gar nicht erst starten
 * Neu: die Verbrauchsprognose markiert jetzt Stunden mit "~", für die (noch) zu wenig Datenbasis vorliegt (Cold-Start oder wenig Historie für diesen Wochentag/Stunde-Zeitpunkt), statt eine scheinbar präzise Zahl ohne Kontext zu zeigen
 
-== 0.0.39.1
+## 0.0.39.1
 
 * Behoben: die Erkennung der beobachteten Status-Werte für "Wallbox: Auto verbunden?" (Status-Zuordnung) konnte nie mehr als den gerade aktuellen Wert anzeigen. Ursache war ein fehlendes URL-Encoding beim Abruf der Sensor-Historie - ein "+" in der Zeitzonenangabe wurde von Home Assistant als Leerzeichen interpretiert und die Anfrage deshalb abgelehnt. Betroffene Nutzer sollten unter "Status-Zuordnung" erneut nachsehen, jetzt sollten alle in den letzten 10 Tagen beobachteten Werte auftauchen
 
-== 0.0.39.0
+## 0.0.39.0
 
 * Neu: Fahrverhalten-/Verbrauchsprognose fürs Auto (erste Version) - erweitert die Anwesenheitsprognose um eine dritte Unterscheidung während "nicht eingesteckt": steht (nur Vampire Drain) vs. unterwegs (echter Fahrverbrauch), abgeleitet aus dem Akkustand-Verlauf (Rückgang ≥1%/h = unterwegs). Ein SOC-Anstieg während der Abwesenheit (Laden an einem Schnelllader o.ä., nicht der eigenen Wallbox) wird komplett herausgerechnet, verzerrt also weder die Zustands- noch die Verbrauchsstatistik
 * Neu: Eingabefeld "Akkukapazität (kWh)" unter "Auto" - wird benötigt, um Ladestandsänderungen der Autobatterie in kWh umzurechnen
 * Die Anwesenheitsprognose im "Ladestand Auto"-Chart zeigt jetzt drei Farben statt einer (grün eingesteckt, grau steht, rot unterwegs); darunter ein aufklappbarer 48h-Zahlenvektor mit der prognostizierten stündlichen Verbrauchsprognose (kWh) - vorerst nur zur Ansicht, das Einspeisen in shyft-powers input_csv folgt erst mit der geplanten Verlagerung der Optimierungslogik ins Addon
 
-== 0.0.38.0
+## 0.0.38.0
 
 * Neu: dauerhafte Websocket-Verbindung zu Home Assistant (live_entity_watcher.py) - reagiert sofort auf Sensoränderungen statt auf den nächsten Polling-Zyklus zu warten. Aktuell angeschlossen: Netzeinspeisung (löst ab 0,1 kW Änderung sofort eine PV-Überschussladen-Neubewertung aus, statt bis zu 5 Minuten zu warten) und Wallbox-Verbindungsstatus (sofortiger Log-Eintrag für die Anwesenheitsprognose + sofortige PV-Überschuss-Neubewertung, z.B. bei Abstecken). Die bisherigen Polling-Jobs laufen als Sicherheitsnetz weiter, falls die Websocket-Verbindung mal steht; die Sensor-Zuordnung wird bei jedem automatischen Reconnect (alle 30 Minuten oder bei Verbindungsabbruch) neu aus der Konfiguration gelesen, wirkt eine Änderung also ohne Addon-Neustart
 * Eine Sperre verhindert, dass ein live ausgelöster und ein zeitgesteuerter Regelkreis-Tick gleichzeitig laufen und sich dabei gegenseitig überschreiben (z.B. zwei parallel gestartete Ladesessions)
 
-== 0.0.37.0
+## 0.0.37.0
 
 * Neu: PV-Überschussladen-Rückfalllogik fürs Auto - läuft unabhängig von shyft-powers eigener PV-Prognose-basierter "Auto laden"-Aktion. Startet, wenn der Wechselrichter ins Netz einspeist (Schwelle -0,3 kW mit Heimspeicher, -1,5 kW ohne) und das Auto ladebereit + "Auto laden" aktiviert ist, und regelt die Ladeleistung danach alle 5 Minuten anhand der aktuellen Einspeisung nach (erhöhen bei fortgesetzter Einspeisung, senken sobald keine mehr da ist). Stoppt bei Heimspeicher-SOC ≤97 % (mit Speicher) bzw. sobald die Mindestladeleistung erreicht und weiterhin keine Einspeisung da ist (ohne Speicher)
 * Die Fallback-Ladevorgänge erscheinen wie eigene shyft-Aktionen ("Auto laden" / "PV-Überschussladen") im Gerätesteuerung-Tab, inklusive aufklappbarem Log mit Ladeleistung und Uhrzeit je Regelschritt
 
-== 0.0.36.0
+## 0.0.36.0
 
 * Unter "PV-Leistung" wird jetzt der verbleibende/volle PV-Ertrag pro Tag angezeigt ("Heute: 3 kWh | Morgen: 27 kWh"), auf ganze kWh gerundet. "Übermorgen" erscheint nur, wenn der PV-Ertrag an diesem Tag in den Daten erkennbar auf 0 gefallen ist (ab 17 Uhr geprüft, deckt auch einen frühen Wintersonnenuntergang ab)
 
-== 0.0.35.1
+## 0.0.35.1
 
 * Anwesenheitsprognose: neue feste Sicherheits-Heuristik - je länger das Auto ununterbrochen abwesend ist (über eine normale Tagesabwesenheit hinaus), desto stärker wird die gelernte Rückkehrwahrscheinlichkeit gedeckelt, unabhängig davon, ob dafür schon eine vergleichbar lange Abwesenheit in der Historie beobachtet wurde (z.B. beim ersten Urlaub)
 * Anwesenheitsprognose berücksichtigt jetzt zusätzlich den Akkustand (falls "EV - SOC" zugeordnet ist): ein leerer Akku erhöht die Einsteck-Wahrscheinlichkeit leicht, bewusst mit begrenztem Einfluss
 
-== 0.0.35.0
+## 0.0.35.0
 
 * Neu: Anwesenheitsprognose fürs Auto (erste Version) - lernt aus der Historie des Sensors "Wallbox: Auto verbunden?", wann das Auto typischerweise eingesteckt ist (Wochentag/Stunde-Muster, reagiert auch kurzfristig auf eine unerwartete aktuelle Abwesenheit/Anwesenheit)
 * Neu: unter "Wallbox: Auto verbunden?" können die bei dir tatsächlich vorkommenden Sensor-Statuswerte (z.B. "awaiting_authorization") einmalig als "Auto kann laden" oder "Auto kann nicht laden" zugeordnet werden - nötig, weil jede Wallbox-Integration ihr eigenes Vokabular für diesen Status verwendet
 * Die Prognose für die nächsten 48 Stunden wird als Balken im "Ladestand Auto"-Diagramm auf dem Dashboard angezeigt (dunkler = wahrscheinlicher eingesteckt)
 
-== 0.0.34.1
+## 0.0.34.1
 
 * Ladestand Heimspeicher/Auto: Y-Achse ist jetzt fix auf 0-100 % skaliert, statt sich am tatsächlichen Wertebereich zu orientieren
 
-== 0.0.34.0
+## 0.0.34.0
 
 * Strompreis- und Raumtemperatur-Titel zeigen die Einheit jetzt in einer Klammer zusammen mit der Zusatzangabe ("Bezug, Cent/kWh" bzw. "Ziel, °C")
 * Behoben: Springt der Strompreis über eine Farbschwelle (z.B. von 20 auf 31 Cent), wird die Verbindungslinie jetzt an der Schwelle farblich geteilt statt komplett in der falschen Farbe zu erscheinen
@@ -55,16 +61,16 @@
 * Raumtemperatur (Ziel) wird jetzt als Stufenfunktion und auf ganze Grad gerundet dargestellt
 * Warmwasser sowie Ladestand Heimspeicher/Auto sind jetzt farbcodiert: grün bei Anstieg, grau bei kleinem Rückgang, rot bei stärkerem Rückgang (Schwelle 1 °C/h bzw. 0,1 %/h)
 
-== 0.0.33.1
+## 0.0.33.1
 
 * Ladestand Auto: Wert war fraktional (0-1) statt Prozent - wird jetzt wie Ladestand Heimspeicher als 0-100 % dargestellt
 
-== 0.0.33.0
+## 0.0.33.0
 
 * Neu: Die Variante "HA-Automation" (deine selbst erstellte Automation triggern statt eine Entität direkt zu steuern) ist jetzt auch bei "PV: Einspeisung begrenzen", "Verbrauch begrenzen §14a", "Warmwasserbereitung" und "Sonstiger Verbraucher" wählbar (Dropdown "Varianten")
 * "Sonstiger Verbraucher": bei "HA-Automation" gibt es zwei Automationsfelder (Start/Ende); der Toggle beim Testen ist einem einzelnen Button gewichen, der bei jedem Klick zwischen Start und Ende wechselt
 
-== 0.0.32.0
+## 0.0.32.0
 
 * Dashboard: ist jetzt der Standard-Tab beim Öffnen; die Tab-Leiste lässt sich horizontal swipen/scrollen, damit "Konfiguration" auf schmalen Bildschirmen erreichbar bleibt; Diagramm-Beschriftungen sind auf Mobilgeräten größer
 * Strompreis wird jetzt in Cent/kWh angezeigt (statt €/kWh) und dreifarbig dargestellt (rötlich über 35 Cent, grün bis 25 Cent, dazwischen grau)
@@ -74,24 +80,24 @@
 * "Auto laden": Zahlenfelder außer der Amperezahl (z.B. "minutes") werden jetzt nicht mehr angezeigt, sobald ein Amperezahl-Feld erkannt wurde - der zuletzt gespeicherte Wert bleibt aktiv, ohne dass ein Eingabefeld dafür nötig ist
 * Neu: "Auto laden" kann jetzt auch über eine eigene Home-Assistant-Automation gesteuert werden (Variante "HA-Automation") - die Automation wird beim Start bzw. Ende der Aktion getriggert, mit dem Zielwert als {{ target }} und "start"/"stop" als {{ phase }}
 
-== 0.0.31.2
+## 0.0.31.2
 
 * "Strompreis (Bezug)" wird jetzt als Stufenfunktion dargestellt (Wert bleibt bis zur nächsten Stunde konstant, statt zwischen zwei Stunden zu verlaufen) - passend dazu, dass sich der Preis stündlich ändert. Außentemperatur und PV-Leistung bleiben unverändert als geglättete Linie
 
-== 0.0.31.1
+## 0.0.31.1
 
 * Die Dashboard-Diagrammdaten (input_csv) werden jetzt stündlich im Hintergrund von shyft-power abgerufen und lokal zwischengespeichert (zusammen mit dem stündlichen Aktions-Abruf), statt bei jedem Öffnen des Dashboard-Tabs live abgefragt zu werden
 
-== 0.0.31.0
+## 0.0.31.0
 
 * Neu: Tab "Dashboard" (vor "Gerätesteuerung") mit drei Diagrammen für die nächsten Stunden - Strompreis (Bezug), Außentemperatur und PV-Leistung. Die Daten kommen aus shyft-powers Optimierer-Rohdaten (input_csv); die Zeitachse startet bei creation_date, abgerundet auf die volle Stunde, mit einem Wert pro Stunde
 
-== 0.0.30.1
+## 0.0.30.1
 
 * Aufklapp-Pfeil bei den Gerätekacheln ist jetzt größer und oben rechts statt oben links
 * Der Verbindungsstrich bei "Auto laden" läuft jetzt durchgehend neben allen drei Schritten (statt nur als kurzer Verbinder in den Lücken), mit einem Punkt an jedem Schritt
 
-== 0.0.30.0
+## 0.0.30.0
 
 * Neu: "Warmwasserbereitung" bekommt einen eigenen Befehl-Auswahl analog zu "Auto laden" (Dropdown, gefiltert auf die Wärmepumpen-Integration deines gewählten Geräts, Geräte-ID automatisch befüllt) statt einer selbst zu bauenden Home-Assistant-Automation - einfache Einzelaktion, kein mehrstufiger Prozess. Dazu ein "Test: Warmwasserbereitung"-Button, der den Sensor "Warmwassermodus aktiviert?" nach dem Auslösen anzeigt
 * Fix: "2. Amperezahl setzen" erkennt das Feld für die Amperezahl jetzt zuverlässig an dessen deklarierter Einheit (z.B. "A") statt über eine Checkbox - das betroffene Feld wird automatisch befüllt und gar nicht mehr angezeigt, andere Zahlenfelder (z.B. "minutes") bleiben normale Eingabefelder
@@ -99,48 +105,48 @@
 * Fix: Bei Sensor-Werten ohne Einheit (z.B. "on"/"off") stand ein überflüssiges Leerzeichen vor der schließenden Klammer (z.B. "on )" statt "on)")
 * Wortlaut: "Befülle die '...'" heißt jetzt "Befülle den Sensor '...'"
 
-== 0.0.29.0
+## 0.0.29.0
 
 * "Auto laden": Springt die Ziel-Ladeleistung über die 1-/3-Phasen-Grenze (z.B. von 2,3 kW auf 6,9 kW oder umgekehrt), stoppt das Addon den Ladevorgang jetzt zuerst und wartet 10s, bevor es die neue Phasenzahl setzt - Wallboxen können die Phase nur wechseln, während gerade nicht geladen wird. Erkannt wird das am Sensor "Wallbox - Ladestrom" (aktuelle Ladeleistung) im Vergleich zum neuen Zielwert; ist der Sensor nicht zugeordnet oder sein Wert nicht lesbar, wird sicherheitshalber immer zuerst gestoppt
 
-== 0.0.28.1
+## 0.0.28.1
 
 * Fix: Bei "2. Amperezahl setzen" wurde die berechnete Amperezahl in das zuletzt durchlaufene Zahlenfeld des gewählten Befehls geschrieben, unabhängig davon, ob dieses Feld überhaupt für die Stromstärke gedacht war (z.B. bei easee.set_charger_dynamic_limit landete sie im "minutes"-Feld statt in "amps", "amps" blieb leer). Zahlenfelder bekommen jetzt eine eigene Checkbox "automatisch aus berechneter Amperezahl" - nur die dort markierten Felder werden befüllt, alle anderen (z.B. "minutes") bleiben normale, manuell einzutragende Felder
 
-== 0.0.28.0
+## 0.0.28.0
 
 * "Auto laden" setzte bislang keine Amperezahl an der Wallbox, obwohl sie aus dem Ziel-kW-Wert berechnet wurde - die berechnete Amperezahl wird jetzt tatsächlich gesendet. Dafür neuer Zwischenschritt "2. Amperezahl setzen" (Variante heißt jetzt "Dreistufig" statt "Zweistufig"): Entität auswählen (Dropdown, gefiltert auf Entitäten mit Einheit "A"), das zugehörige Befehlsfeld wird automatisch mit dem berechneten Wert befüllt
 * Generische Home-Assistant-Befehle wie z.B. number.set_value (die ihre Entität nicht als eigenes Feld, sondern als "Ziel" deklarieren) bekommen jetzt ebenfalls ein Entity-Auswahlfeld angeboten - vorher gab es dafür gar keine Eingabemöglichkeit
 * Zwischen allen drei Schritten (Phasenanzahl, Amperezahl, Ladevorgang starten) liegen jetzt 10s Pause statt 5s nur zwischen Phasenanzahl und Start - ein Test hat gezeigt, dass die Phasenumschaltung bei zu eng getakteten Befehlen von der Wallbox nicht übernommen wurde
 
-== 0.0.27.0
+## 0.0.27.0
 
 * Schlägt ein Test-Button (Sensor/Aktion-Kacheln, "Auto laden") fehl, meldet das Addon den Fehler jetzt zusätzlich an shyft-power (Nutzer, Kontext, Fehlertyp, Fehlermeldung, aufgerufener Befehl und gesendete Daten) - hilft beim Support, ohne dass Nutzer das Home-Assistant-Log selbst weiterreichen müssen
 * Der Text "(wird geprüft...)" nach einem gesendeten "Auto laden"-Befehl ist entfernt, da dafür kein Sensor für die tatsächliche Ladeleistung bekannt ist und sich der Text nie auflöste - das Addon zeigt nur noch, was gesendet wurde
 
-== 0.0.26.1
+## 0.0.26.1
 
 * Fix: "Auto laden" konnte device_id leer an Home Assistant senden, wenn der Wert schon vor der automatischen Befüllung gespeichert war (z.B. vor dem Update, oder solange noch kein Speichern ausgelöst wurde). Der Aufruf ergänzt device_id jetzt zusätzlich zur Laufzeit direkt aus dem aktuell ausgewählten Wallbox-Gerät, statt sich allein auf den zuletzt gespeicherten Konfigurationsstand zu verlassen
 
-== 0.0.26.0
+## 0.0.26.0
 
 * Geräte-Kacheln in der Konfiguration sind jetzt ein-/ausklappbar (Pfeil vor der Überschrift). Beim Laden sind unvollständige Kacheln (leere Sensor-/Aktion-Zuordnung, unvollständige "Auto laden"-Variante) automatisch ausgeklappt, vollständige eingeklappt - Kacheln ohne ausgewählte Integration bleiben eingeklappt (nichts zum Anzeigen). Taucht später ein Fehler auf (z.B. eine zugeordnete Entity liefert keinen lesbaren Wert), klappt sich die betroffene Kachel automatisch auf
 * "Auto laden": Die device_id (bzw. jedes Feld mit Geräte-Bezug) wird nicht mehr angezeigt - sie ist immer eindeutig die des bereits ausgewählten Wallbox-Geräts und wird beim Speichern automatisch gesetzt
 * Der verbindende vertikale Strich läuft jetzt nicht mehr neben "1. Phasenanzahl setzen"/"2. Ladevorgang steuern" selbst, sondern nur noch als kurzer Verbinder in der Lücke dazwischen
 * Mehr Logging beim Ausführen eines "Auto laden"-Befehls (welcher Service mit welchen Daten aufgerufen wird, und der Fehler bei einem Fehlschlag) - hilfreich zum Abgleich mit Home Assistants eigenem Log, da dessen REST-Antwort bei einem 500er meist keine weiteren Details enthält
 
-== 0.0.25.0
+## 0.0.25.0
 
 * "Auto laden": Felder, die eine Home-Assistant-Geräte-ID erwarten (z.B. device_id bei easee.set_charger_phase_mode), werden jetzt automatisch aus der bereits gewählten Wallbox-Integration befüllt (Dropdown statt Freitext) - dafür liefert /integrations jetzt auch die Geräte pro Integration mit
 * "Mit 1 Phase laden" / "Mit 3 Phasen laden" statt "Wert für 1 Phase" + separatem Feldnamen, "Ladevorgang starten" / "Ladevorgang beenden" jeweils direkt als Zeilenbeschriftung
 * Die beiden Fälle je Schritt sind jetzt sichtbar eingerückt, und ein durchgehender vertikaler Strich verbindet "1. Phasenanzahl setzen" und "2. Ladevorgang steuern" links, um den zusammenhängenden Ablauf zu verdeutlichen
 
-== 0.0.24.0
+## 0.0.24.0
 
 * "Auto laden" braucht jetzt keine "Ziel-Entity" und keine "Datenfelder (JSON)" mehr. Stattdessen erzeugt das Addon automatisch ein Eingabefeld pro Parameter des gewählten Befehls: Parameter ohne feste Werte (z.B. device_id) bekommen ein einzelnes, gemeinsames Feld; Parameter mit festen Werten (z.B. mode bei easee.set_charger_phase_mode) bekommen ein Dropdown pro Fall - bei "Phasenanzahl setzen" je eins für "1 Phase" und "3 Phasen", bei "Ladevorgang steuern" je eins für "Ladevorgang starten" und "Ladevorgang beenden". Nutzer müssen die tatsächlichen Werte damit nirgends mehr selbst kennen oder eintippen
 * "2. Ladevorgang starten" umbenannt in "2. Ladevorgang steuern" und um die "Beenden"-Variante erweitert - der bisher eigenständige Abschnitt "Laden beenden" ist jetzt darin enthalten (ein Befehl, zwei Fälle), inklusive gemeinsamem Test-Button
 
-== 0.0.23.0
+## 0.0.23.0
 
 * Sensordaten an shyft-power werden jetzt bei Bedarf in die erwartete Einheit umgerechnet (z.B. W → kW, ÷1000), statt die von Home Assistant gelieferte Einheit unverändert durchzureichen. Sensoren ohne numerische Einheit (Modi, An/Aus) bleiben unangetastet
 * "Auto laden": 5 Sekunden Pause zwischen "Phasenanzahl setzen" und "Ladevorgang starten" (real wie im Test), damit die Wallbox den Phasenwechsel sicher verarbeitet hat, bevor der Startbefehl kommt
@@ -149,67 +155,67 @@
 * Aktionskarten in der Gerätesteuerung zeigen jetzt das Marken-Icon der zuständigen Integration (von Home Assistants öffentlichem Icon-Verzeichnis brands.home-assistant.io)
 * Kleinere Korrekturen: "Auto laden"-Überschrift/Beschriftungen, Platzhaltertexte bei der Befehlsauswahl, veralteter "Nur zur Anzeige"-Hinweis auf dem Gerätesteuerung-Tab entfernt
 
-== 0.0.22.0
+## 0.0.22.0
 
 * "Auto laden" ruft jetzt echte Home-Assistant-Befehle (Services) statt nur Entities auf - nötig, weil manche Wallbox-Integrationen (z.B. Easee) Phasenwahl/Start/Stopp über eigene Services wie easee.set_charger_phase_mode oder easee.action_command abbilden, nicht über number/button-Entities. Jede Stufe bekommt eine Service-Auswahl (vorgeschlagen werden generische Entity-Services plus alle Services der Domain deiner gewählten Wallbox-Integration), ein optionales Ziel-Entity und ein JSON-Feld für die übrigen Parameter, mit "{value}" als Platzhalter für die berechnete Phasen-/Amperezahl. Neuer Endpoint GET /services listet die Kandidaten inkl. ihrer deklarierten Feldnamen
 * "Auto laden"-Überschrift vereinfacht: "Auto laden" statt "Lade-Rezept", Feldbezeichnung "Varianten" statt "Rezept"
 
-== 0.0.21.0
+## 0.0.21.0
 
 * "Auto laden" bekommt ein Lade-Rezept in der Konfiguration, ohne dass der Nutzer merkt, dass technisch eine Befehlskette läuft: Dropdown "Rezept" (aktuell nur "Zweistufig"), das bei Auswahl zwei Entity-Zuordnungen einblendet - "Phasenzahl setzen" und "Ladevorgang starten" (number/select/button/switch, gefiltert auf diese Domains, Befehl wird passend zur Entity-Domain abgeleitet). Test-Button testet beide Stufen und zeigt danach den Wallbox-Status-Sensor als Erfolgskontrolle. "Laden beenden" ist eine eigene, vom Rezept unabhängige einzelne Entity-Zuordnung (mit eigenem Test-Button), da das herstellerübergreifend meist eine einzelne Aktion ist
 * Gerätesteuerung für "Auto laden" ist jetzt ebenfalls scharf: das Addon berechnet aus dem kW-Zielwert einer shyft-power-Aktion die passende Phasenzahl und Amperezahl (230V/Phase, 16A Einphasen-Grenze, Aufrunden auf mind. 6A - noch nicht konfigurierbar, shyft-powers eigene Leistungsgrenzen werden noch nicht ans Addon übermittelt) und ruft dann Phasenzahl- und Start-Entity auf; "Beenden" ruft die Stop-Entity
 * Fix: "Auto verbunden?" am Auto entfernt (redundant zum Sensor an der Wallbox, der dieselbe Information liefert) - inklusive des zugehörigen Datenpunkts im stündlichen Sync an shyft-power
 * Fix: "Wallbox: Auto verbunden?" filterte Entities nicht mehr nach Einheit - jetzt werden Entities mit kWh/kW/W/A/V/°C/%/Wh ausgeblendet, Text-/Zahl-/Boolean-Zustände bleiben wählbar
 
-== 0.0.20.0
+## 0.0.20.0
 
 * Drei weitere Aktionen sind jetzt auto-managed (Entity direkt steuerbar, keine eigene Automation nötig), mit Test-Button/-Toggle, Checkmark und Live-Status/-Wert in der Konfiguration - wie bisher schon bei "Heizung Soll-Temperatur": "PV: Einspeisung begrenzen" und "Verbrauch begrenzen (§14a)" (jeweils number/climate-Entity, Test ±1), sowie "Sonstiger Verbraucher" (switch-Entity, Test-Toggle An/Aus statt Buttons)
 * Neue Sensor-Zuordnungsfelder dafür: "PV: Einspeisung begrenzen (aktuell)", "Verbrauch begrenzen §14a (aktuell)" unter Wechselrichter, "Sonstiger Verbraucher (aktuell)" unter Sonstiger Verbraucher
 * Gerätesteuerung ist jetzt scharf: für diese vier Aktionstypen führt das Addon Start/Ende bei einer shyft-power-Aktion wirklich aus (Entity setzen bzw. ein-/ausschalten), sofern der jeweilige Aktionstyp-Toggle an ist (Default: an) - vorher war das überall nur simuliert/geloggt. Alle anderen Aktionstypen bleiben bis auf Weiteres Platzhalter
 * Auto-managed Scripts werden jetzt auch beim Addon-Start neu synchronisiert (nicht nur beim Speichern der Konfiguration), damit ein Neustart oder ein versehentlich gelöschtes Script sich von selbst repariert
 
-== 0.0.19.2
+## 0.0.19.2
 
 * Benachrichtigungstyp umbenannt: "Geräteverhalten abweichend von Shyft-Steuerung" statt "Gerätestatus..."
 
-== 0.0.19.1
+## 0.0.19.1
 
 * Handy-Auswahl unter "Benachrichtigungen" ist jetzt ein Dropdown statt Freitext, auf Handys beschränkt (Home Assistant Mobile-App-Integration, per notify-Service - keine Entity nötig). Ein zuvor gespeichertes, aktuell nicht gemeldetes Handy bleibt als Option erhalten ("nicht gefunden"), statt beim nächsten Speichern stillschweigend verloren zu gehen
 * Neuer Endpoint GET /notification-targets, neue Adapter-Methode get_mobile_app_notify_targets()
 
-== 0.0.19.0
+## 0.0.19.0
 
 * Per-Aktionstyp-Toggle in der Konfiguration ("nur simulieren"), default An - ersetzt shyft-powers eigene "(deaktiviert)"-Logik vollständig; der Zustand des Toggles entscheidet jetzt, ob Start/Ende einer Aktion real oder nur simuliert (geloggt) wird. Die reinen "Stopp"-Aktoren (Batterie-Aktion beenden, Auto laden beenden) haben bewusst keinen eigenen Toggle, sie folgen dem Toggle ihres zugehörigen Start-Aktionstyps
 * Wird ein Aktionstyp umgeschaltet, während eine passende Aktion gerade läuft, wird sie sofort gestoppt bzw. gestartet, statt auf den nächsten 15-Minuten-Poll zu warten
 * Neuer Konfigurationsbereich "Benachrichtigungen": Handy-Zielfeld (Home-Assistant notify-Entity oder -Service) plus an/aus-Schalter pro Benachrichtigungstyp. Erster Typ: "Aktionen starten / beenden" (aktiv). Zweiter Typ "Gerätestatus abweichend von Shyft-Steuerung" ist im 15-Minuten-Poll verdrahtet, aber die eigentliche Abweichungserkennung fehlt noch - die braucht dieselbe pro-Aktion-Logik wie die Start/Ende-Ausführung selbst und folgt in einem späteren Schritt
 * Entfernt: das interne "shyftActionsEnabled"-Flag aus 0.0.18.0 (nie in der UI sichtbar) - durch die Aktionstyp-Toggles ersetzt
 
-== 0.0.18.0
+## 0.0.18.0
 
 * New cron job: polls the shyft-power action queue on the hour and every 15 minutes and fires start/end hooks per action (start: Status "aktiv" and Date Start passed; end: Date End passed, regardless of Status). Both are deduplicated per action id via a persisted set that survives addon restarts, so an extended action (same id, later Date End) doesn't re-fire start, while a superseded ("abgelöst") action - which gets a new id from shyft-power - correctly fires its own start. What start/end actually do per action type is not implemented yet (placeholder logging only), pending a follow-up step
 * New "shyftActionsEnabled" config flag (defaults to off, no UI toggle yet) to later gate whether these hooks are allowed to act on real devices
 * Fix: saving the configuration form overwrote the whole config file instead of merging, which would have silently wiped the new action-tracking state on every normal save
 
-== 0.0.17.1
+## 0.0.17.1
 
 * Fix: BUBBLE_URI_TEST (development_mode) still pointed at the old anselmhuewe.bubbleapps.io domain; now https://shyft-power.com/version-test/, so development_mode correctly targets shyft-power's test environment for all workflows including the new action queue
 
-== 0.0.17.0
+## 0.0.17.0
 
 * Switch the outbound Bubble endpoint from anselmhuewe.bubbleapps.io to shyft-power.com
 * New "Gerätesteuerung" tab, alongside the existing config UI now under a "Konfiguration" tab, showing the read-only action queue pulled from shyft-power's new return_actions_to_addon endpoint - grouped by day with a daily savings figure, matching shyft-power's own web UI. Nothing here executes anything on the user's devices yet
 * New backend: ShyftAdapter.get_actions() and GET /shyft/actions, using the user id embedded in the shyft_access_key
 
-== 0.0.16.3
+## 0.0.16.3
 
 * Log heating_target_temp script-sync failures to the addon log instead of swallowing them silently
 
-== 0.0.16.2
+## 0.0.16.2
 
 * Update "Zieltemperatur (aktuell)" tooltip text
 * Fix: config.yaml's version was left at 0.0.16.0 in the previous release even though the code shipped as 0.0.16.1, so Supervisor never offered the update. The version now lives only in config.yaml (app.py reads it at startup) instead of also being duplicated in version.py, removing the class of bug entirely
 
-== 0.0.16.1
+## 0.0.16.1
 
 * Remove the "Shyft-Sensor / Home Assistant Entity ID" and "Shyft-Aktion / Home Assistant Automation" table headers; replace with clear "Sensoren" / "Steuerung" section headings, with more visual separation before "Steuerung"
 * Show a green checkmark next to "Heizung Soll-Temperatur" instead of "Eingerichtet (entity_id)" text
@@ -218,38 +224,38 @@
 * Fix: the status check now verifies the script entity itself exists, instead of only checking that the mapped sensor entity is readable
 * Fix: value-extraction on save only handled the old "entity_id: state unit" format; now handles "entity_id (state unit)" too
 
-== 0.0.16.0
+## 0.0.16.0
 
 * First auto-managed action: "Heizung Soll-Temperatur" no longer needs a manually entered automation/script - the addon creates and maintains a script (number.set_value or climate.set_temperature) itself, targeting whatever entity is mapped at "Zieltemperatur (aktuell)"
 * New "Test: +1 Grad" / "Test: -1 Grad" buttons with live current-value display to verify the setup actually works
 * Addon can now write to Home Assistant (script config API, service calls) - previously read-only. New adapter methods: post/delete_from_homeassistant, put/delete_script_config, call_service, read_entity_numeric_value
 
-== 0.0.15.1
+## 0.0.15.1
 
 * Add a clear ("×") button to sensor/action entity fields
 * Filter sensor entity suggestions by device_class instead of unit_of_measurement (power/battery/temperature/on-off, per field), with a permissive fallback for entities that are unavailable/unknown
 * Wärmepumpe integration picker now requires at least one temperature-class sensor, same as the existing power-sensor requirement for Wechselrichter/Batterie
 * Fix: the "allow when uncertain" rule no longer lets any integration with one unrelated unavailable entity satisfy every device-class requirement
 
-== 0.0.15.0
+## 0.0.15.0
 
 * Integration picker is now multi-select (checkboxes + search) instead of one integration per device type, so sensors from several integrations can feed the same device section
 * Fix: integration names in the picker no longer show the raw internal ID
 * Fix: disable browser autofill on sensor/action entity fields so the browser's own form-fill history no longer bleeds into the entity suggestions
 * Add visual separation between the Sensor and Aktion tables within a section
 
-== 0.0.14.3
+## 0.0.14.3
 
 * Add a cache-busting version query param to app.js so browsers can't keep serving a stale, pre-update copy (the no-cache header in 0.0.14.2 only prevented *future* staleness, it couldn't undo an already-cached copy)
 
-== 0.0.14.2
+## 0.0.14.2
 
 * Send no-cache headers so the browser always loads the latest app.js/index.html after an addon update
 
-== 0.0.14.1
+## 0.0.14.1
 
 * Mask SUPERVISOR_TOKEN and SHYFT_ACCESS_KEY in startup logs instead of printing them in plain text
 
-== 0.0.14.0
+## 0.0.14.0
 
 * KAN-163 : Filter pv history values better (two values for one hour)
