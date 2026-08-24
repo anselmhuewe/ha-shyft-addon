@@ -2905,104 +2905,209 @@ function buildFlowLine(x1, y1, x2, y2, kw, {reversed = false, colorVar = 'var(--
     return path;
 }
 
+function buildGroundShadow(cx, cy, rx, ry) {
+    return svgEl('ellipse', {cx, cy, rx, ry, fill: 'var(--flow-shadow)'});
+}
+
+function buildEnergyFlowDefs() {
+    const defs = svgEl('defs');
+    const sky = svgEl('linearGradient', {id: 'efw-sky', x1: '0', y1: '0', x2: '0', y2: '1'});
+    sky.appendChild(svgEl('stop', {offset: '0%', style: 'stop-color: var(--flow-sky-top)'}));
+    sky.appendChild(svgEl('stop', {offset: '100%', style: 'stop-color: var(--flow-sky-horizon)'}));
+    defs.appendChild(sky);
+    return defs;
+}
+
+// Sanft geschwungener Hintergrund (Himmel + Rasenhuegel), damit die Szene nicht auf freiem
+// (transparentem) Grund zu schweben scheint - traegt selbst am meisten zum "kein primitives
+// Strichmaennchen mehr"-Eindruck bei.
+function buildSceneBackground(width, height) {
+    const g = svgEl('g');
+    g.appendChild(svgEl('rect', {x: 0, y: 0, width, height, rx: 16, fill: 'url(#efw-sky)'}));
+    g.appendChild(svgEl('path', {
+        d: `M 0,${height - 60} C 150,${height - 82} 300,${height - 68} 460,${height - 78} C 620,${height - 88} 770,${height - 65} ${width},${height - 74} L ${width},${height} L 0,${height} Z`,
+        fill: 'var(--flow-ground)',
+    }));
+    g.appendChild(svgEl('path', {
+        d: `M 0,${height - 48} C 150,${height - 68} 300,${height - 56} 460,${height - 65} C 620,${height - 74} 770,${height - 54} ${width},${height - 62} L ${width},${height} L 0,${height} Z`,
+        fill: 'var(--flow-ground-shade)', opacity: 0.65,
+    }));
+    return g;
+}
+
 function buildHouseIcon(cx, cy, {withSolar} = {}) {
-    const wallW = 100, wallH = 66, roofRise = 58, roofOverhang = 12;
+    const wallW = 108, wallH = 70, roofRise = 56, roofOverhang = 14;
     const wallX = cx - wallW / 2, wallY = cy - wallH / 2;
     const roofLeftX = wallX - roofOverhang, roofRightX = wallX + wallW + roofOverhang;
     const apexX = cx, apexY = wallY - roofRise;
     const g = svgEl('g', {class: 'energyFlowHouse'});
-    g.appendChild(svgEl('polygon', {
-        points: `${roofLeftX},${wallY} ${apexX},${apexY} ${roofRightX},${wallY}`,
-        fill: 'var(--color-text)',
+
+    g.appendChild(buildGroundShadow(cx, wallY + wallH + 8, wallW / 2 + 28, 10));
+
+    // Dach: zwei Facetten (links dunkler, rechts heller) fuer etwas Tiefe, plus First-Kante
+    g.appendChild(svgEl('polygon', {points: `${roofLeftX},${wallY} ${apexX},${apexY} ${apexX},${wallY}`, fill: 'var(--flow-roof-dark)'}));
+    g.appendChild(svgEl('polygon', {points: `${apexX},${wallY} ${apexX},${apexY} ${roofRightX},${wallY}`, fill: 'var(--flow-roof-light)'}));
+    g.appendChild(svgEl('rect', {x: apexX - 3, y: apexY - 2, width: 6, height: 6, rx: 3, fill: 'var(--flow-roof-dark)'}));
+
+    // Wand
+    g.appendChild(svgEl('rect', {x: wallX, y: wallY, width: wallW, height: wallH, rx: 3, fill: 'var(--flow-wall)', stroke: 'var(--flow-wall-shade)', 'stroke-width': 1.5}));
+    g.appendChild(svgEl('rect', {x: wallX, y: wallY + wallH - 6, width: wallW, height: 6, fill: 'var(--flow-wall-shade)'}));
+
+    // Fenster
+    const winSize = 17, winX = wallX + 14, winY = wallY + 12;
+    g.appendChild(svgEl('rect', {x: winX, y: winY, width: winSize, height: winSize, rx: 2, fill: 'var(--flow-window)', stroke: 'var(--flow-wall-shade)', 'stroke-width': 1.5}));
+    g.appendChild(svgEl('line', {x1: winX + winSize / 2, y1: winY, x2: winX + winSize / 2, y2: winY + winSize, stroke: 'var(--flow-wall-shade)', 'stroke-width': 1.2}));
+    g.appendChild(svgEl('line', {x1: winX, y1: winY + winSize / 2, x2: winX + winSize, y2: winY + winSize / 2, stroke: 'var(--flow-wall-shade)', 'stroke-width': 1.2}));
+
+    // Tuer (abgerundeter Bogen oben)
+    const doorW = 20, doorH = 30, doorBottom = wallY + wallH, doorTop = doorBottom - doorH;
+    g.appendChild(svgEl('path', {
+        d: `M ${cx - doorW / 2},${doorBottom} L ${cx - doorW / 2},${doorTop + 7} Q ${cx - doorW / 2},${doorTop} ${cx},${doorTop} Q ${cx + doorW / 2},${doorTop} ${cx + doorW / 2},${doorTop + 7} L ${cx + doorW / 2},${doorBottom} Z`,
+        fill: 'var(--flow-door)',
     }));
-    g.appendChild(svgEl('rect', {
-        x: wallX, y: wallY, width: wallW, height: wallH,
-        fill: 'var(--color-bg-card)', stroke: 'var(--color-border)', 'stroke-width': 2,
-    }));
-    g.appendChild(svgEl('rect', {
-        x: cx - 10, y: wallY + wallH - 28, width: 20, height: 28, fill: 'var(--color-text-secondary)',
-    }));
+    g.appendChild(svgEl('circle', {cx: cx + doorW / 2 - 4, cy: doorTop + doorH / 2 + 4, r: 1.4, fill: 'var(--flow-wall)'}));
+
     if (withSolar) {
-        const slopeSteps = 4;
+        const cols = 3, rows = 2, cellW = 14, cellH = 9, gap = 1;
+        const gridW = cols * cellW + (cols - 1) * gap, gridH = rows * cellH + (rows - 1) * gap;
         const angleDeg = Math.atan2(roofLeftX - apexX, wallY - apexY) * 180 / Math.PI;
-        for (let i = 1; i <= slopeSteps; i++) {
-            const t = i / (slopeSteps + 1);
-            const px = apexX + t * (roofLeftX - apexX);
-            const py = apexY + t * (wallY - apexY);
-            g.appendChild(svgEl('rect', {
-                x: px - 8, y: py - 4, width: 15, height: 8,
-                fill: '#1c3d6b', stroke: '#0a1f3d', 'stroke-width': 0.6,
-                transform: `rotate(${angleDeg} ${px} ${py})`,
-            }));
+        const midX = apexX + 0.52 * (roofLeftX - apexX), midY = apexY + 0.52 * (wallY - apexY) - 6;
+        const panelGroup = svgEl('g', {transform: `translate(${midX} ${midY}) rotate(${angleDeg})`});
+        panelGroup.appendChild(svgEl('rect', {x: -gridW / 2 - 1.5, y: -gridH / 2 - 1.5, width: gridW + 3, height: gridH + 3, rx: 2, fill: 'var(--flow-panel-dark)'}));
+        for (let r = 0; r < rows; r++) {
+            for (let c = 0; c < cols; c++) {
+                panelGroup.appendChild(svgEl('rect', {
+                    x: -gridW / 2 + c * (cellW + gap), y: -gridH / 2 + r * (cellH + gap),
+                    width: cellW, height: cellH, fill: 'var(--flow-panel-light)',
+                }));
+            }
         }
+        g.appendChild(panelGroup);
     }
     return g;
 }
 
 function buildPylonIcon(cx, cy) {
-    const g = svgEl('g', {stroke: 'var(--color-text-secondary)', 'stroke-width': 2.5, fill: 'none', 'stroke-linecap': 'round'});
-    g.appendChild(svgEl('path', {d: `M ${cx - 22},${cy + 40} L ${cx},${cy - 40} L ${cx + 22},${cy + 40}`}));
-    g.appendChild(svgEl('path', {d: `M ${cx - 14},${cy + 40} L ${cx + 14},${cy - 4} M ${cx + 14},${cy + 40} L ${cx - 14},${cy - 4}`}));
-    for (const yOff of [-30, -10, 12]) {
-        g.appendChild(svgEl('line', {x1: cx - (22 * (1 - (yOff + 40) / 80)), y1: cy + yOff, x2: cx + (22 * (1 - (yOff + 40) / 80)), y2: cy + yOff}));
+    const g = svgEl('g');
+    g.appendChild(buildGroundShadow(cx, cy + 42, 26, 7));
+    const lines = svgEl('g', {stroke: 'var(--flow-metal-dark)', 'stroke-width': 2.2, fill: 'none', 'stroke-linecap': 'round', 'stroke-linejoin': 'round'});
+    lines.appendChild(svgEl('path', {d: `M ${cx - 20},${cy + 40} L ${cx - 4},${cy - 42} L ${cx + 4},${cy - 42} L ${cx + 20},${cy + 40}`}));
+    for (const [yTop, yBot] of [[-42, -18], [-18, 8], [8, 34]]) {
+        const wTop = 4 + (yTop + 42) / 82 * 16, wBot = 4 + (yBot + 42) / 82 * 16;
+        lines.appendChild(svgEl('path', {d: `M ${cx - wTop},${cy + yTop} L ${cx + wBot},${cy + yBot} M ${cx + wTop},${cy + yTop} L ${cx - wBot},${cy + yBot}`}));
+    }
+    lines.appendChild(svgEl('line', {x1: cx - 26, y1: cy - 44, x2: cx + 26, y2: cy - 44}));
+    g.appendChild(lines);
+    for (const dx of [-26, 0, 26]) {
+        g.appendChild(svgEl('circle', {cx: cx + dx, cy: cy - 44, r: 2.4, fill: 'var(--flow-metal-light)', stroke: 'var(--flow-metal-dark)', 'stroke-width': 1}));
     }
     return g;
 }
 
 function buildBatteryIcon(cx, cy, socPercent) {
-    const w = 44, h = 64;
+    const w = 48, h = 70;
     const x = cx - w / 2, y = cy - h / 2;
     const g = svgEl('g');
-    g.appendChild(svgEl('rect', {x: cx - 10, y: y - 8, width: 20, height: 8, fill: 'var(--color-text-secondary)'}));
-    g.appendChild(svgEl('rect', {x, y, width: w, height: h, rx: 6, fill: 'var(--color-bg-card)', stroke: 'var(--color-text-secondary)', 'stroke-width': 2.5}));
+    g.appendChild(buildGroundShadow(cx, y + h + 6, w / 2 + 10, 7));
+    g.appendChild(svgEl('rect', {x: cx - 12, y: y - 8, width: 24, height: 9, rx: 2, fill: 'var(--flow-metal-dark)'}));
+    g.appendChild(svgEl('rect', {x, y, width: w, height: h, rx: 8, fill: 'var(--flow-metal-light)', stroke: 'var(--flow-metal-dark)', 'stroke-width': 2}));
+    for (let i = 0; i < 3; i++) {
+        g.appendChild(svgEl('line', {x1: x + 8, y1: y + 12 + i * 6, x2: x + w - 8, y2: y + 12 + i * 6, stroke: 'var(--flow-metal-dark)', 'stroke-width': 1.2, opacity: 0.4}));
+    }
     const soc = Math.max(0, Math.min(100, socPercent ?? 0));
-    const fillH = (h - 8) * (soc / 100);
+    const innerX = x + 6, innerY = y + 36, innerW = w - 12, innerH = h - 42;
+    g.appendChild(svgEl('rect', {x: innerX, y: innerY, width: innerW, height: innerH, rx: 4, fill: 'var(--color-bg)', opacity: 0.5}));
+    const fillH = innerH * (soc / 100);
     g.appendChild(svgEl('rect', {
-        x: x + 4, y: y + h - 4 - fillH, width: w - 8, height: fillH, rx: 3,
+        x: innerX, y: innerY + innerH - fillH, width: innerW, height: fillH, rx: 4,
         fill: soc < 20 ? 'var(--color-error)' : 'var(--color-accent)',
     }));
+    g.appendChild(svgEl('circle', {cx, cy: y + 22, r: 3, fill: soc < 20 ? 'var(--color-error)' : 'var(--color-accent)'}));
     return g;
 }
 
 function buildHeatpumpIcon(cx, cy, on) {
+    const w = 60, h = 48;
+    const x = cx - w / 2, y = cy - h / 2;
     const g = svgEl('g');
-    g.appendChild(svgEl('rect', {x: cx - 26, y: cy - 22, width: 52, height: 44, rx: 6, fill: 'var(--color-bg-card)', stroke: 'var(--color-border)', 'stroke-width': 2}));
+    g.appendChild(buildGroundShadow(cx, y + h + 5, w / 2 + 8, 6));
+    g.appendChild(svgEl('rect', {x, y, width: w, height: h, rx: 8, fill: 'var(--flow-metal-light)', stroke: 'var(--flow-metal-dark)', 'stroke-width': 2}));
+    for (let i = 0; i < 5; i++) {
+        g.appendChild(svgEl('line', {x1: x + 6, y1: y + 7 + i * 7, x2: x + 16, y2: y + 7 + i * 7, stroke: 'var(--flow-metal-dark)', 'stroke-width': 1.4, opacity: 0.5}));
+    }
+    for (const dx of [-w / 2 + 6, w / 2 - 6]) {
+        g.appendChild(svgEl('rect', {x: cx + dx - 3, y: y + h - 2, width: 6, height: 6, fill: 'var(--flow-metal-dark)'}));
+    }
+    const fanCx = cx + 10, fanR = 15;
+    g.appendChild(svgEl('circle', {cx: fanCx, cy, r: fanR, fill: 'var(--color-bg)', stroke: 'var(--flow-metal-dark)', 'stroke-width': 1.5}));
     const fan = svgEl('g', {class: 'energyFlowFan' + (on ? ' spinning' : '')});
-    for (const angle of [0, 90, 180, 270]) {
+    for (const angle of [0, 72, 144, 216, 288]) {
         fan.appendChild(svgEl('ellipse', {
-            cx: cx, cy: cy, rx: 3, ry: 12, fill: on ? 'var(--color-accent)' : 'var(--color-text-secondary)',
-            transform: `rotate(${angle + 45} ${cx} ${cy})`,
+            cx: fanCx, cy, rx: 3, ry: fanR - 3, fill: on ? 'var(--color-accent)' : 'var(--color-text-secondary)',
+            transform: `rotate(${angle} ${fanCx} ${cy})`,
         }));
     }
-    fan.appendChild(svgEl('circle', {cx, cy, r: 4, fill: 'var(--color-text)'}));
+    fan.appendChild(svgEl('circle', {cx: fanCx, cy, r: 3.5, fill: 'var(--flow-metal-dark)'}));
     g.appendChild(fan);
     return g;
 }
 
 function buildCarIcon(cx, cy, faded) {
     const g = svgEl('g', {opacity: faded ? 0.35 : 1});
-    g.appendChild(svgEl('rect', {x: cx - 26, y: cy - 6, width: 52, height: 16, rx: 6, fill: 'var(--color-error)'}));
-    g.appendChild(svgEl('path', {d: `M ${cx - 16},${cy - 6} L ${cx - 10},${cy - 16} L ${cx + 12},${cy - 16} L ${cx + 18},${cy - 6} Z`, fill: 'var(--color-error)'}));
-    for (const dx of [-14, 14]) {
-        g.appendChild(svgEl('circle', {cx: cx + dx, cy: cy + 11, r: 6, fill: 'var(--color-text)'}));
+    g.appendChild(buildGroundShadow(cx, cy + 20, 34, 6));
+    g.appendChild(svgEl('path', {
+        d: `M ${cx - 32},${cy + 8}
+            C ${cx - 32},${cy - 2} ${cx - 28},${cy - 2} ${cx - 24},${cy - 2}
+            L ${cx - 18},${cy - 14}
+            C ${cx - 14},${cy - 19} ${cx - 6},${cy - 21} ${cx + 2},${cy - 21}
+            C ${cx + 10},${cy - 21} ${cx + 17},${cy - 18} ${cx + 21},${cy - 13}
+            L ${cx + 26},${cy - 2}
+            C ${cx + 30},${cy - 2} ${cx + 32},${cy - 1} ${cx + 32},${cy + 8}
+            C ${cx + 32},${cy + 13} ${cx + 28},${cy + 15} ${cx + 22},${cy + 15}
+            L ${cx - 22},${cy + 15}
+            C ${cx - 28},${cy + 15} ${cx - 32},${cy + 13} ${cx - 32},${cy + 8} Z`,
+        fill: 'var(--color-error)',
+    }));
+    g.appendChild(svgEl('path', {
+        d: `M ${cx - 16},${cy - 13} L ${cx - 11},${cy - 20} C ${cx - 7},${cy - 24} ${cx - 2},${cy - 26} ${cx + 3},${cy - 26}
+            C ${cx + 9},${cy - 26} ${cx + 14},${cy - 23} ${cx + 18},${cy - 19} L ${cx + 22},${cy - 12} Z`,
+        fill: 'var(--flow-window)', opacity: 0.9,
+    }));
+    for (const dx of [-18, 18]) {
+        g.appendChild(svgEl('circle', {cx: cx + dx, cy: cy + 15, r: 8, fill: 'var(--color-text)'}));
+        g.appendChild(svgEl('circle', {cx: cx + dx, cy: cy + 15, r: 3.2, fill: 'var(--flow-metal-light)'}));
     }
+    g.appendChild(svgEl('circle', {cx: cx + 31, cy: cy + 5, r: 1.8, fill: 'var(--flow-wall)'}));
+    return g;
+}
+
+// Ladesaeule neben dem Auto (nur wenn eine Wallbox als Geraet ausgewaehlt ist) - separat vom
+// Auto selbst, damit die Zuordnung "Auto steht/laedt" vs. "Wallbox vorhanden" auch optisch klar bleibt.
+function buildWallboxIcon(cx, cy, active) {
+    const color = active ? 'var(--color-accent)' : 'var(--flow-metal-dark)';
+    const g = svgEl('g');
+    g.appendChild(buildGroundShadow(cx, cy + 22, 10, 3));
+    g.appendChild(svgEl('rect', {x: cx - 8, y: cy - 22, width: 16, height: 42, rx: 4, fill: 'var(--flow-metal-light)', stroke: 'var(--flow-metal-dark)', 'stroke-width': 1.6}));
+    g.appendChild(svgEl('rect', {x: cx - 5, y: cy - 17, width: 10, height: 7, rx: 1.5, fill: active ? 'var(--color-accent)' : 'var(--color-text-secondary)'}));
+    g.appendChild(svgEl('circle', {cx, cy: cy - 3, r: 2, fill: color}));
     return g;
 }
 
 function buildPlugIcon(cx, cy, on) {
     const color = on ? 'var(--color-accent)' : 'var(--color-text-secondary)';
-    const g = svgEl('g', {opacity: on ? 1 : 0.4});
-    g.appendChild(svgEl('rect', {x: cx - 10, y: cy - 14, width: 20, height: 22, rx: 4, fill: 'none', stroke: color, 'stroke-width': 2.5}));
-    g.appendChild(svgEl('line', {x1: cx - 4, y1: cy - 14, x2: cx - 4, y2: cy - 20, stroke: color, 'stroke-width': 2.5, 'stroke-linecap': 'round'}));
-    g.appendChild(svgEl('line', {x1: cx + 4, y1: cy - 14, x2: cx + 4, y2: cy - 20, stroke: color, 'stroke-width': 2.5, 'stroke-linecap': 'round'}));
-    g.appendChild(svgEl('line', {x1: cx, y1: cy + 8, x2: cx, y2: cy + 16, stroke: color, 'stroke-width': 2.5, 'stroke-linecap': 'round'}));
+    const g = svgEl('g', {opacity: on ? 1 : 0.45});
+    g.appendChild(svgEl('rect', {x: cx - 11, y: cy - 12, width: 22, height: 20, rx: 6, fill: 'var(--flow-metal-light)', stroke: color, 'stroke-width': 2}));
+    for (const dx of [-4, 4]) {
+        g.appendChild(svgEl('circle', {cx: cx + dx, cy: cy - 4, r: 1.8, fill: color}));
+    }
+    g.appendChild(svgEl('path', {d: `M ${cx},${cy + 8} q 0,10 8,10`, stroke: color, 'stroke-width': 2.5, fill: 'none', 'stroke-linecap': 'round'}));
     return g;
 }
 
 function buildLightningIcon(cx, cy) {
     return svgEl('path', {
         d: `M ${cx - 4},${cy - 12} L ${cx - 10},${cy + 2} L ${cx - 2},${cy + 2} L ${cx - 6},${cy + 14} L ${cx + 10},${cy - 3} L ${cx + 2},${cy - 3} Z`,
-        fill: 'var(--color-accent)',
+        fill: 'var(--color-accent)', stroke: 'var(--flow-metal-dark)', 'stroke-width': 0.6, 'stroke-linejoin': 'round',
     });
 }
 
@@ -3044,6 +3149,8 @@ function buildEnergyFlowWidget(data) {
     const wrapper = document.createElement('div');
     wrapper.className = 'energyFlowWidget dashboardChart';
     const svg = svgEl('svg', {viewBox: '0 0 920 480'});
+    svg.appendChild(buildEnergyFlowDefs());
+    svg.appendChild(buildSceneBackground(920, 480));
 
     const houseCx = 300, houseCy = 230;
     svg.appendChild(renderSkyIcon(850, 45));
@@ -3105,6 +3212,8 @@ function buildEnergyFlowWidget(data) {
         const rowY = 220;
         const isAway = data.car.state === 'away';
         const isCharging = data.car.state === 'charging';
+        const showWallbox = !!data.car.wallboxConfigured;
+        const carCx = showWallbox ? columnX + 22 : columnX;
         if (isCharging) {
             // laedt: animierte Linie mit der tatsaechlichen Ladeleistung (Platzhalter 0.5 kW nur,
             // falls die Wallbox-Ladeleistung selbst nicht zugeordnet/lesbar ist)
@@ -3114,13 +3223,14 @@ function buildEnergyFlowWidget(data) {
             // eingesteckt, aber laedt gerade nicht: ruhige, unbewegte Verbindungslinie statt der animierten Flusslinie
             svg.appendChild(svgEl('path', {d: buildFlowPath(houseRightX, houseCy, columnX - 40, rowY), stroke: 'var(--color-border)', 'stroke-width': 2, fill: 'none'}));
         }
-        svg.appendChild(buildCarIcon(columnX, rowY, isAway));
+        if (showWallbox) svg.appendChild(buildWallboxIcon(columnX - 40, rowY, isCharging));
+        svg.appendChild(buildCarIcon(carCx, rowY, isAway));
         const carLines = [];
         if (data.car.soc !== null) carLines.push(`${Math.round(data.car.soc)} %` + (data.car.rangeKm !== null ? ` (${data.car.rangeKm} km)` : ''));
         if (data.car.state === 'away') carLines.push('abwesend');
         else if (data.car.state === 'charging') carLines.push('lädt');
         else if (data.car.state === 'connected') carLines.push('eingesteckt');
-        svg.appendChild(buildEnergyFlowLabel(columnX + 36, rowY - 4, carLines));
+        svg.appendChild(buildEnergyFlowLabel(carCx + 40, rowY - 4, carLines));
     }
 
     if (data.sonstigerVerbraucher && data.sonstigerVerbraucher.configured) {

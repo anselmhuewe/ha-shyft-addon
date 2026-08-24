@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.0.42.1
+
+* Energiefluss-Widget: alle Icons deutlich detaillierter gestaltet (Haus mit Fenster/Tür/Dachschattierung, Batterie als moderner Speicher-Pack mit Status-LED, Strommast als Gittermast, Wärmepumpe als Außengerät mit Lüftungsgitter, Auto mit rundem Karosserie-Umriss, eigenes Ladesäulen-Symbol neben dem Auto) statt einfacher geometrischer Grundformen, mit Schlagschatten und einer Himmel/Rasen-Hintergrundszene, in die alles eingebettet ist
+
 ## 0.0.42.0
 
 * Neu: Energiefluss-Widget oben auf dem Dashboard - eine live-animierte Hausgrafik mit den aktuellen Werten von Netz, PV, Batterie, Wärmepumpe, Auto/Wallbox, Sonstigem Verbraucher und Haushaltsstrom. Stromfluss-Linien sind animiert (schneller bei mehr Leistung, nie ganz angehalten), der Wärmepumpen-Ventilator dreht sich, wenn sie läuft, und das Auto wird je nach Status anders dargestellt (abwesend/eingesteckt/lädt). Jedes Gerät erscheint nur, wenn es tatsächlich als Integration ausgewählt ist. Alle Icons sind selbst gezeichnet (kein externes Bildmaterial)
