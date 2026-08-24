@@ -2886,23 +2886,34 @@ function flowAnimationDuration(kw) {
     return maxDuration - (absKw / 3) * (maxDuration - minDuration);
 }
 
-// Gerade Linie (Netz/Batterie) oder eine Spine-mit-Abzweigung (rechte Spalte: erst waagerecht bis
-// zur Spalten-x, dann senkrecht zur Ziel-Reihe) - je nach dem, ob y1 und y2 gleich sind.
+// Gerade Verbindung (Netz/Batterie), oder ein rechtwinkliger Knick, falls y1 != y2.
 function buildFlowPath(x1, y1, x2, y2) {
     if (y1 === y2) return `M ${x1},${y1} L ${x2},${y2}`;
     return `M ${x1},${y1} H ${x2} V ${y2}`;
 }
 
-function buildFlowLine(x1, y1, x2, y2, kw, {reversed = false, colorVar = 'var(--color-accent)'} = {}) {
+// Ein gemeinsamer Strompfad "Haus -> Verbraucher" (busX), der sich dort erst auf die jeweilige
+// Verbraucher-Reihe aufteilt - alle vier rechten Verbraucher (Waermepumpe/Wallbox/Sonstiges
+// Geraet/Haushaltsstrom) gehen vom selben Hausaustrittspunkt ab und teilen sich denselben
+// senkrechten Bus, statt dass z.B. die Waermepumpen-Linie quer durch das Wallbox-Icon liefe.
+function buildBusFlowPath(x1, y1, busX, y2, x2) {
+    return `M ${x1},${y1} H ${busX} V ${y2} H ${x2}`;
+}
+
+function buildFlowLineFromPath(d, kw, {reversed = false, colorVar = 'var(--color-accent)'} = {}) {
     if (kw === null || kw === undefined) return null;
     const path = svgEl('path', {
-        d: buildFlowPath(x1, y1, x2, y2),
+        d,
         class: 'energyFlowLine' + (reversed ? ' energyFlowLine-reverse' : ''),
         stroke: colorVar,
         fill: 'none',
     });
     path.style.animationDuration = flowAnimationDuration(kw) + 's';
     return path;
+}
+
+function buildFlowLine(x1, y1, x2, y2, kw, options = {}) {
+    return buildFlowLineFromPath(buildFlowPath(x1, y1, x2, y2), kw, options);
 }
 
 function buildGroundShadow(cx, cy, rx, ry) {
@@ -3190,10 +3201,15 @@ function buildEnergyFlowWidget(data) {
 
     const columnX = 700;
     const houseRightX = houseCx + 62;
+    // Gemeinsamer Bus "Haus -> Verbraucher": alle vier rechten Verbraucher gehen vom selben
+    // Hausaustrittspunkt ab und teilen sich diese senkrechte Spalte, bevor sie zur jeweiligen
+    // Reihe abzweigen - so laeuft z.B. die Waermepumpen-Leitung nicht quer durchs Wallbox-Icon.
+    const busX = 600;
+    const consumerAnchorX = columnX - 40;
 
     if (data.heatpump && data.heatpump.configured) {
         const rowY = 100;
-        const line = buildFlowLine(houseRightX, houseCy - 20, columnX - 40, rowY, data.heatpump.kw);
+        const line = buildFlowLineFromPath(buildBusFlowPath(houseRightX, houseCy, busX, rowY, consumerAnchorX), data.heatpump.kw);
         if (line) svg.appendChild(line);
         svg.appendChild(buildHeatpumpIcon(columnX, rowY, data.heatpump.on));
         const statusLines = [
@@ -3217,11 +3233,11 @@ function buildEnergyFlowWidget(data) {
         if (isCharging) {
             // laedt: animierte Linie mit der tatsaechlichen Ladeleistung (Platzhalter 0.5 kW nur,
             // falls die Wallbox-Ladeleistung selbst nicht zugeordnet/lesbar ist)
-            const line = buildFlowLine(houseRightX, houseCy, columnX - 40, rowY, data.car.chargingKw || 0.5);
+            const line = buildFlowLineFromPath(buildBusFlowPath(houseRightX, houseCy, busX, rowY, consumerAnchorX), data.car.chargingKw || 0.5);
             if (line) svg.appendChild(line);
         } else if (!isAway && data.car.state !== null) {
             // eingesteckt, aber laedt gerade nicht: ruhige, unbewegte Verbindungslinie statt der animierten Flusslinie
-            svg.appendChild(svgEl('path', {d: buildFlowPath(houseRightX, houseCy, columnX - 40, rowY), stroke: 'var(--color-border)', 'stroke-width': 2, fill: 'none'}));
+            svg.appendChild(svgEl('path', {d: buildBusFlowPath(houseRightX, houseCy, busX, rowY, consumerAnchorX), stroke: 'var(--color-border)', 'stroke-width': 2, fill: 'none'}));
         }
         if (showWallbox) svg.appendChild(buildWallboxIcon(columnX - 40, rowY, isCharging));
         svg.appendChild(buildCarIcon(carCx, rowY, isAway));
@@ -3239,7 +3255,7 @@ function buildEnergyFlowWidget(data) {
         if (on) {
             // kein Leistungssensor fuer "Sonstiger Verbraucher" vorgesehen (nur an/aus) - fester
             // Platzhalterwert nur fuer eine plausible Animationsgeschwindigkeit, keine echte Messung
-            const line = buildFlowLine(houseRightX, houseCy + 20, columnX - 40, rowY, 0.3);
+            const line = buildFlowLineFromPath(buildBusFlowPath(houseRightX, houseCy, busX, rowY, consumerAnchorX), 0.3);
             if (line) svg.appendChild(line);
         }
         svg.appendChild(buildPlugIcon(columnX, rowY, on));
@@ -3248,7 +3264,7 @@ function buildEnergyFlowWidget(data) {
 
     if (data.household && data.household.configured) {
         const rowY = 430;
-        const line = buildFlowLine(houseRightX, houseCy + 30, columnX - 40, rowY, data.household.residualKw ?? 0.1);
+        const line = buildFlowLineFromPath(buildBusFlowPath(houseRightX, houseCy, busX, rowY, consumerAnchorX), data.household.residualKw ?? 0.1);
         if (line) svg.appendChild(line);
         svg.appendChild(buildLightningIcon(columnX, rowY));
         svg.appendChild(buildEnergyFlowLabel(columnX + 24, rowY + 4, ['Haushaltsstrom']));

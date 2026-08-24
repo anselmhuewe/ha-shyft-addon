@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.0.42.2
+
+* Fix: Energiefluss-Widget - die Leitung zur Wärmepumpe lief teils quer durchs Wallbox-Icon. Alle vier Verbraucher (Wärmepumpe, Wallbox, Sonstiges Gerät, Haushaltsstrom) gehen jetzt vom selben Hausaustrittspunkt über einen gemeinsamen Bus ab, der sich erst kurz vor der jeweiligen Reihe aufteilt
+
 ## 0.0.42.1
 
 * Energiefluss-Widget: alle Icons deutlich detaillierter gestaltet (Haus mit Fenster/Tür/Dachschattierung, Batterie als moderner Speicher-Pack mit Status-LED, Strommast als Gittermast, Wärmepumpe als Außengerät mit Lüftungsgitter, Auto mit rundem Karosserie-Umriss, eigenes Ladesäulen-Symbol neben dem Auto) statt einfacher geometrischer Grundformen, mit Schlagschatten und einer Himmel/Rasen-Hintergrundszene, in die alles eingebettet ist
