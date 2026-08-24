@@ -277,7 +277,26 @@ def get_wallbox_connection_status_options():
 
 @app.route("/wallbox-connection-status-options", methods=["GET"])
 def wallboxConnectionStatusOptions():
-    return jsonify(get_wallbox_connection_status_options())
+    """Neben den bekannten Statuswerten auch der GERADE AKTUELLE Wert und ob der zugeordnet ist -
+    ein unzugeordneter aktueller Status ist kein theoretisches Problem: is_car_ready_to_charge()
+    liefert dafuer still False, wodurch z.B. die PV-Ueberschussladen-Rueckfalllogik gar nicht erst
+    startet, ohne jede Fehlermeldung. Das Frontend warnt damit sichtbar genau dann, wenn es gerade
+    wirklich relevant ist, statt nur beim erstmaligen Einrichten."""
+    config = _read_current_config()
+    entity_id = config.get("sensorMappings", {}).get("wallbox_plugged", "")
+    current_state = None
+    if entity_id:
+        try:
+            current = homeassistant_adapter.load_entity_state(entity_id)
+            if current.state not in (None, "unknown", "unavailable"):
+                current_state = current.state
+        except Exception as e:
+            print("[Shyft] Aktueller Wallbox-Status konnte nicht geladen werden:", repr(e))
+    return jsonify({
+        "options": get_wallbox_connection_status_options(),
+        "currentState": current_state,
+        "currentStateMapped": (classify_wallbox_connection_state(current_state, config) is not None) if current_state else None,
+    })
 
 
 def classify_wallbox_connection_state(state_value, config=None):
@@ -324,6 +343,117 @@ def _classify_away_state_and_consumption(prev_entry, hour_dt, current_soc, batte
     state = "unterwegs" if drop_pct >= CAR_VAMPIRE_DRAIN_THRESHOLD_PCT_PER_HOUR else "steht"
     consumption_kwh = round(drop_pct / 100 * battery_capacity_kwh, 3) if battery_capacity_kwh else None
     return state, consumption_kwh
+
+
+# HA's Recorder haelt standardmaessig nur 10 Tage Rohhistorie vor, manche Installationen (wie
+# diese hier, geprueft: mind. 30 Tage) laenger - eine laengere Anfrage schadet nicht, HA liefert
+# einfach zurueck, was tatsaechlich noch vorhanden ist.
+CAR_PRESENCE_BACKFILL_DAYS = 30
+
+
+def _forward_fill_hourly(events, hours):
+    "events: chronologisch sortierte (last_changed, state)-Paare (siehe load_entity_history_raw). Liefert {hour_dt: state}, uebersprungen fuer Stunden, zu denen noch kein state bekannt war (kein Raten vor dem ersten beobachteten Wert)."
+    result = {}
+    idx = 0
+    current_state = None
+    have_state = False
+    for hour_dt in hours:
+        while idx < len(events) and events[idx][0] <= hour_dt:
+            current_state = events[idx][1]
+            have_state = True
+            idx += 1
+        if have_state:
+            result[hour_dt] = current_state
+    return result
+
+
+def backfill_car_presence_log():
+    """Rekonstruiert CAR_PRESENCE_LOG_PATH rueckwirkend aus HA's Sensor-Historie (load_entity_history_raw),
+    statt auf organisches Wachstum ueber Wochen zu warten - wird von writeConfig getriggert, sobald
+    der Nutzer eine neue/geaenderte wallboxConnectionStatusMapping speichert. Idempotent: kann bei
+    jeder Aenderung der Zuordnung gefahrlos erneut laufen (self-healing, wie sync_all_auto_managed_scripts),
+    ueberschreibt dabei aber nur den rueckwirkend abgedeckten Zeitraum, nicht bereits live/per Cron
+    geloggte neuere Stunden - dieselbe Klassifikationslogik wie _sync_car_presence_log_impl
+    (classify_wallbox_connection_state, _classify_away_state_and_consumption), nur rueckwirkend
+    stundenweise per Forward-Filling statt live pro Cron-Tick angewendet."""
+    config = _read_current_config()
+    mapping = config.get("wallboxConnectionStatusMapping", {})
+    if not mapping:
+        return
+    entity_id = config.get("sensorMappings", {}).get("wallbox_plugged", "")
+    if not entity_id:
+        return
+
+    now_hour = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
+    start = now_hour - timedelta(days=CAR_PRESENCE_BACKFILL_DAYS)
+    hours = [start + timedelta(hours=i) for i in range(int((now_hour - start).total_seconds() // 3600))]
+
+    try:
+        wallbox_events = homeassistant_adapter.load_entity_history_raw(entity_id, start, now_hour)
+    except Exception as e:
+        print("[Shyft] Anwesenheits-Backfill: Wallbox-Historie konnte nicht geladen werden:", repr(e))
+        return
+    wallbox_by_hour = _forward_fill_hourly(wallbox_events, hours)
+
+    soc_entity_id = config.get("sensorMappings", {}).get("electronicvehicle_state_of_charge", "")
+    soc_by_hour = {}
+    if soc_entity_id:
+        try:
+            soc_events = homeassistant_adapter.load_entity_history_raw(soc_entity_id, start, now_hour)
+            for hour_dt, soc_state in _forward_fill_hourly(soc_events, hours).items():
+                try:
+                    soc_by_hour[hour_dt] = float(soc_state)
+                except (TypeError, ValueError):
+                    pass
+        except Exception as e:
+            print("[Shyft] Anwesenheits-Backfill: SOC-Historie konnte nicht geladen werden:", repr(e))
+
+    battery_capacity_kwh = config.get("carBatteryCapacityKwh")
+
+    prev_entry = None
+    new_entries = []
+    for hour_dt in hours:
+        state_value = wallbox_by_hour.get(hour_dt)
+        if state_value is None:
+            continue
+        connected = mapping.get(state_value)
+        if connected is None:
+            continue  # noch nicht zugeordneter Statuswert - ueberspringen statt raten, wie beim Live-Sync
+        current_soc = soc_by_hour.get(hour_dt)
+        entry = {"hour": hour_dt.isoformat(), "connected": connected, "soc": current_soc}
+        if not connected:
+            state, consumption_kwh = _classify_away_state_and_consumption(prev_entry, hour_dt, current_soc, battery_capacity_kwh)
+            if state is not None:
+                entry["state"] = state
+            if consumption_kwh is not None:
+                entry["consumption_kwh"] = consumption_kwh
+        new_entries.append(entry)
+        prev_entry = entry
+
+    with _car_presence_log_lock:
+        try:
+            with open(CAR_PRESENCE_LOG_PATH, "r") as f:
+                log = json.load(f)
+        except Exception:
+            log = []
+        # der Backfill ist fuer den abgedeckten Zeitraum autoritativ - vorhandene, ggf. noch mit
+        # einer unvollstaendigen Zuordnung geloggte Eintraege darin werden ersetzt
+        start_iso = start.isoformat()
+        now_hour_iso = now_hour.isoformat()
+        log = [e for e in log if not (start_iso <= e.get("hour", "") < now_hour_iso)]
+        log.extend(new_entries)
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=CAR_PRESENCE_LOG_MAX_DAYS)).isoformat()
+        log = [e for e in log if e.get("hour", "") >= cutoff]
+        log.sort(key=lambda e: e["hour"])
+
+        try:
+            with open(CAR_PRESENCE_LOG_PATH, "w") as f:
+                json.dump(log, f)
+        except Exception as e:
+            print("[Shyft] Anwesenheits-Backfill konnte nicht gespeichert werden:", repr(e))
+            return
+
+    print(f"[Shyft] Anwesenheits-Backfill: {len(new_entries)} von {len(hours)} moeglichen Stunden aus der Historie rekonstruiert.")
 
 
 def _sync_car_presence_log_impl():
@@ -490,30 +620,36 @@ def compute_car_presence_forecast():
         if overall_consumption else CAR_CONSUMPTION_DEFAULT_KWH
     )
 
+    # Jede *_rate/*_fraction-Funktion gibt zusaetzlich zurueck, ob sie auf die groebere
+    # Fallback-Ebene ausweichen musste (zu wenige Beobachtungen fuer diesen konkreten
+    # (Wochentag, Stunde)-Bucket) - das speist low_data_basis unten, damit der Nutzer im Dashboard
+    # sieht, welche Stunden noch auf einer duennen Datenbasis stehen, statt eine vermeintlich
+    # praezise Zahl ohne Kontext zu zeigen.
     def marginal_rate(weekday, hour):
         samples = marginal.get((weekday, hour), [])
         if len(samples) >= CAR_PRESENCE_MIN_SAMPLES:
-            return sum(samples) / len(samples)
-        return overall_rate
+            return sum(samples) / len(samples), False
+        return overall_rate, True
 
     def transition_rate(weekday, hour, from_connected):
         samples = transitions_by_state.get((weekday, hour, from_connected), [])
         if len(samples) >= CAR_PRESENCE_MIN_SAMPLES:
-            return sum(samples) / len(samples)
-        return marginal_rate(weekday, hour)
+            return sum(samples) / len(samples), False
+        rate, _ = marginal_rate(weekday, hour)
+        return rate, True
 
     def driving_fraction(weekday, hour):
         counts = away_state_counts.get((weekday, hour))
         total = (counts["steht"] + counts["unterwegs"]) if counts else 0
         if not counts or total < CAR_PRESENCE_MIN_SAMPLES:
-            return overall_driving_fraction
-        return counts["unterwegs"] / total
+            return overall_driving_fraction, True
+        return counts["unterwegs"] / total, False
 
     def expected_consumption_when_driving(weekday, hour):
         samples = consumption_samples.get((weekday, hour), [])
         if len(samples) < CAR_PRESENCE_MIN_SAMPLES:
-            return overall_avg_consumption
-        return sum(samples) / len(samples)
+            return overall_avg_consumption, True
+        return sum(samples) / len(samples), False
 
     config = _read_current_config()
     sensor_mappings = config.get("sensorMappings", {})
@@ -540,17 +676,24 @@ def compute_car_presence_forecast():
     hours_away_now = compute_hours_away(by_hour, current_connected, start)
 
     probabilities = []
-    p = 1.0 if current_connected is True else (0.0 if current_connected is False else marginal_rate(start.weekday(), start.hour))
+    low_data_basis = []
+    if current_connected is None:
+        p, fb0 = marginal_rate(start.weekday(), start.hour)
+    else:
+        p, fb0 = (1.0 if current_connected else 0.0), False
     probabilities.append(p)
+    low_data_basis.append(fb0)
     for i in range(1, 48):
         source_ts = start + timedelta(hours=i - 1)
-        p_home_given_home = transition_rate(source_ts.weekday(), source_ts.hour, True)
-        p_home_given_away = transition_rate(source_ts.weekday(), source_ts.hour, False) * soc_factor
+        p_home_given_home, fb_home = transition_rate(source_ts.weekday(), source_ts.hour, True)
+        p_home_given_away, fb_away = transition_rate(source_ts.weekday(), source_ts.hour, False)
+        p_home_given_away *= soc_factor
         if hours_away_now > 0:
             p_home_given_away = min(p_home_given_away, away_return_ceiling(hours_away_now + i))
         p_home_given_away = min(1.0, p_home_given_away)
         p = p * p_home_given_home + (1 - p) * p_home_given_away
         probabilities.append(p)
+        low_data_basis.append(fb_home or fb_away)
 
     standing_probabilities = []
     driving_probabilities = []
@@ -558,19 +701,21 @@ def compute_car_presence_forecast():
     for i in range(48):
         ts_i = start + timedelta(hours=i)
         p_away = 1 - probabilities[i]
-        frac_driving = driving_fraction(ts_i.weekday(), ts_i.hour)
+        frac_driving, fb_driving = driving_fraction(ts_i.weekday(), ts_i.hour)
         p_driving = p_away * frac_driving
         p_standing = p_away * (1 - frac_driving)
         standing_probabilities.append(p_standing)
         driving_probabilities.append(p_driving)
-        consumption_kwh_forecast.append(p_driving * expected_consumption_when_driving(ts_i.weekday(), ts_i.hour))
+        avg_consumption, fb_consumption = expected_consumption_when_driving(ts_i.weekday(), ts_i.hour)
+        consumption_kwh_forecast.append(p_driving * avg_consumption)
+        low_data_basis[i] = low_data_basis[i] or fb_driving or fb_consumption
 
-    return labels, probabilities, standing_probabilities, driving_probabilities, consumption_kwh_forecast
+    return labels, probabilities, standing_probabilities, driving_probabilities, consumption_kwh_forecast, low_data_basis
 
 
 @app.route("/dashboard/car-presence-forecast", methods=["GET"])
 def carPresenceForecast():
-    labels, probabilities, standing_probabilities, driving_probabilities, consumption_kwh_forecast = compute_car_presence_forecast()
+    labels, probabilities, standing_probabilities, driving_probabilities, consumption_kwh_forecast, low_data_basis = compute_car_presence_forecast()
     return jsonify({
         "status": "success",
         "labels": labels,
@@ -578,6 +723,7 @@ def carPresenceForecast():
         "standingProbabilities": [round(p, 3) for p in standing_probabilities],
         "drivingProbabilities": [round(p, 3) for p in driving_probabilities],
         "consumptionKwh": [round(v, 3) for v in consumption_kwh_forecast],
+        "lowDataBasis": low_data_basis,
     })
 
 
@@ -1320,6 +1466,7 @@ def writeConfig():
     # fields the frontend doesn't know about (startedShyftActionIds, endedShyftActionIds) survive
     data = _read_current_config()
     old_action_type_enabled = data.get("actionTypeEnabled", {})
+    old_wallbox_mapping = data.get("wallboxConnectionStatusMapping", {})
     data.update(incoming)
 
     script_sync_errors = {}
@@ -1342,6 +1489,13 @@ def writeConfig():
             print("[Shyft] Sofort-Abgleich nach Toggle-Aenderung fehlgeschlagen:", repr(e))
 
     _write_current_config(data)
+
+    new_wallbox_mapping = data.get("wallboxConnectionStatusMapping", {})
+    if new_wallbox_mapping and new_wallbox_mapping != old_wallbox_mapping:
+        try:
+            backfill_car_presence_log()
+        except Exception as e:
+            print("[Shyft] Anwesenheits-Backfill fehlgeschlagen:", repr(e))
 
     response_data = dict(data)
     response_data["scriptSyncErrors"] = script_sync_errors

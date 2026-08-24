@@ -1,3 +1,9 @@
+== 0.0.40.0
+
+* Neu: Anwesenheits-/Verbrauchsprognose fürs Auto muss nicht mehr wochenlang organisch anwachsen - sobald eine (neue oder geänderte) Status-Zuordnung für "Wallbox: Auto verbunden?" gespeichert wird, rekonstruiert das Addon die Historie rückwirkend direkt aus Home Assistants Sensor-Historie (so weit der Recorder zurückreicht, i.d.R. mindestens 10 Tage)
+* Neu: Warnhinweis unter "Status-Zuordnung", wenn der gerade aktuelle Wallbox-Status noch nicht zugeordnet ist - das blockiert nämlich nicht nur die Prognose, sondern lässt z.B. auch die PV-Überschussladen-Rückfalllogik ohne jede Fehlermeldung gar nicht erst starten
+* Neu: die Verbrauchsprognose markiert jetzt Stunden mit "~", für die (noch) zu wenig Datenbasis vorliegt (Cold-Start oder wenig Historie für diesen Wochentag/Stunde-Zeitpunkt), statt eine scheinbar präzise Zahl ohne Kontext zu zeigen
+
 == 0.0.39.1
 
 * Behoben: die Erkennung der beobachteten Status-Werte für "Wallbox: Auto verbunden?" (Status-Zuordnung) konnte nie mehr als den gerade aktuellen Wert anzeigen. Ursache war ein fehlendes URL-Encoding beim Abruf der Sensor-Historie - ein "+" in der Zeitzonenangabe wurde von Home Assistant als Leerzeichen interpretiert und die Anfrage deshalb abgelehnt. Betroffene Nutzer sollten unter "Status-Zuordnung" erneut nachsehen, jetzt sollten alle in den letzten 10 Tagen beobachteten Werte auftauchen

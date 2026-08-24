@@ -1078,14 +1078,28 @@ function buildWallboxConnectionStatusMapping() {
         tbody.appendChild(row);
     }
 
+    const warningBanner = document.createElement('p');
+    warningBanner.className = 'shyftActionsError';
+    warningBanner.hidden = true;
+    wrapper.insertBefore(warningBanner, table);
+
     renderMessageRow('Lade beobachtete Status-Werte...');
 
     (async () => {
         let options = [];
+        let currentState = null;
+        let currentStateMapped = null;
         try {
-            options = await getJson(insideHomeAssistant + '/wallbox-connection-status-options');
+            const result = await getJson(insideHomeAssistant + '/wallbox-connection-status-options');
+            options = result.options || [];
+            currentState = result.currentState;
+            currentStateMapped = result.currentStateMapped;
         } catch (err) {
             console.log(err);
+        }
+        if (currentState && currentStateMapped === false) {
+            warningBanner.textContent = `⚠ Aktueller Wallbox-Status "${currentState}" ist noch nicht zugeordnet - die Auto-laden-Automatik (inkl. PV-Überschussladen) reagiert deshalb gerade nicht. Bitte unten zuordnen.`;
+            warningBanner.hidden = false;
         }
         if (options.length === 0) {
             renderMessageRow('Noch keine Status-Werte beobachtet - sobald "Wallbox: Auto verbunden?" befüllt ist und Werte vorliegen, erscheinen sie hier.');
@@ -1096,7 +1110,10 @@ function buildWallboxConnectionStatusMapping() {
         for (const value of options) {
             const row = document.createElement('tr');
             const labelCell = document.createElement('td');
-            labelCell.textContent = value;
+            labelCell.textContent = value === currentState ? `${value} (aktuell)` : value;
+            if (value === currentState) {
+                labelCell.style.fontWeight = 'bold';
+            }
             const selectCell = document.createElement('td');
             const select = document.createElement('select');
             select.className = 'sensorInput';
@@ -2710,16 +2727,24 @@ function buildLineChart(title, unit, labels, values, options = {}) {
 
 // Einfacher, aufklappbarer Zahlenvektor der für die nächsten 48h prognostizierten Verbräuche
 // (kWh) - erstmal ohne eigenes Diagramm, bis die input.csv-Erzeugung selbst ins Addon wandert.
-function buildCarConsumptionForecastDetails(labels, consumptionKwh) {
+function buildCarConsumptionForecastDetails(labels, consumptionKwh, lowDataBasis) {
     const details = document.createElement('details');
     details.className = 'dashboardConsumptionForecast';
     const summary = document.createElement('summary');
     summary.textContent = 'Verbrauchsprognose (48h) anzeigen';
     details.appendChild(summary);
+    const lowCount = (lowDataBasis || []).filter(Boolean).length;
+    if (lowCount > 0) {
+        const note = document.createElement('p');
+        note.className = 'shyftActionsError';
+        note.textContent = `⚠ ${lowCount} von ${labels.length} Stunden (markiert mit ~) basieren auf wenig Datenbasis (Cold-Start oder wenig Historie) - Werte dort sind noch unsicher.`;
+        details.appendChild(note);
+    }
     const pre = document.createElement('pre');
     pre.textContent = labels.map((label, i) => {
         const timeText = new Date(label).toLocaleString('de-DE', {weekday: 'short', hour: '2-digit', minute: '2-digit'}).replace('.', '');
-        return `${timeText}: ${consumptionKwh[i].toFixed(2)} kWh`;
+        const marker = (lowDataBasis && lowDataBasis[i]) ? '~' : ' ';
+        return `${marker}${timeText}: ${consumptionKwh[i].toFixed(2)} kWh`;
     }).join('\n');
     details.appendChild(pre);
     return details;
@@ -2786,7 +2811,7 @@ async function loadDashboard() {
                     };
                 });
                 presenceForecast = {byLabel};
-                consumptionForecast = {labels: presenceData.labels, consumptionKwh: presenceData.consumptionKwh};
+                consumptionForecast = {labels: presenceData.labels, consumptionKwh: presenceData.consumptionKwh, lowDataBasis: presenceData.lowDataBasis};
             }
         } catch (err) {
             console.log(err);
@@ -2799,7 +2824,7 @@ async function loadDashboard() {
             presenceForecast,
         }));
         if (consumptionForecast) {
-            container.appendChild(buildCarConsumptionForecastDetails(consumptionForecast.labels, consumptionForecast.consumptionKwh));
+            container.appendChild(buildCarConsumptionForecastDetails(consumptionForecast.labels, consumptionForecast.consumptionKwh, consumptionForecast.lowDataBasis));
         }
     } catch (err) {
         console.log(err);
