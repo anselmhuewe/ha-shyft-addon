@@ -2925,6 +2925,52 @@ function buildFlowImage(href, cx, cy, naturalW, naturalH, targetW) {
     return svgEl('image', {href, x: cx - targetW / 2, y: cy - targetH / 2, width: targetW, height: targetH});
 }
 
+// Die Hausbilder haben links einen eigenen Strommasten samt Leitung eingezeichnet - der laesst
+// sich nicht animieren (ist Teil des Fotos). Blendet ihn per clipPath aus, damit stattdessen der
+// eigene, animierbare buildPylonIcon links davor Platz hat. cropFraction ist der Anteil des
+// Originalbilds (von links), der weggeschnitten wird.
+function buildCroppedHouseImage(href, naturalW, naturalH, cropFraction, x, y, visibleW) {
+    const fullW = visibleW / (1 - cropFraction);
+    const fullH = fullW * (naturalH / naturalW);
+    const imgX = x - fullW * cropFraction;
+    const clipId = 'efw-house-clip';
+    const g = svgEl('g');
+    const defs = svgEl('defs');
+    const clip = svgEl('clipPath', {id: clipId});
+    clip.appendChild(svgEl('rect', {x, y, width: visibleW, height: fullH}));
+    defs.appendChild(clip);
+    g.appendChild(defs);
+    g.appendChild(svgEl('image', {href, x: imgX, y, width: fullW, height: fullH, 'clip-path': `url(#${clipId})`}));
+    return {group: g, height: fullH};
+}
+
+function buildGroundShadow(cx, cy, rx, ry) {
+    return svgEl('ellipse', {cx, cy, rx, ry, fill: 'rgba(20, 30, 20, 0.16)'});
+}
+
+// Eigener, animierbarer Strommast (statt des im Hausbild eingezeichneten) - siehe buildCroppedHouseImage.
+function buildPylonIcon(cx, cy) {
+    const g = svgEl('g');
+    g.appendChild(buildGroundShadow(cx, cy + 42, 26, 7));
+    const lines = svgEl('g', {stroke: 'var(--flow-metal-dark)', 'stroke-width': 2.2, fill: 'none', 'stroke-linecap': 'round', 'stroke-linejoin': 'round'});
+    lines.appendChild(svgEl('path', {d: `M ${cx - 20},${cy + 40} L ${cx - 4},${cy - 42} L ${cx + 4},${cy - 42} L ${cx + 20},${cy + 40}`}));
+    for (const [yTop, yBot] of [[-42, -18], [-18, 8], [8, 34]]) {
+        const wTop = 4 + (yTop + 42) / 82 * 16, wBot = 4 + (yBot + 42) / 82 * 16;
+        lines.appendChild(svgEl('path', {d: `M ${cx - wTop},${cy + yTop} L ${cx + wBot},${cy + yBot} M ${cx + wTop},${cy + yTop} L ${cx - wBot},${cy + yBot}`}));
+    }
+    lines.appendChild(svgEl('line', {x1: cx - 26, y1: cy - 44, x2: cx + 26, y2: cy - 44}));
+    g.appendChild(lines);
+    for (const dx of [-26, 0, 26]) {
+        g.appendChild(svgEl('circle', {cx: cx + dx, cy: cy - 44, r: 2.4, fill: 'var(--flow-metal-light)', stroke: 'var(--flow-metal-dark)', 'stroke-width': 1}));
+    }
+    return g;
+}
+
+function formatTemp(value) {
+    if (value === null || value === undefined) return '–';
+    return value.toLocaleString('de-DE', {minimumFractionDigits: 1, maximumFractionDigits: 1}) + ' °C';
+}
+
 // Die Batterie-Bilder existieren nur in 5 festen Stufen - auf die naeheste runden statt zu interpolieren.
 const BATTERY_IMAGE_BUCKETS = [
     {soc: 10, href: 'assets/battery-10.jpg'},
@@ -3007,56 +3053,67 @@ function buildEnergyFlowLabel(x, y, lines, {anchor = 'start'} = {}) {
 function buildEnergyFlowWidget(data) {
     const wrapper = document.createElement('div');
     wrapper.className = 'energyFlowWidget dashboardChart';
-    const svg = svgEl('svg', {viewBox: '0 0 920 480'});
+    const svg = svgEl('svg', {viewBox: '0 0 940 560'});
 
-    // Haus: Groesse/Bildausschnitt kommt direkt vom Bild (siehe houseImageFor) - PV und Batterie
-    // sind darin bereits eingezeichnet, nur Grid/PV/Haushalt bekommen deshalb reine Text-Label
-    // statt einer eigenen Animations-Linie (der "Rohrverlauf" ist im Bild schon sichtbar).
+    // Haus: der im Bild eingezeichnete Strommast/die Leitung laesst sich nicht animieren - wird
+    // per Crop ausgeblendet (siehe buildCroppedHouseImage), der eigene buildPylonIcon uebernimmt
+    // seinen Platz links davor. PV und Batterie sind im Bild bereits eingezeichnet, Grid/PV/
+    // Haushalt bekommen deshalb reine Text-Label statt einer eigenen Animations-Linie zum Haus.
     const house = houseImageFor(data);
-    const houseW = 380, houseH = houseW * (house.h / house.w);
-    const houseX = 40, houseY = 30;
-    const houseCx = houseX + houseW / 2, houseCy = houseY + houseH / 2;
-    svg.appendChild(buildFlowImage(house.href, houseCx, houseCy, house.w, house.h, houseW));
+    const houseCropFraction = 0.4;
+    const houseVisibleW = 230, houseX = 150, houseY = 60;
+    const cropped = buildCroppedHouseImage(house.href, house.w, house.h, houseCropFraction, houseX, houseY, houseVisibleW);
+    const houseH = cropped.height;
+    const houseCx = houseX + houseVisibleW / 2, houseCy = houseY + houseH / 2;
+    svg.appendChild(cropped.group);
 
-    svg.appendChild(renderSkyIcon(850, 45));
+    svg.appendChild(renderSkyIcon(870, 45));
 
     if (data.grid && data.grid.configured) {
+        const pylonCx = 70, pylonCy = houseCy;
+        svg.appendChild(buildPylonIcon(pylonCx, pylonCy));
+        const line = buildFlowLine(pylonCx + 24, pylonCy, houseX, houseCy, data.grid.kw, {reversed: (data.grid.kw || 0) < 0});
+        if (line) svg.appendChild(line);
         // Feste Farben statt der theme-abhaengigen --color-error/--color-text-secondary - das
         // Widget bleibt immer hell (siehe .energyFlowWidget), Dark-Mode-Toene waeren hier blass.
         const priceColor = data.grid.priceLevel === 'hoch' ? '#e74c3c' : data.grid.priceLevel === 'niedrig' ? 'var(--color-accent)' : '#5b6b8c';
         const priceText = data.grid.priceCent !== null ? `${data.grid.priceCent.toLocaleString('de-DE')} Cent` : '';
-        svg.appendChild(buildEnergyFlowLabel(houseX + 20, houseY + 20, [formatKwValue(data.grid.kw)]));
+        svg.appendChild(buildEnergyFlowLabel(pylonCx, pylonCy + 56, [formatKwValue(data.grid.kw)], {anchor: 'middle'}));
         if (priceText) {
-            svg.appendChild(svgEl('text', {x: houseX + 20, y: houseY + 36, class: 'energyFlowLabel', fill: priceColor}, [document.createTextNode(priceText)]));
+            svg.appendChild(svgEl('text', {x: pylonCx, y: pylonCy + 72, 'text-anchor': 'middle', class: 'energyFlowLabel', fill: priceColor}, [document.createTextNode(priceText)]));
         }
     }
     if (data.pv && data.pv.configured) {
-        svg.appendChild(buildEnergyFlowLabel(houseCx + 20, houseY + 30, [formatKwValue(data.pv.kw)]));
+        svg.appendChild(buildEnergyFlowLabel(houseCx + 30, houseY + 24, [formatKwValue(data.pv.kw)]));
     }
-    if (data.household && data.household.configured) {
-        svg.appendChild(buildEnergyFlowLabel(houseX + houseW - 90, houseY + houseH - 30, [formatKwValue(data.household.kw)]));
+    if (data.household && data.household.configured && data.household.kw !== null) {
+        svg.appendChild(buildEnergyFlowLabel(houseX + houseVisibleW - 60, houseY + houseH - 26, [formatKwValue(data.household.kw)]));
     }
 
     if (data.battery && data.battery.configured) {
-        const batteryImgW = 60, batteryImgH = batteryImgW / 0.535;
-        const batteryCx = houseX + houseW + 20, batteryCy = houseY + houseH - batteryImgH / 2;
-        const line = buildFlowLine(houseX + houseW - 40, houseY + houseH, batteryCx, batteryCy - batteryImgH / 2 - 6, data.battery.kw, {reversed: (data.battery.kw || 0) < 0});
+        // Unterhalb des Hauses statt daneben - sonst ueberschneidet sich die Linie mit dem
+        // Verbraucher-Bus (siehe unten), der auf gleicher Hoehe vom Haus abgeht
+        const batteryImgW = 95, batteryImgH = batteryImgW / 0.535;
+        // Genug Abstand zum Haus lassen, damit fuer die Linie zwischen Haus-Unterkante und
+        // Batterie-Oberkante tatsaechlich noch Platz bleibt (sonst zeigt sie rueckwaerts)
+        const batteryCx = houseCx, batteryCy = houseY + houseH + batteryImgH / 2 + 20;
+        const line = buildFlowLine(houseCx, houseY + houseH, batteryCx, batteryCy - batteryImgH / 2 - 4, data.battery.kw, {reversed: (data.battery.kw || 0) < 0});
         if (line) svg.appendChild(line);
         svg.appendChild(buildFlowImage(batteryImageFor(data.battery.soc), batteryCx, batteryCy, 240, 448, batteryImgW));
         const modeLine = data.battery.mode ? [`${Math.round(data.battery.soc ?? 0)} %`, data.battery.mode] : [`${Math.round(data.battery.soc ?? 0)} %`];
-        svg.appendChild(buildEnergyFlowLabel(batteryCx + batteryImgW / 2 + 8, batteryCy - 10, [formatKwValue(data.battery.kw), ...modeLine]));
+        svg.appendChild(buildEnergyFlowLabel(batteryCx + batteryImgW / 2 + 10, batteryCy - 24, [formatKwValue(data.battery.kw), ...modeLine]));
     }
 
-    const columnX = 700;
-    const houseRightX = houseX + houseW;
+    const columnX = 740;
+    const houseRightX = houseX + houseVisibleW;
     // Gemeinsamer Bus "Haus -> Verbraucher": alle vier rechten Verbraucher gehen vom selben
     // Hausaustrittspunkt ab und teilen sich diese senkrechte Spalte, bevor sie zur jeweiligen
     // Reihe abzweigen - so laeuft z.B. die Waermepumpen-Leitung nicht quer durchs Wallbox-Icon.
-    const busX = 630;
+    const busX = 660;
     const consumerAnchorX = columnX - 40;
 
     if (data.heatpump && data.heatpump.configured) {
-        const rowY = 100;
+        const rowY = 110;
         const line = buildFlowLineFromPath(buildBusFlowPath(houseRightX, houseCy, busX, rowY, consumerAnchorX), data.heatpump.kw);
         if (line) svg.appendChild(line);
         const hp = buildFlowImage('assets/heatpump.jpg', columnX, rowY, 499, 492, 80);
@@ -3064,18 +3121,18 @@ function buildEnergyFlowWidget(data) {
         svg.appendChild(hp);
         const statusLines = [
             data.heatpump.on === null ? 'Wärmepumpe' : (data.heatpump.on ? 'An' : 'Aus'),
-            data.heatpump.targetTempC !== null ? `Soll: ${data.heatpump.targetTempC.toLocaleString('de-DE')} °C` : null,
-            data.indoorTemp && data.indoorTemp.configured && data.indoorTemp.tempC !== null ? `Ist: ${data.indoorTemp.tempC.toLocaleString('de-DE')} °C` : null,
-            data.heatpump.dhwTankTempC !== null ? `WW-Speicher: ${data.heatpump.dhwTankTempC.toLocaleString('de-DE')} °C` : null,
+            data.heatpump.targetTempC !== null ? `Soll: ${formatTemp(data.heatpump.targetTempC)}` : null,
+            data.indoorTemp && data.indoorTemp.configured && data.indoorTemp.tempC !== null ? `Ist: ${formatTemp(data.indoorTemp.tempC)}` : null,
+            data.heatpump.dhwTankTempC !== null ? `WW-Speicher: ${formatTemp(data.heatpump.dhwTankTempC)}` : null,
             (data.heatpump.heatingOn !== null || data.heatpump.supplyTempC !== null)
-                ? `Heizung: ${data.heatpump.heatingOn ? 'An' : 'Aus'}` + (data.heatpump.supplyTempC !== null ? ` (${data.heatpump.supplyTempC.toLocaleString('de-DE')} °C)` : '')
+                ? `Heizung: ${data.heatpump.heatingOn ? 'An' : 'Aus'}` + (data.heatpump.supplyTempC !== null ? ` (${formatTemp(data.heatpump.supplyTempC)})` : '')
                 : null,
         ].filter(Boolean);
         svg.appendChild(buildEnergyFlowLabel(columnX + 46, rowY - 24, statusLines));
     }
 
     if (data.car && data.car.configured) {
-        const rowY = 220;
+        const rowY = 250;
         const isAway = data.car.state === 'away';
         const isCharging = data.car.state === 'charging';
         if (isCharging) {
@@ -3101,7 +3158,7 @@ function buildEnergyFlowWidget(data) {
     }
 
     if (data.sonstigerVerbraucher && data.sonstigerVerbraucher.configured) {
-        const rowY = 340;
+        const rowY = 390;
         const on = !!data.sonstigerVerbraucher.on;
         if (on) {
             // kein Leistungssensor fuer "Sonstiger Verbraucher" vorgesehen (nur an/aus) - fester
@@ -3114,7 +3171,7 @@ function buildEnergyFlowWidget(data) {
     }
 
     if (data.household && data.household.configured) {
-        const rowY = 430;
+        const rowY = 500;
         const line = buildFlowLineFromPath(buildBusFlowPath(houseRightX, houseCy, busX, rowY, consumerAnchorX), data.household.residualKw ?? 0.1);
         if (line) svg.appendChild(line);
         svg.appendChild(buildLightningIcon(columnX, rowY));

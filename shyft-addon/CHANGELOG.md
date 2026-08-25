@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.0.44.1
+
+* Energiefluss-Widget: mehrere Layout-Korrekturen anhand eines echten Screenshots - der Strommast im Hausbild ist ausgeblendet (per Bildausschnitt), stattdessen steht wieder ein eigener, animierter Strommast davor; die Batterie-Fluss-Linie überschnitt sich mit der Leitung zu Wärmepumpe/Auto (Batterie steht jetzt unterhalb statt neben dem Haus, dadurch auch kein Layout-Konflikt mehr); ein fehlender Haushaltsstrom-Wert zeigte einen bedeutungslosen Strich statt einfach nichts anzuzeigen; Temperaturwerte werden jetzt einheitlich mit einer Nachkommastelle dargestellt. Batterie-Grafik zudem größer
+
 ## 0.0.44.0
 
 * Energiefluss-Widget: eigene Illustrationen von shyft-power.com statt selbst gezeichneter Icons - Haus (3 Varianten je nach PV/Batterie), Batterie (5 Ladestufen), Wärmepumpe und Auto/Wallbox sind jetzt echte Bilder. Der farbige Himmel/Rasen-Hintergrund ist wieder weg, das Widget bleibt dafür bewusst immer hell (unabhängig vom Dark Mode der restlichen Seite), da die Bilder keinen transparenten Hintergrund haben. Die animierten Stromfluss-Linien sind unverändert erhalten geblieben
