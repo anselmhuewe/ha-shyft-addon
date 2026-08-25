@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.0.43.0
+
+* Energiefluss-Widget: Haus, Batterie, Wärmepumpe, Auto und Wallbox sind jetzt echte isometrische 3D-Objekte (Standard-Isometrie-Projektion mit heller/mittlerer/dunkler Flächenschattierung je Objekt) statt flacher 2D-Formen - Strommast, Stecker-Symbol und Blitz-Symbol bleiben bewusst flache Icons (wie in den meisten isometrischen Dashboards üblich)
+
 ## 0.0.42.2
 
 * Fix: Energiefluss-Widget - die Leitung zur Wärmepumpe lief teils quer durchs Wallbox-Icon. Alle vier Verbraucher (Wärmepumpe, Wallbox, Sonstiges Gerät, Haushaltsstrom) gehen jetzt vom selben Hausaustrittspunkt über einen gemeinsamen Bus ab, der sich erst kurz vor der jeweiligen Reihe aufteilt

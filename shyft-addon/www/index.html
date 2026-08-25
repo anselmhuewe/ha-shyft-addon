@@ -34,6 +34,14 @@
             --flow-shadow: rgba(20, 30, 20, 0.16);
             --flow-metal-light: #d7dde6;
             --flow-metal-dark: #99a3b3;
+            /* Isometrische 3-Flaechen-Schattierung (oben/rechts/links) je Material - top ist immer
+               am hellsten (direktes "Licht von oben"), left am dunkelsten, wie bei jedem
+               Isometrie-Icon-Set. */
+            --flow-wall-dark: #d9c9a8;
+            --flow-metal-mid: #bcc4d1;
+            --flow-panel-mid: #2c5990;
+            --flow-car-top: #f08970;
+            --flow-car-dark: #b53a2c;
         }
 
         @media (prefers-color-scheme: dark) {
@@ -64,6 +72,11 @@
                 --flow-shadow: rgba(0, 0, 0, 0.35);
                 --flow-metal-light: #5a6785;
                 --flow-metal-dark: #333f5c;
+                --flow-wall-dark: #1c2540;
+                --flow-metal-mid: #47547a;
+                --flow-panel-mid: #285078;
+                --flow-car-top: #ff9585;
+                --flow-car-dark: #c9503f;
             }
         }
 

@@ -2920,6 +2920,60 @@ function buildGroundShadow(cx, cy, rx, ry) {
     return svgEl('ellipse', {cx, cy, rx, ry, fill: 'var(--flow-shadow)'});
 }
 
+// ----------------------------------------------------------------------------------------------
+// Isometrische Projektion (30°/2:1) fuer alle Icons: jedes Objekt wird als Kiste/Quader aus
+// lokalen 3D-Koordinaten (x=Breite, y=Tiefe, z=Hoehe) gebaut und auf die Bildschirmebene
+// projiziert - dieselbe Standard-Formel, die jedes isometrische Icon-Set verwendet. Jede Kiste
+// bekommt automatisch 3 sichtbare Flaechen (oben/rechts/links), je heller/dunkler schattiert, was
+// den "3D"-Eindruck erzeugt, ohne dass pro Objekt von Hand ein Blickwinkel gerechnet werden muss.
+// ----------------------------------------------------------------------------------------------
+const ISO_COS30 = Math.cos(Math.PI / 6);
+const ISO_SIN30 = Math.sin(Math.PI / 6);
+
+function isoProject(x, y, z, originX, originY, scale) {
+    return {
+        x: originX + (x - y) * ISO_COS30 * scale,
+        y: originY + (x + y) * ISO_SIN30 * scale - z * scale,
+    };
+}
+
+function isoPointsAttr(points) {
+    return points.map(p => `${p.x.toFixed(2)},${p.y.toFixed(2)}`).join(' ');
+}
+
+// Liefert die Bildschirm-Ursprungskoordinate (lokal x=0,y=0,z=0), so dass der GRUNDFLAECHEN-
+// MITTELPUNKT (x=w/2, y=d/2, z=0) einer Kiste mit Breite w/Tiefe d genau bei (groundCenterX,
+// groundCenterY) landet - damit koennen alle Icon-Funktionen einfach "wo soll das auf dem Boden
+// stehen" angeben, statt die Iso-Verschiebung von Hand auszurechnen.
+function isoOrigin(groundCenterX, groundCenterY, w, d, scale) {
+    return {
+        x: groundCenterX - (w / 2 - d / 2) * ISO_COS30 * scale,
+        y: groundCenterY - (w / 2 + d / 2) * ISO_SIN30 * scale,
+    };
+}
+
+function isoProjector(origin, scale) {
+    return (x, y, z) => isoProject(x, y, z, origin.x, origin.y, scale);
+}
+
+// Die 3 sichtbaren Flaechen (oben/rechts/links) einer Kiste, die bei lokal (x0,y0,z0) beginnt und
+// die Ausdehnung w x d x h hat - beliebig oft mit demselben Projektor p aufrufbar, um mehrere
+// Kisten im selben Koordinatensystem zu stapeln (z.B. Autokarosserie + Kabine obendrauf).
+function buildIsoBoxFacesAt(p, x0, y0, z0, w, d, h, colors) {
+    const g = svgEl('g');
+    const top = [p(x0, y0 + d, z0 + h), p(x0 + w, y0 + d, z0 + h), p(x0 + w, y0, z0 + h), p(x0, y0, z0 + h)];
+    const right = [p(x0 + w, y0 + d, z0), p(x0 + w, y0 + d, z0 + h), p(x0 + w, y0, z0 + h), p(x0 + w, y0, z0)];
+    const left = [p(x0, y0 + d, z0), p(x0 + w, y0 + d, z0), p(x0 + w, y0 + d, z0 + h), p(x0, y0 + d, z0 + h)];
+    g.appendChild(svgEl('polygon', {points: isoPointsAttr(left), fill: colors.left}));
+    g.appendChild(svgEl('polygon', {points: isoPointsAttr(right), fill: colors.right}));
+    g.appendChild(svgEl('polygon', {points: isoPointsAttr(top), fill: colors.top}));
+    return g;
+}
+
+function buildIsoBoxFaces(p, w, d, h, colors) {
+    return buildIsoBoxFacesAt(p, 0, 0, 0, w, d, h, colors);
+}
+
 function buildEnergyFlowDefs() {
     const defs = svgEl('defs');
     const sky = svgEl('linearGradient', {id: 'efw-sky', x1: '0', y1: '0', x2: '0', y2: '1'});
@@ -2947,53 +3001,48 @@ function buildSceneBackground(width, height) {
 }
 
 function buildHouseIcon(cx, cy, {withSolar} = {}) {
-    const wallW = 108, wallH = 70, roofRise = 56, roofOverhang = 14;
-    const wallX = cx - wallW / 2, wallY = cy - wallH / 2;
-    const roofLeftX = wallX - roofOverhang, roofRightX = wallX + wallW + roofOverhang;
-    const apexX = cx, apexY = wallY - roofRise;
+    const w = 64, d = 46, wallH = 42, roofRise = 26;
+    const origin = isoOrigin(cx, cy, w, d, 1);
+    const p = isoProjector(origin, 1);
+    const slopeZ = y => wallH + (y / (d / 2)) * roofRise;
     const g = svgEl('g', {class: 'energyFlowHouse'});
 
-    g.appendChild(buildGroundShadow(cx, wallY + wallH + 8, wallW / 2 + 28, 10));
+    g.appendChild(buildGroundShadow(cx, cy + 6, w * 0.85, 12));
 
-    // Dach: zwei Facetten (links dunkler, rechts heller) fuer etwas Tiefe, plus First-Kante
-    g.appendChild(svgEl('polygon', {points: `${roofLeftX},${wallY} ${apexX},${apexY} ${apexX},${wallY}`, fill: 'var(--flow-roof-dark)'}));
-    g.appendChild(svgEl('polygon', {points: `${apexX},${wallY} ${apexX},${apexY} ${roofRightX},${wallY}`, fill: 'var(--flow-roof-light)'}));
-    g.appendChild(svgEl('rect', {x: apexX - 3, y: apexY - 2, width: 6, height: 6, rx: 3, fill: 'var(--flow-roof-dark)'}));
+    // Wand: nur die zwei sichtbaren Seitenflaechen - keine Deckflaeche, die deckt das Dach ohnehin ab
+    const wallLeft = [p(0, d, 0), p(w, d, 0), p(w, d, wallH), p(0, d, wallH)];
+    const wallRight = [p(w, d, 0), p(w, d, wallH), p(w, 0, wallH), p(w, 0, 0)];
+    g.appendChild(svgEl('polygon', {points: isoPointsAttr(wallLeft), fill: 'var(--flow-wall-dark)'}));
+    g.appendChild(svgEl('polygon', {points: isoPointsAttr(wallRight), fill: 'var(--flow-wall)'}));
 
-    // Wand
-    g.appendChild(svgEl('rect', {x: wallX, y: wallY, width: wallW, height: wallH, rx: 3, fill: 'var(--flow-wall)', stroke: 'var(--flow-wall-shade)', 'stroke-width': 1.5}));
-    g.appendChild(svgEl('rect', {x: wallX, y: wallY + wallH - 6, width: wallW, height: 6, fill: 'var(--flow-wall-shade)'}));
+    // Dach: First laeuft entlang der Breite bei y=d/2; zwei Dachflaechen plus sichtbarer Giebel vorn (y=0)
+    const ridgeZ = wallH + roofRise;
+    const gable = [p(0, 0, wallH), p(0, d / 2, ridgeZ), p(0, d, wallH)];
+    const roofFront = [p(0, 0, wallH), p(w, 0, wallH), p(w, d / 2, ridgeZ), p(0, d / 2, ridgeZ)];
+    const roofBack = [p(0, d, wallH), p(w, d, wallH), p(w, d / 2, ridgeZ), p(0, d / 2, ridgeZ)];
+    g.appendChild(svgEl('polygon', {points: isoPointsAttr(gable), fill: 'var(--flow-wall-dark)'}));
+    g.appendChild(svgEl('polygon', {points: isoPointsAttr(roofBack), fill: 'var(--flow-roof-dark)'}));
+    g.appendChild(svgEl('polygon', {points: isoPointsAttr(roofFront), fill: 'var(--flow-roof-light)'}));
 
-    // Fenster
-    const winSize = 17, winX = wallX + 14, winY = wallY + 12;
-    g.appendChild(svgEl('rect', {x: winX, y: winY, width: winSize, height: winSize, rx: 2, fill: 'var(--flow-window)', stroke: 'var(--flow-wall-shade)', 'stroke-width': 1.5}));
-    g.appendChild(svgEl('line', {x1: winX + winSize / 2, y1: winY, x2: winX + winSize / 2, y2: winY + winSize, stroke: 'var(--flow-wall-shade)', 'stroke-width': 1.2}));
-    g.appendChild(svgEl('line', {x1: winX, y1: winY + winSize / 2, x2: winX + winSize, y2: winY + winSize / 2, stroke: 'var(--flow-wall-shade)', 'stroke-width': 1.2}));
-
-    // Tuer (abgerundeter Bogen oben)
-    const doorW = 20, doorH = 30, doorBottom = wallY + wallH, doorTop = doorBottom - doorH;
-    g.appendChild(svgEl('path', {
-        d: `M ${cx - doorW / 2},${doorBottom} L ${cx - doorW / 2},${doorTop + 7} Q ${cx - doorW / 2},${doorTop} ${cx},${doorTop} Q ${cx + doorW / 2},${doorTop} ${cx + doorW / 2},${doorTop + 7} L ${cx + doorW / 2},${doorBottom} Z`,
-        fill: 'var(--flow-door)',
-    }));
-    g.appendChild(svgEl('circle', {cx: cx + doorW / 2 - 4, cy: doorTop + doorH / 2 + 4, r: 1.4, fill: 'var(--flow-wall)'}));
+    // Fenster + Tuer auf der rechten Wand (y=0-Flaeche)
+    const win = [p(w * 0.6, 0, wallH * 0.55), p(w * 0.92, 0, wallH * 0.55), p(w * 0.92, 0, wallH * 0.85), p(w * 0.6, 0, wallH * 0.85)];
+    g.appendChild(svgEl('polygon', {points: isoPointsAttr(win), fill: 'var(--flow-window)', stroke: 'var(--flow-wall-dark)', 'stroke-width': 1}));
+    const door = [p(w * 0.12, 0, 0), p(w * 0.34, 0, 0), p(w * 0.34, 0, wallH * 0.62), p(w * 0.12, 0, wallH * 0.62)];
+    g.appendChild(svgEl('polygon', {points: isoPointsAttr(door), fill: 'var(--flow-door)'}));
 
     if (withSolar) {
-        const cols = 3, rows = 2, cellW = 14, cellH = 9, gap = 1;
-        const gridW = cols * cellW + (cols - 1) * gap, gridH = rows * cellH + (rows - 1) * gap;
-        const angleDeg = Math.atan2(roofLeftX - apexX, wallY - apexY) * 180 / Math.PI;
-        const midX = apexX + 0.52 * (roofLeftX - apexX), midY = apexY + 0.52 * (wallY - apexY) - 6;
-        const panelGroup = svgEl('g', {transform: `translate(${midX} ${midY}) rotate(${angleDeg})`});
-        panelGroup.appendChild(svgEl('rect', {x: -gridW / 2 - 1.5, y: -gridH / 2 - 1.5, width: gridW + 3, height: gridH + 3, rx: 2, fill: 'var(--flow-panel-dark)'}));
-        for (let r = 0; r < rows; r++) {
-            for (let c = 0; c < cols; c++) {
-                panelGroup.appendChild(svgEl('rect', {
-                    x: -gridW / 2 + c * (cellW + gap), y: -gridH / 2 + r * (cellH + gap),
-                    width: cellW, height: cellH, fill: 'var(--flow-panel-light)',
-                }));
-            }
+        // Panel-Flaeche auf der helleren (vorderen) Dachschraege, mit Gitterlinien unterteilt
+        const y0 = d * 0.08, y1 = d * 0.42;
+        const panel = [p(w * 0.1, y0, slopeZ(y0)), p(w * 0.9, y0, slopeZ(y0)), p(w * 0.9, y1, slopeZ(y1)), p(w * 0.1, y1, slopeZ(y1))];
+        g.appendChild(svgEl('polygon', {points: isoPointsAttr(panel), fill: 'var(--flow-panel-light)', stroke: 'var(--flow-panel-dark)', 'stroke-width': 1}));
+        for (let i = 1; i < 4; i++) {
+            const x = w * 0.1 + (i / 4) * (w * 0.8);
+            const a = p(x, y0, slopeZ(y0)), b = p(x, y1, slopeZ(y1));
+            g.appendChild(svgEl('line', {x1: a.x, y1: a.y, x2: b.x, y2: b.y, stroke: 'var(--flow-panel-dark)', 'stroke-width': 0.7}));
         }
-        g.appendChild(panelGroup);
+        const midY = (y0 + y1) / 2;
+        const midA = p(w * 0.1, midY, slopeZ(midY)), midB = p(w * 0.9, midY, slopeZ(midY));
+        g.appendChild(svgEl('line', {x1: midA.x, y1: midA.y, x2: midB.x, y2: midB.y, stroke: 'var(--flow-panel-dark)', 'stroke-width': 0.7}));
     }
     return g;
 }
@@ -3016,91 +3065,90 @@ function buildPylonIcon(cx, cy) {
 }
 
 function buildBatteryIcon(cx, cy, socPercent) {
-    const w = 48, h = 70;
-    const x = cx - w / 2, y = cy - h / 2;
+    const w = 28, d = 20, h = 46;
+    const origin = isoOrigin(cx, cy, w, d, 1);
+    const p = isoProjector(origin, 1);
     const g = svgEl('g');
-    g.appendChild(buildGroundShadow(cx, y + h + 6, w / 2 + 10, 7));
-    g.appendChild(svgEl('rect', {x: cx - 12, y: y - 8, width: 24, height: 9, rx: 2, fill: 'var(--flow-metal-dark)'}));
-    g.appendChild(svgEl('rect', {x, y, width: w, height: h, rx: 8, fill: 'var(--flow-metal-light)', stroke: 'var(--flow-metal-dark)', 'stroke-width': 2}));
-    for (let i = 0; i < 3; i++) {
-        g.appendChild(svgEl('line', {x1: x + 8, y1: y + 12 + i * 6, x2: x + w - 8, y2: y + 12 + i * 6, stroke: 'var(--flow-metal-dark)', 'stroke-width': 1.2, opacity: 0.4}));
-    }
+    g.appendChild(buildGroundShadow(cx, cy + 4, w, 8));
+    g.appendChild(buildIsoBoxFaces(p, w, d, h, {top: 'var(--flow-metal-light)', right: 'var(--flow-metal-mid)', left: 'var(--flow-metal-dark)'}));
+    // Fuellstand-Anzeige als Flaechen-Decal auf der rechten (helleren) Seite
     const soc = Math.max(0, Math.min(100, socPercent ?? 0));
-    const innerX = x + 6, innerY = y + 36, innerW = w - 12, innerH = h - 42;
-    g.appendChild(svgEl('rect', {x: innerX, y: innerY, width: innerW, height: innerH, rx: 4, fill: 'var(--color-bg)', opacity: 0.5}));
-    const fillH = innerH * (soc / 100);
-    g.appendChild(svgEl('rect', {
-        x: innerX, y: innerY + innerH - fillH, width: innerW, height: fillH, rx: 4,
-        fill: soc < 20 ? 'var(--color-error)' : 'var(--color-accent)',
-    }));
-    g.appendChild(svgEl('circle', {cx, cy: y + 22, r: 3, fill: soc < 20 ? 'var(--color-error)' : 'var(--color-accent)'}));
+    const fillColor = soc < 20 ? 'var(--color-error)' : 'var(--color-accent)';
+    const gaugeTop = h * 0.82, gaugeBottom = h * 0.12, gaugeH = (gaugeTop - gaugeBottom) * (soc / 100);
+    const gauge = [
+        p(w, d * 0.28, gaugeBottom), p(w, d * 0.28, gaugeBottom + gaugeH),
+        p(w, d * 0.72, gaugeBottom + gaugeH), p(w, d * 0.72, gaugeBottom),
+    ];
+    g.appendChild(svgEl('polygon', {points: isoPointsAttr(gauge), fill: fillColor}));
+    const led = p(w, d * 0.5, h * 0.92);
+    g.appendChild(svgEl('circle', {cx: led.x, cy: led.y, r: 2.4, fill: fillColor}));
     return g;
 }
 
 function buildHeatpumpIcon(cx, cy, on) {
-    const w = 60, h = 48;
-    const x = cx - w / 2, y = cy - h / 2;
+    const w = 44, d = 26, h = 32;
+    const origin = isoOrigin(cx, cy, w, d, 1);
+    const p = isoProjector(origin, 1);
     const g = svgEl('g');
-    g.appendChild(buildGroundShadow(cx, y + h + 5, w / 2 + 8, 6));
-    g.appendChild(svgEl('rect', {x, y, width: w, height: h, rx: 8, fill: 'var(--flow-metal-light)', stroke: 'var(--flow-metal-dark)', 'stroke-width': 2}));
-    for (let i = 0; i < 5; i++) {
-        g.appendChild(svgEl('line', {x1: x + 6, y1: y + 7 + i * 7, x2: x + 16, y2: y + 7 + i * 7, stroke: 'var(--flow-metal-dark)', 'stroke-width': 1.4, opacity: 0.5}));
+    g.appendChild(buildGroundShadow(cx, cy + 5, w * 0.8, 7));
+    g.appendChild(buildIsoBoxFaces(p, w, d, h, {top: 'var(--flow-metal-light)', right: 'var(--flow-metal-mid)', left: 'var(--flow-metal-dark)'}));
+    // Lueftungslamellen auf der linken (hinteren) Flaeche
+    for (let i = 1; i < 5; i++) {
+        const y = d * i / 5;
+        const a = p(0, y, h * 0.25), b = p(0, y, h * 0.8);
+        g.appendChild(svgEl('line', {x1: a.x, y1: a.y, x2: b.x, y2: b.y, stroke: 'var(--flow-metal-dark)', 'stroke-width': 1, opacity: 0.5}));
     }
-    for (const dx of [-w / 2 + 6, w / 2 - 6]) {
-        g.appendChild(svgEl('rect', {x: cx + dx - 3, y: y + h - 2, width: 6, height: 6, fill: 'var(--flow-metal-dark)'}));
-    }
-    const fanCx = cx + 10, fanR = 15;
-    g.appendChild(svgEl('circle', {cx: fanCx, cy, r: fanR, fill: 'var(--color-bg)', stroke: 'var(--flow-metal-dark)', 'stroke-width': 1.5}));
+    // Ventilatorgitter auf der rechten Flaeche - als Ellipse (ein Kreis auf dieser Iso-Flaeche
+    // erscheint gestaucht), mit rotierender Fluegel-Gruppe
+    const fanCenter = p(w, d * 0.5, h * 0.58);
+    const fanEdge = p(w, d * 0.5, h * 0.95);
+    const fanR = Math.hypot(fanEdge.x - fanCenter.x, fanEdge.y - fanCenter.y);
+    g.appendChild(svgEl('ellipse', {cx: fanCenter.x, cy: fanCenter.y, rx: fanR, ry: fanR * 0.72, fill: 'var(--color-bg)', stroke: 'var(--flow-metal-dark)', 'stroke-width': 1.2}));
     const fan = svgEl('g', {class: 'energyFlowFan' + (on ? ' spinning' : '')});
     for (const angle of [0, 72, 144, 216, 288]) {
         fan.appendChild(svgEl('ellipse', {
-            cx: fanCx, cy, rx: 3, ry: fanR - 3, fill: on ? 'var(--color-accent)' : 'var(--color-text-secondary)',
-            transform: `rotate(${angle} ${fanCx} ${cy})`,
+            cx: fanCenter.x, cy: fanCenter.y, rx: fanR * 0.72, ry: 2.2, fill: on ? 'var(--color-accent)' : 'var(--color-text-secondary)',
+            transform: `rotate(${angle} ${fanCenter.x} ${fanCenter.y})`,
         }));
     }
-    fan.appendChild(svgEl('circle', {cx: fanCx, cy, r: 3.5, fill: 'var(--flow-metal-dark)'}));
+    fan.appendChild(svgEl('circle', {cx: fanCenter.x, cy: fanCenter.y, r: 2.3, fill: 'var(--flow-metal-dark)'}));
     g.appendChild(fan);
     return g;
 }
 
 function buildCarIcon(cx, cy, faded) {
+    const bodyW = 56, bodyD = 26, bodyH = 14;
+    const origin = isoOrigin(cx, cy, bodyW, bodyD, 1);
+    const p = isoProjector(origin, 1);
     const g = svgEl('g', {opacity: faded ? 0.35 : 1});
-    g.appendChild(buildGroundShadow(cx, cy + 20, 34, 6));
-    g.appendChild(svgEl('path', {
-        d: `M ${cx - 32},${cy + 8}
-            C ${cx - 32},${cy - 2} ${cx - 28},${cy - 2} ${cx - 24},${cy - 2}
-            L ${cx - 18},${cy - 14}
-            C ${cx - 14},${cy - 19} ${cx - 6},${cy - 21} ${cx + 2},${cy - 21}
-            C ${cx + 10},${cy - 21} ${cx + 17},${cy - 18} ${cx + 21},${cy - 13}
-            L ${cx + 26},${cy - 2}
-            C ${cx + 30},${cy - 2} ${cx + 32},${cy - 1} ${cx + 32},${cy + 8}
-            C ${cx + 32},${cy + 13} ${cx + 28},${cy + 15} ${cx + 22},${cy + 15}
-            L ${cx - 22},${cy + 15}
-            C ${cx - 28},${cy + 15} ${cx - 32},${cy + 13} ${cx - 32},${cy + 8} Z`,
-        fill: 'var(--color-error)',
-    }));
-    g.appendChild(svgEl('path', {
-        d: `M ${cx - 16},${cy - 13} L ${cx - 11},${cy - 20} C ${cx - 7},${cy - 24} ${cx - 2},${cy - 26} ${cx + 3},${cy - 26}
-            C ${cx + 9},${cy - 26} ${cx + 14},${cy - 23} ${cx + 18},${cy - 19} L ${cx + 22},${cy - 12} Z`,
-        fill: 'var(--flow-window)', opacity: 0.9,
-    }));
-    for (const dx of [-18, 18]) {
-        g.appendChild(svgEl('circle', {cx: cx + dx, cy: cy + 15, r: 8, fill: 'var(--color-text)'}));
-        g.appendChild(svgEl('circle', {cx: cx + dx, cy: cy + 15, r: 3.2, fill: 'var(--flow-metal-light)'}));
+    g.appendChild(buildGroundShadow(cx, cy + 11, bodyW * 0.62, 7));
+    g.appendChild(buildIsoBoxFacesAt(p, 0, 0, 0, bodyW, bodyD, bodyH, {top: 'var(--flow-car-top)', right: 'var(--color-error)', left: 'var(--flow-car-dark)'}));
+    // Kabine: kleinere Box obendrauf, mittig auf der Karosserie
+    const cabinW = 30, cabinD = bodyD, cabinH = 12, cabinX0 = (bodyW - cabinW) / 2;
+    g.appendChild(buildIsoBoxFacesAt(p, cabinX0, 0, bodyH, cabinW, cabinD, cabinH, {top: 'var(--flow-car-top)', right: 'var(--flow-window)', left: 'var(--flow-wall-dark)'}));
+    // Raeder als Ellipsen (ein Kreis erscheint auf dieser Flaeche gestaucht) auf der rechten Karosserieseite
+    for (const x of [bodyW * 0.18, bodyW * 0.82]) {
+        const wc = p(x, 0, 0);
+        g.appendChild(svgEl('ellipse', {cx: wc.x, cy: wc.y, rx: 7, ry: 5, fill: 'var(--color-text)'}));
+        g.appendChild(svgEl('ellipse', {cx: wc.x, cy: wc.y, rx: 3, ry: 2, fill: 'var(--flow-metal-light)'}));
     }
-    g.appendChild(svgEl('circle', {cx: cx + 31, cy: cy + 5, r: 1.8, fill: 'var(--flow-wall)'}));
     return g;
 }
 
 // Ladesaeule neben dem Auto (nur wenn eine Wallbox als Geraet ausgewaehlt ist) - separat vom
 // Auto selbst, damit die Zuordnung "Auto steht/laedt" vs. "Wallbox vorhanden" auch optisch klar bleibt.
 function buildWallboxIcon(cx, cy, active) {
+    const w = 12, d = 10, h = 40;
+    const origin = isoOrigin(cx, cy, w, d, 1);
+    const p = isoProjector(origin, 1);
     const color = active ? 'var(--color-accent)' : 'var(--flow-metal-dark)';
     const g = svgEl('g');
-    g.appendChild(buildGroundShadow(cx, cy + 22, 10, 3));
-    g.appendChild(svgEl('rect', {x: cx - 8, y: cy - 22, width: 16, height: 42, rx: 4, fill: 'var(--flow-metal-light)', stroke: 'var(--flow-metal-dark)', 'stroke-width': 1.6}));
-    g.appendChild(svgEl('rect', {x: cx - 5, y: cy - 17, width: 10, height: 7, rx: 1.5, fill: active ? 'var(--color-accent)' : 'var(--color-text-secondary)'}));
-    g.appendChild(svgEl('circle', {cx, cy: cy - 3, r: 2, fill: color}));
+    g.appendChild(buildGroundShadow(cx, cy + 3, 10, 3));
+    g.appendChild(buildIsoBoxFaces(p, w, d, h, {top: 'var(--flow-metal-light)', right: 'var(--flow-metal-mid)', left: 'var(--flow-metal-dark)'}));
+    const screen = [p(w, d * 0.2, h * 0.62), p(w, d * 0.2, h * 0.8), p(w, d * 0.8, h * 0.8), p(w, d * 0.8, h * 0.62)];
+    g.appendChild(svgEl('polygon', {points: isoPointsAttr(screen), fill: active ? 'var(--color-accent)' : 'var(--color-text-secondary)'}));
+    const led = p(w, d * 0.5, h * 0.45);
+    g.appendChild(svgEl('circle', {cx: led.x, cy: led.y, r: 1.8, fill: color}));
     return g;
 }
 
