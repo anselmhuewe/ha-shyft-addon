@@ -2925,23 +2925,28 @@ function buildFlowImage(href, cx, cy, naturalW, naturalH, targetW) {
     return svgEl('image', {href, x: cx - targetW / 2, y: cy - targetH / 2, width: targetW, height: targetH});
 }
 
-// Die Hausbilder haben links einen eigenen Strommasten samt Leitung eingezeichnet - der laesst
-// sich nicht animieren (ist Teil des Fotos). Blendet ihn per clipPath aus, damit stattdessen der
-// eigene, animierbare buildPylonIcon links davor Platz hat. cropFraction ist der Anteil des
-// Originalbilds (von links), der weggeschnitten wird.
-function buildCroppedHouseImage(href, naturalW, naturalH, cropFraction, x, y, visibleW) {
-    const fullW = visibleW / (1 - cropFraction);
+// Die Hausbilder haben links einen eigenen Strommasten samt Frei-/Erdleitung eingezeichnet - der
+// laesst sich nicht animieren (ist Teil des Fotos). Blendet ihn per clipPath aus, damit
+// stattdessen der eigene, animierbare buildPylonIcon links davor Platz hat. Geschnitten wird von
+// links UND von oben (die Freileitung reicht schraeg nach oben weiter nach rechts als der
+// Mast-Pfosten selbst) - beides faellt in den Bildbereich oberhalb/links vom Haus, das Haus selbst
+// beginnt (Dach/First) erst weiter unten/rechts und bleibt dadurch unangetastet.
+function buildCroppedHouseImage(href, naturalW, naturalH, cropLeftFraction, cropTopFraction, x, y, visibleW) {
+    const fullW = visibleW / (1 - cropLeftFraction);
     const fullH = fullW * (naturalH / naturalW);
-    const imgX = x - fullW * cropFraction;
+    const cropTopPx = fullH * cropTopFraction;
+    const imgX = x - fullW * cropLeftFraction;
+    const imgY = y - cropTopPx;
+    const visibleH = fullH - cropTopPx;
     const clipId = 'efw-house-clip';
     const g = svgEl('g');
     const defs = svgEl('defs');
     const clip = svgEl('clipPath', {id: clipId});
-    clip.appendChild(svgEl('rect', {x, y, width: visibleW, height: fullH}));
+    clip.appendChild(svgEl('rect', {x, y, width: visibleW, height: visibleH}));
     defs.appendChild(clip);
     g.appendChild(defs);
-    g.appendChild(svgEl('image', {href, x: imgX, y, width: fullW, height: fullH, 'clip-path': `url(#${clipId})`}));
-    return {group: g, height: fullH};
+    g.appendChild(svgEl('image', {href, x: imgX, y: imgY, width: fullW, height: fullH, 'clip-path': `url(#${clipId})`}));
+    return {group: g, height: visibleH};
 }
 
 function buildGroundShadow(cx, cy, rx, ry) {
@@ -3031,9 +3036,16 @@ function renderSkyIcon(cx, cy) {
             g.appendChild(svgEl('line', {x1, y1, x2, y2, stroke: '#f4c542', 'stroke-width': 2.5, 'stroke-linecap': 'round'}));
         }
     } else {
+        // Mond als zwei volle Kreise mit fill-rule evenodd (der kleinere, leicht nach rechts
+        // versetzte Kreis "stanzt" die Sichel aus) - robuster als ein Zwei-Bogen-Pfad, bei dem der
+        // zweite Radius kleiner als der halbe Punktabstand war (SVG skaliert einen zu kleinen
+        // Bogenradius automatisch hoch, wodurch die Sichel vorher unsichtbar wurde)
+        const R = 14, r = 11, offset = 7;
         g.appendChild(svgEl('path', {
-            d: `M ${cx + 8},${cy - 14} A 14 14 0 1 0 ${cx + 8},${cy + 14} A 11 11 0 1 1 ${cx + 8},${cy - 14} Z`,
+            'fill-rule': 'evenodd',
             fill: '#c9d3e8',
+            d: `M ${cx - R},${cy} a ${R} ${R} 0 1 0 ${2 * R} 0 a ${R} ${R} 0 1 0 ${-2 * R} 0 Z
+                M ${cx + offset - r},${cy} a ${r} ${r} 0 1 0 ${2 * r} 0 a ${r} ${r} 0 1 0 ${-2 * r} 0 Z`,
         }));
         for (const [dx, dy] of [[22, -10], [28, 4], [18, 12]]) {
             g.appendChild(svgEl('circle', {cx: cx + dx, cy: cy + dy, r: 1.4, fill: '#c9d3e8'}));
@@ -3060,9 +3072,15 @@ function buildEnergyFlowWidget(data) {
     // seinen Platz links davor. PV und Batterie sind im Bild bereits eingezeichnet, Grid/PV/
     // Haushalt bekommen deshalb reine Text-Label statt einer eigenen Animations-Linie zum Haus.
     const house = houseImageFor(data);
-    const houseCropFraction = 0.4;
+    // Mast+Freileitung im Bild werden per Crop ausgeblendet: von links (entfernt Mast-Pfosten +
+    // das gruene Erdkabel zum Zaehlerkasten) UND von oben (entfernt die schraeg nach oben
+    // laufenden Freileitungen, die weiter nach rechts reichen als der Mast selbst) - eine einzelne
+    // Ecke lässt sich mit einem Rechteck ausblenden, ohne das Haus selbst anzuschneiden, weil
+    // Hausdach/-wand erst bei einer groesseren y-Koordinate (weiter unten) beginnen als die
+    // Freileitungen enden.
+    const houseCropLeftFraction = 0.45, houseCropTopFraction = 0.22;
     const houseVisibleW = 230, houseX = 150, houseY = 60;
-    const cropped = buildCroppedHouseImage(house.href, house.w, house.h, houseCropFraction, houseX, houseY, houseVisibleW);
+    const cropped = buildCroppedHouseImage(house.href, house.w, house.h, houseCropLeftFraction, houseCropTopFraction, houseX, houseY, houseVisibleW);
     const houseH = cropped.height;
     const houseCx = houseX + houseVisibleW / 2, houseCy = houseY + houseH / 2;
     svg.appendChild(cropped.group);
@@ -3070,7 +3088,7 @@ function buildEnergyFlowWidget(data) {
     svg.appendChild(renderSkyIcon(870, 45));
 
     if (data.grid && data.grid.configured) {
-        const pylonCx = 70, pylonCy = houseCy;
+        const pylonCx = 60, pylonCy = houseCy;
         svg.appendChild(buildPylonIcon(pylonCx, pylonCy));
         const line = buildFlowLine(pylonCx + 24, pylonCy, houseX, houseCy, data.grid.kw, {reversed: (data.grid.kw || 0) < 0});
         if (line) svg.appendChild(line);
@@ -3078,9 +3096,11 @@ function buildEnergyFlowWidget(data) {
         // Widget bleibt immer hell (siehe .energyFlowWidget), Dark-Mode-Toene waeren hier blass.
         const priceColor = data.grid.priceLevel === 'hoch' ? '#e74c3c' : data.grid.priceLevel === 'niedrig' ? 'var(--color-accent)' : '#5b6b8c';
         const priceText = data.grid.priceCent !== null ? `${data.grid.priceCent.toLocaleString('de-DE')} Cent` : '';
-        svg.appendChild(buildEnergyFlowLabel(pylonCx, pylonCy + 56, [formatKwValue(data.grid.kw)], {anchor: 'middle'}));
+        // Oberhalb des Masts statt darunter - dort war der Abstand zum Haus zu knapp und der Text
+        // reichte teils ins Hausbild hinein
+        svg.appendChild(buildEnergyFlowLabel(pylonCx, pylonCy - 70, [formatKwValue(data.grid.kw)], {anchor: 'middle'}));
         if (priceText) {
-            svg.appendChild(svgEl('text', {x: pylonCx, y: pylonCy + 72, 'text-anchor': 'middle', class: 'energyFlowLabel', fill: priceColor}, [document.createTextNode(priceText)]));
+            svg.appendChild(svgEl('text', {x: pylonCx, y: pylonCy - 54, 'text-anchor': 'middle', class: 'energyFlowLabel', fill: priceColor}, [document.createTextNode(priceText)]));
         }
     }
     if (data.pv && data.pv.configured) {
@@ -3093,7 +3113,7 @@ function buildEnergyFlowWidget(data) {
     if (data.battery && data.battery.configured) {
         // Unterhalb des Hauses statt daneben - sonst ueberschneidet sich die Linie mit dem
         // Verbraucher-Bus (siehe unten), der auf gleicher Hoehe vom Haus abgeht
-        const batteryImgW = 95, batteryImgH = batteryImgW / 0.535;
+        const batteryImgW = 42, batteryImgH = batteryImgW / 0.535;
         // Genug Abstand zum Haus lassen, damit fuer die Linie zwischen Haus-Unterkante und
         // Batterie-Oberkante tatsaechlich noch Platz bleibt (sonst zeigt sie rueckwaerts)
         const batteryCx = houseCx, batteryCy = houseY + houseH + batteryImgH / 2 + 20;
@@ -3114,8 +3134,12 @@ function buildEnergyFlowWidget(data) {
 
     if (data.heatpump && data.heatpump.configured) {
         const rowY = 110;
-        const line = buildFlowLineFromPath(buildBusFlowPath(houseRightX, houseCy, busX, rowY, consumerAnchorX), data.heatpump.kw);
-        if (line) svg.appendChild(line);
+        // Nur animieren, wenn sie tatsaechlich laeuft - sonst wirkt es so, als flösse Strom zu
+        // einem ausgeschalteten Geraet (dieselbe Logik wie bei Auto/Sonstiges Geraet unten)
+        if (data.heatpump.on) {
+            const line = buildFlowLineFromPath(buildBusFlowPath(houseRightX, houseCy, busX, rowY, consumerAnchorX), data.heatpump.kw || 0.3);
+            if (line) svg.appendChild(line);
+        }
         const hp = buildFlowImage('assets/heatpump.jpg', columnX, rowY, 499, 492, 80);
         if (data.heatpump.on) hp.setAttribute('class', 'energyFlowPulse');
         svg.appendChild(hp);

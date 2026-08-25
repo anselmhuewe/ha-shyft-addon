@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.0.44.2
+
+* Energiefluss-Widget: Hausbild-Ausschnitt schneidet jetzt auch von oben zu (nicht nur von links), damit die schräg laufende Freileitung im Bild vollständig verschwindet, nicht nur der Mast-Pfosten; Batterie-Grafik deutlich verkleinert (war viel zu groß); Sonne/Mond-Symbol repariert (der Mond-Sichel-Pfad war durch einen ungültigen Bogenradius unsichtbar); Netz-Werte sitzen jetzt oberhalb statt unterhalb des Mastes, mit mehr Abstand zum Haus; die Wärmepumpen-Leitung animiert nur noch, wenn sie tatsächlich läuft (vorher auch im "Aus"-Zustand, was wie eine falsche Verbindung wirkte)
+
 ## 0.0.44.1
 
 * Energiefluss-Widget: mehrere Layout-Korrekturen anhand eines echten Screenshots - der Strommast im Hausbild ist ausgeblendet (per Bildausschnitt), stattdessen steht wieder ein eigener, animierter Strommast davor; die Batterie-Fluss-Linie überschnitt sich mit der Leitung zu Wärmepumpe/Auto (Batterie steht jetzt unterhalb statt neben dem Haus, dadurch auch kein Layout-Konflikt mehr); ein fehlender Haushaltsstrom-Wert zeigte einen bedeutungslosen Strich statt einfach nichts anzuzeigen; Temperaturwerte werden jetzt einheitlich mit einer Nachkommastelle dargestellt. Batterie-Grafik zudem größer
