@@ -19,29 +19,11 @@
             --color-tooltip-bg: #091747;
             --color-tooltip-text: #ffffff;
             --page-padding: 24px;
-            --flow-sky-top: #cdeaf7;
-            --flow-sky-horizon: #eef8ee;
-            --flow-ground: #bfe3b0;
-            --flow-ground-shade: #a3d190;
-            --flow-roof-light: #d97a5c;
-            --flow-roof-dark: #b85f45;
-            --flow-wall: #fbf3e6;
-            --flow-wall-shade: #ecdfc9;
-            --flow-window: #bfe3f2;
-            --flow-door: #8a5a3b;
-            --flow-panel-light: #3a6fb0;
-            --flow-panel-dark: #204a80;
-            --flow-shadow: rgba(20, 30, 20, 0.16);
+            /* Fuers Energiefluss-Widget: nur noch fuer die zwei verbliebenen selbst gezeichneten
+               Icons (Stecker "Sonstiges Geraet", siehe buildPlugIcon/buildLightningIcon) - Haus,
+               Batterie, Waermepumpe, Auto/Wallbox sind jetzt echte Fotos/Illustrationen. */
             --flow-metal-light: #d7dde6;
             --flow-metal-dark: #99a3b3;
-            /* Isometrische 3-Flaechen-Schattierung (oben/rechts/links) je Material - top ist immer
-               am hellsten (direktes "Licht von oben"), left am dunkelsten, wie bei jedem
-               Isometrie-Icon-Set. */
-            --flow-wall-dark: #d9c9a8;
-            --flow-metal-mid: #bcc4d1;
-            --flow-panel-mid: #2c5990;
-            --flow-car-top: #f08970;
-            --flow-car-dark: #b53a2c;
         }
 
         @media (prefers-color-scheme: dark) {
@@ -57,26 +39,6 @@
                 --color-error: #ff7a6e;
                 --color-tooltip-bg: #1c2b4d;
                 --color-tooltip-text: #eef2f7;
-                --flow-sky-top: #16233f;
-                --flow-sky-horizon: #223154;
-                --flow-ground: #1d3a2c;
-                --flow-ground-shade: #16301f;
-                --flow-roof-light: #c96a4d;
-                --flow-roof-dark: #97493a;
-                --flow-wall: #2a3550;
-                --flow-wall-shade: #202a44;
-                --flow-window: #6fb6d8;
-                --flow-door: #6b4529;
-                --flow-panel-light: #4b84c4;
-                --flow-panel-dark: #1c355c;
-                --flow-shadow: rgba(0, 0, 0, 0.35);
-                --flow-metal-light: #5a6785;
-                --flow-metal-dark: #333f5c;
-                --flow-wall-dark: #1c2540;
-                --flow-metal-mid: #47547a;
-                --flow-panel-mid: #285078;
-                --flow-car-top: #ff9585;
-                --flow-car-dark: #c9503f;
             }
         }
 
@@ -663,6 +625,15 @@
         .dashboardChart {
             margin-bottom: 2em;
         }
+        /* Die Bild-Assets (Haus/Batterie/Waermepumpe/Auto) haben einen weissen Hintergrund
+           eingebrannt (keine Transparenz) - das Widget bleibt deshalb bewusst immer hell, statt
+           mit dem Rest der Seite in den Dark Mode zu wechseln (sonst wirkt es wie weisse Kaesten
+           auf dunklem Grund). */
+        .energyFlowWidget {
+            background: #ffffff;
+            border-radius: 12px;
+            padding: 0.5em;
+        }
         .energyFlowWidget svg {
             display: block;
             width: 100%;
@@ -671,7 +642,7 @@
         .energyFlowLabel {
             font-family: var(--font-body);
             font-size: 13px;
-            fill: var(--color-text);
+            fill: #091747;
         }
         @keyframes energyFlowDash {
             to {
@@ -689,15 +660,16 @@
         .energyFlowLine-reverse {
             animation-direction: reverse;
         }
-        @keyframes energyFlowSpin {
-            to {
-                transform: rotate(360deg);
+        @keyframes energyFlowPulse {
+            0%, 100% {
+                filter: brightness(1);
+            }
+            50% {
+                filter: brightness(1.12);
             }
         }
-        .energyFlowFan.spinning {
-            transform-box: fill-box;
-            transform-origin: center;
-            animation: energyFlowSpin 2.2s linear infinite;
+        .energyFlowPulse {
+            animation: energyFlowPulse 1.8s ease-in-out infinite;
         }
         .dashboardPvEnergySummary {
             font-weight: 600;

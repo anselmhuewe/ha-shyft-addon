@@ -2916,244 +2916,44 @@ function buildFlowLine(x1, y1, x2, y2, kw, options = {}) {
     return buildFlowLineFromPath(buildFlowPath(x1, y1, x2, y2), kw, options);
 }
 
-function buildGroundShadow(cx, cy, rx, ry) {
-    return svgEl('ellipse', {cx, cy, rx, ry, fill: 'var(--flow-shadow)'});
+// Echte Fotos/Illustrationen des Nutzers (shyft-power.com) statt selbst gezeichneter Formen -
+// siehe www/assets/. Nur die animierten Stromfluss-Linien selbst (buildFlowLine & Co., weiter
+// unten) sind weiterhin eigenes SVG, plus die drei Icons, fuer die keine Bild-Assets existieren
+// (Stecker/Blitz/Sonne-Mond).
+function buildFlowImage(href, cx, cy, naturalW, naturalH, targetW) {
+    const targetH = targetW * (naturalH / naturalW);
+    return svgEl('image', {href, x: cx - targetW / 2, y: cy - targetH / 2, width: targetW, height: targetH});
 }
 
-// ----------------------------------------------------------------------------------------------
-// Isometrische Projektion (30°/2:1) fuer alle Icons: jedes Objekt wird als Kiste/Quader aus
-// lokalen 3D-Koordinaten (x=Breite, y=Tiefe, z=Hoehe) gebaut und auf die Bildschirmebene
-// projiziert - dieselbe Standard-Formel, die jedes isometrische Icon-Set verwendet. Jede Kiste
-// bekommt automatisch 3 sichtbare Flaechen (oben/rechts/links), je heller/dunkler schattiert, was
-// den "3D"-Eindruck erzeugt, ohne dass pro Objekt von Hand ein Blickwinkel gerechnet werden muss.
-// ----------------------------------------------------------------------------------------------
-const ISO_COS30 = Math.cos(Math.PI / 6);
-const ISO_SIN30 = Math.sin(Math.PI / 6);
+// Die Batterie-Bilder existieren nur in 5 festen Stufen - auf die naeheste runden statt zu interpolieren.
+const BATTERY_IMAGE_BUCKETS = [
+    {soc: 10, href: 'assets/battery-10.jpg'},
+    {soc: 40, href: 'assets/battery-40.jpg'},
+    {soc: 60, href: 'assets/battery-60.png'},
+    {soc: 80, href: 'assets/battery-80.png'},
+    {soc: 100, href: 'assets/battery-100.png'},
+];
 
-function isoProject(x, y, z, originX, originY, scale) {
-    return {
-        x: originX + (x - y) * ISO_COS30 * scale,
-        y: originY + (x + y) * ISO_SIN30 * scale - z * scale,
-    };
+function batteryImageFor(socPercent) {
+    const soc = socPercent ?? 0;
+    return BATTERY_IMAGE_BUCKETS.reduce((closest, b) => Math.abs(b.soc - soc) < Math.abs(closest.soc - soc) ? b : closest).href;
 }
 
-function isoPointsAttr(points) {
-    return points.map(p => `${p.x.toFixed(2)},${p.y.toFixed(2)}`).join(' ');
-}
-
-// Liefert die Bildschirm-Ursprungskoordinate (lokal x=0,y=0,z=0), so dass der GRUNDFLAECHEN-
-// MITTELPUNKT (x=w/2, y=d/2, z=0) einer Kiste mit Breite w/Tiefe d genau bei (groundCenterX,
-// groundCenterY) landet - damit koennen alle Icon-Funktionen einfach "wo soll das auf dem Boden
-// stehen" angeben, statt die Iso-Verschiebung von Hand auszurechnen.
-function isoOrigin(groundCenterX, groundCenterY, w, d, scale) {
-    return {
-        x: groundCenterX - (w / 2 - d / 2) * ISO_COS30 * scale,
-        y: groundCenterY - (w / 2 + d / 2) * ISO_SIN30 * scale,
-    };
-}
-
-function isoProjector(origin, scale) {
-    return (x, y, z) => isoProject(x, y, z, origin.x, origin.y, scale);
-}
-
-// Die 3 sichtbaren Flaechen (oben/rechts/links) einer Kiste, die bei lokal (x0,y0,z0) beginnt und
-// die Ausdehnung w x d x h hat - beliebig oft mit demselben Projektor p aufrufbar, um mehrere
-// Kisten im selben Koordinatensystem zu stapeln (z.B. Autokarosserie + Kabine obendrauf).
-function buildIsoBoxFacesAt(p, x0, y0, z0, w, d, h, colors) {
-    const g = svgEl('g');
-    const top = [p(x0, y0 + d, z0 + h), p(x0 + w, y0 + d, z0 + h), p(x0 + w, y0, z0 + h), p(x0, y0, z0 + h)];
-    const right = [p(x0 + w, y0 + d, z0), p(x0 + w, y0 + d, z0 + h), p(x0 + w, y0, z0 + h), p(x0 + w, y0, z0)];
-    const left = [p(x0, y0 + d, z0), p(x0 + w, y0 + d, z0), p(x0 + w, y0 + d, z0 + h), p(x0, y0 + d, z0 + h)];
-    g.appendChild(svgEl('polygon', {points: isoPointsAttr(left), fill: colors.left}));
-    g.appendChild(svgEl('polygon', {points: isoPointsAttr(right), fill: colors.right}));
-    g.appendChild(svgEl('polygon', {points: isoPointsAttr(top), fill: colors.top}));
-    return g;
-}
-
-function buildIsoBoxFaces(p, w, d, h, colors) {
-    return buildIsoBoxFacesAt(p, 0, 0, 0, w, d, h, colors);
-}
-
-function buildEnergyFlowDefs() {
-    const defs = svgEl('defs');
-    const sky = svgEl('linearGradient', {id: 'efw-sky', x1: '0', y1: '0', x2: '0', y2: '1'});
-    sky.appendChild(svgEl('stop', {offset: '0%', style: 'stop-color: var(--flow-sky-top)'}));
-    sky.appendChild(svgEl('stop', {offset: '100%', style: 'stop-color: var(--flow-sky-horizon)'}));
-    defs.appendChild(sky);
-    return defs;
-}
-
-// Sanft geschwungener Hintergrund (Himmel + Rasenhuegel), damit die Szene nicht auf freiem
-// (transparentem) Grund zu schweben scheint - traegt selbst am meisten zum "kein primitives
-// Strichmaennchen mehr"-Eindruck bei.
-function buildSceneBackground(width, height) {
-    const g = svgEl('g');
-    g.appendChild(svgEl('rect', {x: 0, y: 0, width, height, rx: 16, fill: 'url(#efw-sky)'}));
-    g.appendChild(svgEl('path', {
-        d: `M 0,${height - 60} C 150,${height - 82} 300,${height - 68} 460,${height - 78} C 620,${height - 88} 770,${height - 65} ${width},${height - 74} L ${width},${height} L 0,${height} Z`,
-        fill: 'var(--flow-ground)',
-    }));
-    g.appendChild(svgEl('path', {
-        d: `M 0,${height - 48} C 150,${height - 68} 300,${height - 56} 460,${height - 65} C 620,${height - 74} 770,${height - 54} ${width},${height - 62} L ${width},${height} L 0,${height} Z`,
-        fill: 'var(--flow-ground-shade)', opacity: 0.65,
-    }));
-    return g;
-}
-
-function buildHouseIcon(cx, cy, {withSolar} = {}) {
-    const w = 64, d = 46, wallH = 42, roofRise = 26;
-    const origin = isoOrigin(cx, cy, w, d, 1);
-    const p = isoProjector(origin, 1);
-    const slopeZ = y => wallH + (y / (d / 2)) * roofRise;
-    const g = svgEl('g', {class: 'energyFlowHouse'});
-
-    g.appendChild(buildGroundShadow(cx, cy + 6, w * 0.85, 12));
-
-    // Wand: nur die zwei sichtbaren Seitenflaechen - keine Deckflaeche, die deckt das Dach ohnehin ab
-    const wallLeft = [p(0, d, 0), p(w, d, 0), p(w, d, wallH), p(0, d, wallH)];
-    const wallRight = [p(w, d, 0), p(w, d, wallH), p(w, 0, wallH), p(w, 0, 0)];
-    g.appendChild(svgEl('polygon', {points: isoPointsAttr(wallLeft), fill: 'var(--flow-wall-dark)'}));
-    g.appendChild(svgEl('polygon', {points: isoPointsAttr(wallRight), fill: 'var(--flow-wall)'}));
-
-    // Dach: First laeuft entlang der Breite bei y=d/2; zwei Dachflaechen plus sichtbarer Giebel vorn (y=0)
-    const ridgeZ = wallH + roofRise;
-    const gable = [p(0, 0, wallH), p(0, d / 2, ridgeZ), p(0, d, wallH)];
-    const roofFront = [p(0, 0, wallH), p(w, 0, wallH), p(w, d / 2, ridgeZ), p(0, d / 2, ridgeZ)];
-    const roofBack = [p(0, d, wallH), p(w, d, wallH), p(w, d / 2, ridgeZ), p(0, d / 2, ridgeZ)];
-    g.appendChild(svgEl('polygon', {points: isoPointsAttr(gable), fill: 'var(--flow-wall-dark)'}));
-    g.appendChild(svgEl('polygon', {points: isoPointsAttr(roofBack), fill: 'var(--flow-roof-dark)'}));
-    g.appendChild(svgEl('polygon', {points: isoPointsAttr(roofFront), fill: 'var(--flow-roof-light)'}));
-
-    // Fenster + Tuer auf der rechten Wand (y=0-Flaeche)
-    const win = [p(w * 0.6, 0, wallH * 0.55), p(w * 0.92, 0, wallH * 0.55), p(w * 0.92, 0, wallH * 0.85), p(w * 0.6, 0, wallH * 0.85)];
-    g.appendChild(svgEl('polygon', {points: isoPointsAttr(win), fill: 'var(--flow-window)', stroke: 'var(--flow-wall-dark)', 'stroke-width': 1}));
-    const door = [p(w * 0.12, 0, 0), p(w * 0.34, 0, 0), p(w * 0.34, 0, wallH * 0.62), p(w * 0.12, 0, wallH * 0.62)];
-    g.appendChild(svgEl('polygon', {points: isoPointsAttr(door), fill: 'var(--flow-door)'}));
-
-    if (withSolar) {
-        // Panel-Flaeche auf der helleren (vorderen) Dachschraege, mit Gitterlinien unterteilt
-        const y0 = d * 0.08, y1 = d * 0.42;
-        const panel = [p(w * 0.1, y0, slopeZ(y0)), p(w * 0.9, y0, slopeZ(y0)), p(w * 0.9, y1, slopeZ(y1)), p(w * 0.1, y1, slopeZ(y1))];
-        g.appendChild(svgEl('polygon', {points: isoPointsAttr(panel), fill: 'var(--flow-panel-light)', stroke: 'var(--flow-panel-dark)', 'stroke-width': 1}));
-        for (let i = 1; i < 4; i++) {
-            const x = w * 0.1 + (i / 4) * (w * 0.8);
-            const a = p(x, y0, slopeZ(y0)), b = p(x, y1, slopeZ(y1));
-            g.appendChild(svgEl('line', {x1: a.x, y1: a.y, x2: b.x, y2: b.y, stroke: 'var(--flow-panel-dark)', 'stroke-width': 0.7}));
-        }
-        const midY = (y0 + y1) / 2;
-        const midA = p(w * 0.1, midY, slopeZ(midY)), midB = p(w * 0.9, midY, slopeZ(midY));
-        g.appendChild(svgEl('line', {x1: midA.x, y1: midA.y, x2: midB.x, y2: midB.y, stroke: 'var(--flow-panel-dark)', 'stroke-width': 0.7}));
-    }
-    return g;
-}
-
-function buildPylonIcon(cx, cy) {
-    const g = svgEl('g');
-    g.appendChild(buildGroundShadow(cx, cy + 42, 26, 7));
-    const lines = svgEl('g', {stroke: 'var(--flow-metal-dark)', 'stroke-width': 2.2, fill: 'none', 'stroke-linecap': 'round', 'stroke-linejoin': 'round'});
-    lines.appendChild(svgEl('path', {d: `M ${cx - 20},${cy + 40} L ${cx - 4},${cy - 42} L ${cx + 4},${cy - 42} L ${cx + 20},${cy + 40}`}));
-    for (const [yTop, yBot] of [[-42, -18], [-18, 8], [8, 34]]) {
-        const wTop = 4 + (yTop + 42) / 82 * 16, wBot = 4 + (yBot + 42) / 82 * 16;
-        lines.appendChild(svgEl('path', {d: `M ${cx - wTop},${cy + yTop} L ${cx + wBot},${cy + yBot} M ${cx + wTop},${cy + yTop} L ${cx - wBot},${cy + yBot}`}));
-    }
-    lines.appendChild(svgEl('line', {x1: cx - 26, y1: cy - 44, x2: cx + 26, y2: cy - 44}));
-    g.appendChild(lines);
-    for (const dx of [-26, 0, 26]) {
-        g.appendChild(svgEl('circle', {cx: cx + dx, cy: cy - 44, r: 2.4, fill: 'var(--flow-metal-light)', stroke: 'var(--flow-metal-dark)', 'stroke-width': 1}));
-    }
-    return g;
-}
-
-function buildBatteryIcon(cx, cy, socPercent) {
-    const w = 28, d = 20, h = 46;
-    const origin = isoOrigin(cx, cy, w, d, 1);
-    const p = isoProjector(origin, 1);
-    const g = svgEl('g');
-    g.appendChild(buildGroundShadow(cx, cy + 4, w, 8));
-    g.appendChild(buildIsoBoxFaces(p, w, d, h, {top: 'var(--flow-metal-light)', right: 'var(--flow-metal-mid)', left: 'var(--flow-metal-dark)'}));
-    // Fuellstand-Anzeige als Flaechen-Decal auf der rechten (helleren) Seite
-    const soc = Math.max(0, Math.min(100, socPercent ?? 0));
-    const fillColor = soc < 20 ? 'var(--color-error)' : 'var(--color-accent)';
-    const gaugeTop = h * 0.82, gaugeBottom = h * 0.12, gaugeH = (gaugeTop - gaugeBottom) * (soc / 100);
-    const gauge = [
-        p(w, d * 0.28, gaugeBottom), p(w, d * 0.28, gaugeBottom + gaugeH),
-        p(w, d * 0.72, gaugeBottom + gaugeH), p(w, d * 0.72, gaugeBottom),
-    ];
-    g.appendChild(svgEl('polygon', {points: isoPointsAttr(gauge), fill: fillColor}));
-    const led = p(w, d * 0.5, h * 0.92);
-    g.appendChild(svgEl('circle', {cx: led.x, cy: led.y, r: 2.4, fill: fillColor}));
-    return g;
-}
-
-function buildHeatpumpIcon(cx, cy, on) {
-    const w = 44, d = 26, h = 32;
-    const origin = isoOrigin(cx, cy, w, d, 1);
-    const p = isoProjector(origin, 1);
-    const g = svgEl('g');
-    g.appendChild(buildGroundShadow(cx, cy + 5, w * 0.8, 7));
-    g.appendChild(buildIsoBoxFaces(p, w, d, h, {top: 'var(--flow-metal-light)', right: 'var(--flow-metal-mid)', left: 'var(--flow-metal-dark)'}));
-    // Lueftungslamellen auf der linken (hinteren) Flaeche
-    for (let i = 1; i < 5; i++) {
-        const y = d * i / 5;
-        const a = p(0, y, h * 0.25), b = p(0, y, h * 0.8);
-        g.appendChild(svgEl('line', {x1: a.x, y1: a.y, x2: b.x, y2: b.y, stroke: 'var(--flow-metal-dark)', 'stroke-width': 1, opacity: 0.5}));
-    }
-    // Ventilatorgitter auf der rechten Flaeche - als Ellipse (ein Kreis auf dieser Iso-Flaeche
-    // erscheint gestaucht), mit rotierender Fluegel-Gruppe
-    const fanCenter = p(w, d * 0.5, h * 0.58);
-    const fanEdge = p(w, d * 0.5, h * 0.95);
-    const fanR = Math.hypot(fanEdge.x - fanCenter.x, fanEdge.y - fanCenter.y);
-    g.appendChild(svgEl('ellipse', {cx: fanCenter.x, cy: fanCenter.y, rx: fanR, ry: fanR * 0.72, fill: 'var(--color-bg)', stroke: 'var(--flow-metal-dark)', 'stroke-width': 1.2}));
-    const fan = svgEl('g', {class: 'energyFlowFan' + (on ? ' spinning' : '')});
-    for (const angle of [0, 72, 144, 216, 288]) {
-        fan.appendChild(svgEl('ellipse', {
-            cx: fanCenter.x, cy: fanCenter.y, rx: fanR * 0.72, ry: 2.2, fill: on ? 'var(--color-accent)' : 'var(--color-text-secondary)',
-            transform: `rotate(${angle} ${fanCenter.x} ${fanCenter.y})`,
-        }));
-    }
-    fan.appendChild(svgEl('circle', {cx: fanCenter.x, cy: fanCenter.y, r: 2.3, fill: 'var(--flow-metal-dark)'}));
-    g.appendChild(fan);
-    return g;
-}
-
-function buildCarIcon(cx, cy, faded) {
-    const bodyW = 56, bodyD = 26, bodyH = 14;
-    const origin = isoOrigin(cx, cy, bodyW, bodyD, 1);
-    const p = isoProjector(origin, 1);
-    const g = svgEl('g', {opacity: faded ? 0.35 : 1});
-    g.appendChild(buildGroundShadow(cx, cy + 11, bodyW * 0.62, 7));
-    g.appendChild(buildIsoBoxFacesAt(p, 0, 0, 0, bodyW, bodyD, bodyH, {top: 'var(--flow-car-top)', right: 'var(--color-error)', left: 'var(--flow-car-dark)'}));
-    // Kabine: kleinere Box obendrauf, mittig auf der Karosserie
-    const cabinW = 30, cabinD = bodyD, cabinH = 12, cabinX0 = (bodyW - cabinW) / 2;
-    g.appendChild(buildIsoBoxFacesAt(p, cabinX0, 0, bodyH, cabinW, cabinD, cabinH, {top: 'var(--flow-car-top)', right: 'var(--flow-window)', left: 'var(--flow-wall-dark)'}));
-    // Raeder als Ellipsen (ein Kreis erscheint auf dieser Flaeche gestaucht) auf der rechten Karosserieseite
-    for (const x of [bodyW * 0.18, bodyW * 0.82]) {
-        const wc = p(x, 0, 0);
-        g.appendChild(svgEl('ellipse', {cx: wc.x, cy: wc.y, rx: 7, ry: 5, fill: 'var(--color-text)'}));
-        g.appendChild(svgEl('ellipse', {cx: wc.x, cy: wc.y, rx: 3, ry: 2, fill: 'var(--flow-metal-light)'}));
-    }
-    return g;
-}
-
-// Ladesaeule neben dem Auto (nur wenn eine Wallbox als Geraet ausgewaehlt ist) - separat vom
-// Auto selbst, damit die Zuordnung "Auto steht/laedt" vs. "Wallbox vorhanden" auch optisch klar bleibt.
-function buildWallboxIcon(cx, cy, active) {
-    const w = 12, d = 10, h = 40;
-    const origin = isoOrigin(cx, cy, w, d, 1);
-    const p = isoProjector(origin, 1);
-    const color = active ? 'var(--color-accent)' : 'var(--flow-metal-dark)';
-    const g = svgEl('g');
-    g.appendChild(buildGroundShadow(cx, cy + 3, 10, 3));
-    g.appendChild(buildIsoBoxFaces(p, w, d, h, {top: 'var(--flow-metal-light)', right: 'var(--flow-metal-mid)', left: 'var(--flow-metal-dark)'}));
-    const screen = [p(w, d * 0.2, h * 0.62), p(w, d * 0.2, h * 0.8), p(w, d * 0.8, h * 0.8), p(w, d * 0.8, h * 0.62)];
-    g.appendChild(svgEl('polygon', {points: isoPointsAttr(screen), fill: active ? 'var(--color-accent)' : 'var(--color-text-secondary)'}));
-    const led = p(w, d * 0.5, h * 0.45);
-    g.appendChild(svgEl('circle', {cx: led.x, cy: led.y, r: 1.8, fill: color}));
-    return g;
+// Welche Hausgrafik gezeigt wird, haengt nur davon ab, ob PV bzw. Batterie konfiguriert sind (die
+// beiden sind direkt im Bild eingezeichnet) - Auto/Waermepumpe/Sonstiges erscheinen nie im
+// Hausbild selbst, sondern als eigene Bilder/Icons daneben.
+function houseImageFor(data) {
+    const pv = !!(data.pv && data.pv.configured);
+    const battery = !!(data.battery && data.battery.configured);
+    if (pv && battery) return {href: 'assets/house-pv-battery.jpg', w: 1296, h: 810};
+    if (pv) return {href: 'assets/house-pv.jpg', w: 962, h: 598};
+    return {href: 'assets/house-none.png', w: 962, h: 598};
 }
 
 function buildPlugIcon(cx, cy, on) {
-    const color = on ? 'var(--color-accent)' : 'var(--color-text-secondary)';
+    // Feste (nicht theme-abhaengige) Farbe fuer den Aus-Zustand - das Widget bleibt immer hell
+    // (siehe .energyFlowWidget), var(--color-text-secondary) waere im Dark Mode zu blass dafuer.
+    const color = on ? 'var(--color-accent)' : '#8b95ab';
     const g = svgEl('g', {opacity: on ? 1 : 0.45});
     g.appendChild(svgEl('rect', {x: cx - 11, y: cy - 12, width: 22, height: 20, rx: 6, fill: 'var(--flow-metal-light)', stroke: color, 'stroke-width': 2}));
     for (const dx of [-4, 4]) {
@@ -3208,58 +3008,60 @@ function buildEnergyFlowWidget(data) {
     const wrapper = document.createElement('div');
     wrapper.className = 'energyFlowWidget dashboardChart';
     const svg = svgEl('svg', {viewBox: '0 0 920 480'});
-    svg.appendChild(buildEnergyFlowDefs());
-    svg.appendChild(buildSceneBackground(920, 480));
 
-    const houseCx = 300, houseCy = 230;
+    // Haus: Groesse/Bildausschnitt kommt direkt vom Bild (siehe houseImageFor) - PV und Batterie
+    // sind darin bereits eingezeichnet, nur Grid/PV/Haushalt bekommen deshalb reine Text-Label
+    // statt einer eigenen Animations-Linie (der "Rohrverlauf" ist im Bild schon sichtbar).
+    const house = houseImageFor(data);
+    const houseW = 380, houseH = houseW * (house.h / house.w);
+    const houseX = 40, houseY = 30;
+    const houseCx = houseX + houseW / 2, houseCy = houseY + houseH / 2;
+    svg.appendChild(buildFlowImage(house.href, houseCx, houseCy, house.w, house.h, houseW));
+
     svg.appendChild(renderSkyIcon(850, 45));
 
     if (data.grid && data.grid.configured) {
-        const line = buildFlowLine(132, houseCy, 246, houseCy, data.grid.kw, {reversed: (data.grid.kw || 0) < 0});
-        if (line) svg.appendChild(line);
-        svg.appendChild(buildPylonIcon(90, houseCy));
-        const priceColor = data.grid.priceLevel === 'hoch' ? 'var(--color-error)' : data.grid.priceLevel === 'niedrig' ? 'var(--color-accent)' : 'var(--color-text-secondary)';
+        // Feste Farben statt der theme-abhaengigen --color-error/--color-text-secondary - das
+        // Widget bleibt immer hell (siehe .energyFlowWidget), Dark-Mode-Toene waeren hier blass.
+        const priceColor = data.grid.priceLevel === 'hoch' ? '#e74c3c' : data.grid.priceLevel === 'niedrig' ? 'var(--color-accent)' : '#5b6b8c';
         const priceText = data.grid.priceCent !== null ? `${data.grid.priceCent.toLocaleString('de-DE')} Cent` : '';
-        const label = buildEnergyFlowLabel(90, 300, [formatKwValue(data.grid.kw)], {anchor: 'middle'});
-        svg.appendChild(label);
+        svg.appendChild(buildEnergyFlowLabel(houseX + 20, houseY + 20, [formatKwValue(data.grid.kw)]));
         if (priceText) {
-            const priceLabel = svgEl('text', {x: 90, y: 318, 'text-anchor': 'middle', class: 'energyFlowLabel', fill: priceColor}, [document.createTextNode(priceText)]);
-            svg.appendChild(priceLabel);
+            svg.appendChild(svgEl('text', {x: houseX + 20, y: houseY + 36, class: 'energyFlowLabel', fill: priceColor}, [document.createTextNode(priceText)]));
         }
     }
-
-    svg.appendChild(buildHouseIcon(houseCx, houseCy, {withSolar: data.pv && data.pv.configured}));
     if (data.pv && data.pv.configured) {
-        const line = buildFlowLine(houseCx, 148, houseCx, 197, data.pv.kw);
-        if (line) svg.appendChild(line);
-        svg.appendChild(buildEnergyFlowLabel(houseCx, 128, [formatKwValue(data.pv.kw)], {anchor: 'middle'}));
+        svg.appendChild(buildEnergyFlowLabel(houseCx + 20, houseY + 30, [formatKwValue(data.pv.kw)]));
     }
     if (data.household && data.household.configured) {
-        svg.appendChild(buildEnergyFlowLabel(houseCx + 66, houseCy + 4, [formatKwValue(data.household.kw)]));
+        svg.appendChild(buildEnergyFlowLabel(houseX + houseW - 90, houseY + houseH - 30, [formatKwValue(data.household.kw)]));
     }
 
     if (data.battery && data.battery.configured) {
-        const batteryCy = 400;
-        const line = buildFlowLine(houseCx, houseCy + 33, houseCx, batteryCy - 40, data.battery.kw, {reversed: (data.battery.kw || 0) < 0});
+        const batteryImgW = 60, batteryImgH = batteryImgW / 0.535;
+        const batteryCx = houseX + houseW + 20, batteryCy = houseY + houseH - batteryImgH / 2;
+        const line = buildFlowLine(houseX + houseW - 40, houseY + houseH, batteryCx, batteryCy - batteryImgH / 2 - 6, data.battery.kw, {reversed: (data.battery.kw || 0) < 0});
         if (line) svg.appendChild(line);
-        svg.appendChild(buildBatteryIcon(houseCx, batteryCy, data.battery.soc));
+        svg.appendChild(buildFlowImage(batteryImageFor(data.battery.soc), batteryCx, batteryCy, 240, 448, batteryImgW));
         const modeLine = data.battery.mode ? [`${Math.round(data.battery.soc ?? 0)} %`, data.battery.mode] : [`${Math.round(data.battery.soc ?? 0)} %`];
-        svg.appendChild(buildEnergyFlowLabel(houseCx + 34, batteryCy - 4, [formatKwValue(data.battery.kw), ...modeLine], {anchor: 'start'}));
+        svg.appendChild(buildEnergyFlowLabel(batteryCx + batteryImgW / 2 + 8, batteryCy - 10, [formatKwValue(data.battery.kw), ...modeLine]));
     }
 
     const columnX = 700;
-    const houseRightX = houseCx + 62;
+    const houseRightX = houseX + houseW;
     // Gemeinsamer Bus "Haus -> Verbraucher": alle vier rechten Verbraucher gehen vom selben
     // Hausaustrittspunkt ab und teilen sich diese senkrechte Spalte, bevor sie zur jeweiligen
     // Reihe abzweigen - so laeuft z.B. die Waermepumpen-Leitung nicht quer durchs Wallbox-Icon.
-    const busX = 600;
+    const busX = 630;
     const consumerAnchorX = columnX - 40;
 
     if (data.heatpump && data.heatpump.configured) {
         const rowY = 100;
         const line = buildFlowLineFromPath(buildBusFlowPath(houseRightX, houseCy, busX, rowY, consumerAnchorX), data.heatpump.kw);
         if (line) svg.appendChild(line);
-        svg.appendChild(buildHeatpumpIcon(columnX, rowY, data.heatpump.on));
+        const hp = buildFlowImage('assets/heatpump.jpg', columnX, rowY, 499, 492, 80);
+        if (data.heatpump.on) hp.setAttribute('class', 'energyFlowPulse');
+        svg.appendChild(hp);
         const statusLines = [
             data.heatpump.on === null ? 'Wärmepumpe' : (data.heatpump.on ? 'An' : 'Aus'),
             data.heatpump.targetTempC !== null ? `Soll: ${data.heatpump.targetTempC.toLocaleString('de-DE')} °C` : null,
@@ -3269,15 +3071,13 @@ function buildEnergyFlowWidget(data) {
                 ? `Heizung: ${data.heatpump.heatingOn ? 'An' : 'Aus'}` + (data.heatpump.supplyTempC !== null ? ` (${data.heatpump.supplyTempC.toLocaleString('de-DE')} °C)` : '')
                 : null,
         ].filter(Boolean);
-        svg.appendChild(buildEnergyFlowLabel(columnX + 36, rowY - 14, statusLines));
+        svg.appendChild(buildEnergyFlowLabel(columnX + 46, rowY - 24, statusLines));
     }
 
     if (data.car && data.car.configured) {
         const rowY = 220;
         const isAway = data.car.state === 'away';
         const isCharging = data.car.state === 'charging';
-        const showWallbox = !!data.car.wallboxConfigured;
-        const carCx = showWallbox ? columnX + 22 : columnX;
         if (isCharging) {
             // laedt: animierte Linie mit der tatsaechlichen Ladeleistung (Platzhalter 0.5 kW nur,
             // falls die Wallbox-Ladeleistung selbst nicht zugeordnet/lesbar ist)
@@ -3287,14 +3087,17 @@ function buildEnergyFlowWidget(data) {
             // eingesteckt, aber laedt gerade nicht: ruhige, unbewegte Verbindungslinie statt der animierten Flusslinie
             svg.appendChild(svgEl('path', {d: buildBusFlowPath(houseRightX, houseCy, busX, rowY, consumerAnchorX), stroke: 'var(--color-border)', 'stroke-width': 2, fill: 'none'}));
         }
-        if (showWallbox) svg.appendChild(buildWallboxIcon(columnX - 40, rowY, isCharging));
-        svg.appendChild(buildCarIcon(carCx, rowY, isAway));
+        // Ein Bild pro Zustand (das "verbunden"-Bild zeigt Auto+Wallbox bereits zusammen) statt
+        // zweier separater Icons - siehe ev-connected.jpg/ev-away.jpg
+        const carImg = isAway ? {href: 'assets/ev-away.jpg', w: 356, h: 239} : {href: 'assets/ev-connected.jpg', w: 464, h: 229};
+        const carTargetW = 130;
+        svg.appendChild(buildFlowImage(carImg.href, columnX, rowY, carImg.w, carImg.h, carTargetW));
         const carLines = [];
         if (data.car.soc !== null) carLines.push(`${Math.round(data.car.soc)} %` + (data.car.rangeKm !== null ? ` (${data.car.rangeKm} km)` : ''));
         if (data.car.state === 'away') carLines.push('abwesend');
         else if (data.car.state === 'charging') carLines.push('lädt');
         else if (data.car.state === 'connected') carLines.push('eingesteckt');
-        svg.appendChild(buildEnergyFlowLabel(carCx + 40, rowY - 4, carLines));
+        svg.appendChild(buildEnergyFlowLabel(columnX + carTargetW / 2 + 10, rowY - 4, carLines));
     }
 
     if (data.sonstigerVerbraucher && data.sonstigerVerbraucher.configured) {

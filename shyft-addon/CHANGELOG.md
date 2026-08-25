@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.0.44.0
+
+* Energiefluss-Widget: eigene Illustrationen von shyft-power.com statt selbst gezeichneter Icons - Haus (3 Varianten je nach PV/Batterie), Batterie (5 Ladestufen), Wärmepumpe und Auto/Wallbox sind jetzt echte Bilder. Der farbige Himmel/Rasen-Hintergrund ist wieder weg, das Widget bleibt dafür bewusst immer hell (unabhängig vom Dark Mode der restlichen Seite), da die Bilder keinen transparenten Hintergrund haben. Die animierten Stromfluss-Linien sind unverändert erhalten geblieben
+
 ## 0.0.43.0
 
 * Energiefluss-Widget: Haus, Batterie, Wärmepumpe, Auto und Wallbox sind jetzt echte isometrische 3D-Objekte (Standard-Isometrie-Projektion mit heller/mittlerer/dunkler Flächenschattierung je Objekt) statt flacher 2D-Formen - Strommast, Stecker-Symbol und Blitz-Symbol bleiben bewusst flache Icons (wie in den meisten isometrischen Dashboards üblich)
