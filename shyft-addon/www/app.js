@@ -3133,7 +3133,7 @@ function buildEnergyFlowWidget(data) {
     // Werte per Pixelanalyse des Originalbilds ermittelt (nicht mehr geschaetzt): Hauswand beginnt
     // bei ca. 43,6% Bildbreite, Dachfirst bei ca. 37% Bildhoehe - 0.40/0.28 lassen Mast, Freileitung
     // und Baum vollstaendig verschwinden, ohne das Haus selbst anzuschneiden (mit Sicherheitsabstand).
-    const houseCropLeftFraction = 0.45, houseCropTopFraction = 0.22;
+    const houseCropLeftFraction = 0.40, houseCropTopFraction = 0.28;
     const houseVisibleW = 230, houseX = 150, houseY = 60;
     const cropped = buildCroppedHouseImage(house.href, house.w, house.h, houseCropLeftFraction, houseCropTopFraction, houseX, houseY, houseVisibleW);
     const houseH = cropped.height;
@@ -3142,7 +3142,7 @@ function buildEnergyFlowWidget(data) {
 
     // In der freien Luecke zwischen Haus und Verbraucher-Spalte statt am rechten Rand (dort war es
     // zu nah an den Verbraucher-Labels und wirkte "verrutscht").
-    svg.appendChild(renderSkyIcon(870, 45));
+    svg.appendChild(renderSkyIcon(520, 42));
 
     if (data.grid && data.grid.configured) {
         const pylonCx = 60, pylonCy = houseCy;

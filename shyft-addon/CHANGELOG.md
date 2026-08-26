@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.0.44.6
+
+* Energiefluss-Widget: Haus-Bildausschnitt per Pixelanalyse des Originalbilds neu vermessen (links 0,45→0,40, oben 0,22→0,28) - der vorherige Ausschnitt schnitt bereits in die Hauswand hinein ("Haus abgeschnitten"); Sonne/Mond-Symbol von ganz rechts in die freie Lücke zwischen Haus und Verbraucher-Spalte verschoben (520/42 statt 870/45)
+
 ## 0.0.44.5
 
 * Die Wallbox-Obergrenze (aus "Max. Anzahl an Phasen"/"Max. Stromstärke pro Phase") sitzt jetzt direkt in `execute_car_charge_start` statt nur im lokalen PV-Überschussladen-Regelkreis - damit gilt sie auch für shyft-powers eigene Cloud-"Auto laden"-Aktionen, die dieselbe Funktion direkt aufrufen und bisher nicht gedeckelt waren (live beobachtet: 32A angefordert, weit über dem Stromkreislimit)
