@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.0.44.4
+
+* PV-Überschussladen-Regelkreis: jede Session ist jetzt auf die volle Stunde befristet (endet spätestens zur nächsten vollen Stunde), statt unbegrenzt weiterzulaufen. Läuft die Frist ab, wird die Session sauber beendet; eine bereits abgelaufene Session wird nie wieder aktiv genommen - stattdessen wird bei weiterhin vorliegendem Überschuss eine genuin neue Session eröffnet. Solange eine Session noch läuft, wird weiterhin einfach ihr Zielwert aktualisiert (kein Stop/Start-Zyklus bei jedem Tick)
+
 ## 0.0.44.3
 
 * PV-Überschussladen-Regelkreis: neue Konfigurationsfelder "Max. Anzahl an Phasen" (1/3, vorbelegt 3) und "Max. Stromstärke (pro Phase)" (vorbelegt 16A) unter Wallbox begrenzen jetzt den maximal angeforderten Ladewert - vorher konnte der Regelkreis bei anhaltender Einspeisung unbegrenzt weiter aufaddieren und Werte weit jenseits dessen anfordern, was die Wallbox überhaupt zulässt (beobachtet: 180A/41kW, durchgehend von Easee mit 400 Bad Request abgelehnt). Außerdem wird der Zielwert nicht mehr aktualisiert, wenn der Wallbox-Befehl fehlschlägt - vorher baute jeder fehlgeschlagene Versuch auf dem vorherigen (ungültigen) Wert weiter auf, statt zurückzufallen

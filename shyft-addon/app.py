@@ -1445,6 +1445,13 @@ def _find_active_pv_surplus_session(actions):
     return next((a for a in actions if a.get("active")), None)
 
 
+def _next_full_hour_ms(now_ms):
+    "Millisekunden-Timestamp der naechsten vollen Stunde nach now_ms - die geplante Endzeit einer neu eroeffneten PV-Ueberschussladen-Session (siehe planned_end_ms)."
+    now = datetime.fromtimestamp(now_ms / 1000, tz=timezone.utc)
+    next_hour = now.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
+    return next_hour.timestamp() * 1000
+
+
 def _append_pv_surplus_log(session, target_kw, note=None):
     "Vermerkt Ladeleistung und Uhrzeit im Log-Feld der Aktion, wie shyft-power es fuer seine eigenen Aktionen auch tut."
     timestamp = datetime.now().strftime("%d.%m. %H:%M Uhr")
@@ -1466,7 +1473,7 @@ def _pv_surplus_session_to_action(session):
         "Target Value": target_kw,
         "Subtitle": f"PV-Überschussladen (Fallback, {target_kw:.1f} kW)",
         "Date Start": session.get("start_ms"),
-        "Date End": session.get("end_ms") if not is_active else int(time.time() * 1000),
+        "Date End": session.get("end_ms") if not is_active else session.get("planned_end_ms"),
         "Savings": None,
         "Log": "\n".join(session.get("log", [])),
     }
@@ -1512,6 +1519,16 @@ def _run_pv_surplus_charging_tick_impl():
     if not toggle_enabled:
         if session:
             stop_pv_surplus_charging(actions, session, config, reason="Auto laden deaktiviert")
+        return
+
+    # Jede Session ist auf die volle Stunde befristet (planned_end_ms, siehe Session-Eroeffnung
+    # unten) - laeuft diese Frist ab, wird die Session explizit beendet statt implizit
+    # weiterzulaufen. Der naechste Tick eroeffnet bei Bedarf eine GENUIN NEUE Session (siehe unten,
+    # "else"-Zweig) - eine abgelaufene Session wird nie wieder aktiv genommen, sondern bleibt als
+    # beendeter Eintrag stehen.
+    now_ms = time.time() * 1000
+    if session and session.get("planned_end_ms") is not None and now_ms >= session["planned_end_ms"]:
+        stop_pv_surplus_charging(actions, session, config, reason="Stunde abgelaufen")
         return
 
     car_ready = is_car_ready_to_charge(config)
@@ -1580,7 +1597,7 @@ def _run_pv_surplus_charging_tick_impl():
             return
 
         new_session = {"active": True, "target_kw": target_kw, "has_battery": has_battery,
-                        "start_ms": int(time.time() * 1000), "log": []}
+                        "start_ms": int(now_ms), "planned_end_ms": _next_full_hour_ms(now_ms), "log": []}
         _append_pv_surplus_log(new_session, target_kw, note="gestartet")
         actions.append(new_session)
         _write_pv_surplus_actions(actions)
