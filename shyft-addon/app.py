@@ -594,8 +594,8 @@ CAR_DRIVING_FRACTION_DEFAULT = 0.15
 CAR_CONSUMPTION_DEFAULT_KWH = 0.0
 
 
-def compute_car_presence_forecast():
-    """Builds a 48h-ahead, hourly Anwesenheits- UND Fahrverhalten-/Verbrauchsprognose aus
+def compute_car_presence_forecast(hours=48):
+    """Builds an hours-ahead (default 48h), hourly Anwesenheits- UND Fahrverhalten-/Verbrauchsprognose aus
     CAR_PRESENCE_LOG_PATH. Der eingesteckt/abwesend-Teil ist eine time-inhomogene Markov-Kette
     (Wochentag, Stunde, aktueller Zustand), forward-simuliert ab dem live beobachteten Zustand -
     unverändert gegenüber der ursprünglichen Anwesenheitsprognose. Zusätzlich wird jede als
@@ -708,7 +708,7 @@ def compute_car_presence_forecast():
             print("[Shyft] Anwesenheitsprognose: Akkustand konnte nicht gelesen werden:", repr(e))
 
     start = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
-    labels = [(start + timedelta(hours=i)).isoformat() for i in range(48)]
+    labels = [(start + timedelta(hours=i)).isoformat() for i in range(hours)]
     hours_away_now = compute_hours_away(by_hour, current_connected, start)
 
     probabilities = []
@@ -747,6 +747,65 @@ def compute_car_presence_forecast():
         low_data_basis[i] = low_data_basis[i] or fb_driving or fb_consumption
 
     return labels, probabilities, standing_probabilities, driving_probabilities, consumption_kwh_forecast, low_data_basis
+
+
+# Away-probability (1 - P(connected)) from which an hour counts as "car not at the wallbox" for
+# ev_usage_h - see build_ev_optimizer_fields.
+EV_AWAY_THRESHOLD = 0.5
+
+
+def build_ev_optimizer_fields(config, optimizer_period=48):
+    """Builds the ev_usage_h/d_ev_kwh fields shyft's Java optimizer expects (see
+    ExternalOptimizerInput.evUsageH/dEvKwh and EVDemandList in the shyft repo), sourced from our
+    own compute_car_presence_forecast() instead of a Bubble TimeScheduleEntity.
+
+    Returns {} if no EV/wallbox integration is configured (matches configured("auto") in
+    compute_energy_flow_data) - Julia's isempty(ev_usage_h) check then correctly excludes the EV
+    from optimization, same as before.
+
+    Otherwise returns:
+      - "ev_usage_h": compact ";"-joined list of 1-based hour indices where the car is more
+        likely away than connected (>= EV_AWAY_THRESHOLD), mirroring EVDemandList.getValue(lineNumber)'s
+        packed-index format - NOT a per-hour-aligned vector.
+      - "d_ev_kwh": ";"-joined per-hour expected consumption (kWh), one value per hour, dense
+        (every hour has a value, mostly close to zero) - mirrors EVDemandList.getValue(datetime).
+      - "baseTime": ISO timestamp of the first hour (hour 1), so Java can re-align if processing
+        slips into the next full hour before this reaches the optimizer.
+
+    optimizer_period is the site's (variable) optimization horizon in hours (see "Optimization
+    Periods Site" in staticConfig, default 48). We compute one extra hour (optimizer_period + 1)
+    as a buffer for that same clock-drift reason.
+
+    If nothing crosses EV_AWAY_THRESHOLD within optimizer_period, Julia would otherwise treat this
+    as "no EV" (isempty(ev_usage_h)) and disable charging entirely even though a car IS configured
+    - see the isempty(ev_usage_h) bypass in run_SHEMS.jl. To avoid that false negative, we force in
+    the single most-likely-away hour (within optimizer_period, not the buffer hour) when the
+    threshold catches nothing.
+    """
+    has_ev = bool(config.get("integrationMappings", {}).get("auto"))
+    if not has_ev:
+        return {}
+
+    hours = optimizer_period + 1
+    labels, probabilities, _, _, consumption_kwh_forecast, _ = compute_car_presence_forecast(hours=hours)
+
+    away_probabilities = [1 - p for p in probabilities]
+    usage_hours_zero_based = [i for i in range(hours) if away_probabilities[i] >= EV_AWAY_THRESHOLD]
+
+    # Fallback only looks within optimizer_period (not the buffer hour) - see docstring.
+    if not any(i < optimizer_period for i in usage_hours_zero_based):
+        most_likely_away = max(range(optimizer_period), key=lambda i: away_probabilities[i])
+        usage_hours_zero_based.append(most_likely_away)
+        usage_hours_zero_based.sort()
+
+    ev_usage_h = ";".join(str(i + 1) for i in usage_hours_zero_based)
+    d_ev_kwh = ";".join(f"{v:.3f}" for v in consumption_kwh_forecast)
+
+    return {
+        "ev_usage_h": ev_usage_h,
+        "d_ev_kwh": d_ev_kwh,
+        "baseTime": labels[0],
+    }
 
 
 @app.route("/dashboard/car-presence-forecast", methods=["GET"])
