@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.0.44.7
+
+* Vorarbeit für den Bubble-JSON-Sync (`addon_sensor_data_JSON`): `compute_car_presence_forecast` nimmt jetzt einen `hours`-Parameter (Dashboard-Route bleibt bei 48h); neue `build_ev_optimizer_fields` leitet daraus `ev_usage_h`/`d_ev_kwh` für den Julia-Optimizer ab (leer, wenn kein EV/Wallbox konfiguriert ist, sonst pro Stunde ein Verbrauchswert plus kompakte Liste der Abwesenheitsstunden - mit Fallback, falls die Prognose innerhalb der optimizer_period nie über die Weg-Wahrscheinlichkeits-Schwelle kommt, damit shyft nicht fälschlich "kein EV" annimmt). Noch nicht an einen Endpunkt/Trigger angebunden.
+
 ## 0.0.44.6
 
 * Energiefluss-Widget: Haus-Bildausschnitt per Pixelanalyse des Originalbilds neu vermessen (links 0,45→0,40, oben 0,22→0,28) - der vorherige Ausschnitt schnitt bereits in die Hauswand hinein ("Haus abgeschnitten"); Sonne/Mond-Symbol von ganz rechts in die freie Lücke zwischen Haus und Verbraucher-Spalte verschoben (520/42 statt 870/45)
