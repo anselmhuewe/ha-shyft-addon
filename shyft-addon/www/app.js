@@ -508,6 +508,8 @@ async function saveConfigurationNow() {
         "wallboxConnectionStatusMapping": configData["wallboxConnectionStatusMapping"] || {},
         "carBatteryCapacityKwh": configData["carBatteryCapacityKwh"] ?? null,
         "carConsumptionKwhPer100km": configData["carConsumptionKwhPer100km"] ?? null,
+        "wallboxMaxPhases": configData["wallboxMaxPhases"] ?? 3,
+        "wallboxMaxCurrentAmps": configData["wallboxMaxCurrentAmps"] ?? 16,
         "batteryFlowSignOverride": configData["batteryFlowSignOverride"] ?? null
     };
     const response = await putJson(configUri, toBeWritten);
@@ -1038,6 +1040,8 @@ function renderSectionBody(bodyDiv, section, entryIds) {
         bodyDiv.appendChild(buildMappingTable(section.sensors, configData["sensorMappings"] || {}, helpinformation, VALUE_POSTFIX, key => sensorDatalistIds[key], true));
 
         if (section.key === 'wallbox') {
+            bodyDiv.appendChild(buildWallboxMaxPhasesField());
+            bodyDiv.appendChild(buildWallboxMaxCurrentField());
             bodyDiv.appendChild(buildWallboxConnectionStatusMapping());
         }
         if (section.key === 'batterie') {
@@ -1172,7 +1176,7 @@ function buildWallboxConnectionStatusMapping() {
 
 // Reine Konfigurationszahl (keine Entity-Zuordnung), gleiches Muster fuer mehrere Felder unter
 // "Auto" (Akkukapazitaet, Verbrauch/100km) - siehe buildCarBatteryCapacityField/buildCarConsumptionField.
-function buildConfigNumberField({label, tooltip, id, configKey, placeholder, step = '0.1'}) {
+function buildConfigNumberField({label, tooltip, id, configKey, placeholder, step = '0.1', defaultValue = null}) {
     const wrapper = document.createElement('div');
     const table = document.createElement('table');
     const tbody = document.createElement('tbody');
@@ -1188,7 +1192,7 @@ function buildConfigNumberField({label, tooltip, id, configKey, placeholder, ste
     input.min = '0';
     input.step = step;
     input.placeholder = placeholder;
-    input.value = configData[configKey] || '';
+    input.value = configData[configKey] ?? defaultValue ?? '';
     input.addEventListener('change', () => {
         const parsed = parseFloat(input.value);
         configData[configKey] = isNaN(parsed) ? null : parsed;
@@ -1223,6 +1227,54 @@ function buildCarConsumptionField() {
         id: 'car_consumption_kwh_per_100km',
         configKey: 'carConsumptionKwhPer100km',
         placeholder: 'z.B. 18',
+    });
+}
+
+// Begrenzen zusammen mit "Max. Stromstärke (pro Phase)" den maximal an die Wallbox gesendeten
+// Ziel-kW-Wert (z.B. beim PV-Überschussladen-Regelkreis) - ohne diese Obergrenze kann ein
+// Regelkreis einen Wert anfordern, den die Wallbox ohnehin ablehnt (siehe compute_wallbox_max_kw
+// in app.py). 3 ist die häufigste Anschlussart und daher vorbelegt.
+function buildWallboxMaxPhasesField() {
+    const wrapper = document.createElement('div');
+    const table = document.createElement('table');
+    const tbody = document.createElement('tbody');
+    const row = document.createElement('tr');
+    const labelCell = document.createElement('td');
+    labelCell.textContent = 'Max. Anzahl an Phasen';
+    labelCell.appendChild(buildTooltip('Wie viele Phasen deine Wallbox maximal nutzen kann (3 bei einem dreiphasigen Anschluss, 1 bei einer einphasigen Wallbox). Zusammen mit "Max. Stromstärke (pro Phase)" begrenzt shyft-power damit den höchsten Wert, den es z.B. beim PV-Überschussladen jemals anfordert.'));
+    const valueCell = document.createElement('td');
+    const select = document.createElement('select');
+    select.id = 'wallbox_max_phases';
+    select.className = 'sensorInput';
+    for (const value of ['1', '3']) {
+        const option = document.createElement('option');
+        option.value = value;
+        option.textContent = value === '1' ? '1 (einphasig)' : '3 (dreiphasig)';
+        select.appendChild(option);
+    }
+    select.value = String(configData['wallboxMaxPhases'] ?? 3);
+    select.addEventListener('change', () => {
+        configData['wallboxMaxPhases'] = parseInt(select.value, 10);
+        autoSave();
+    });
+    valueCell.appendChild(select);
+    row.appendChild(labelCell);
+    row.appendChild(valueCell);
+    tbody.appendChild(row);
+    table.appendChild(tbody);
+    wrapper.appendChild(table);
+    return wrapper;
+}
+
+function buildWallboxMaxCurrentField() {
+    return buildConfigNumberField({
+        label: 'Max. Stromstärke (pro Phase)',
+        tooltip: 'Die höchste Stromstärke pro Phase, die deine Wallbox (bzw. der Stromkreis, an dem sie hängt) zulässt. Zusammen mit "Max. Anzahl an Phasen" begrenzt shyft-power damit den höchsten Ziel-kW-Wert, den es z.B. beim PV-Überschussladen jemals anfordert - unabhängig davon, wie hoch der berechnete Überschuss gerade ist.',
+        id: 'wallbox_max_current_amps',
+        configKey: 'wallboxMaxCurrentAmps',
+        placeholder: 'z.B. 16',
+        defaultValue: 16,
+        step: '1',
     });
 }
 
@@ -3078,6 +3130,9 @@ function buildEnergyFlowWidget(data) {
     // Ecke lässt sich mit einem Rechteck ausblenden, ohne das Haus selbst anzuschneiden, weil
     // Hausdach/-wand erst bei einer groesseren y-Koordinate (weiter unten) beginnen als die
     // Freileitungen enden.
+    // Werte per Pixelanalyse des Originalbilds ermittelt (nicht mehr geschaetzt): Hauswand beginnt
+    // bei ca. 43,6% Bildbreite, Dachfirst bei ca. 37% Bildhoehe - 0.40/0.28 lassen Mast, Freileitung
+    // und Baum vollstaendig verschwinden, ohne das Haus selbst anzuschneiden (mit Sicherheitsabstand).
     const houseCropLeftFraction = 0.45, houseCropTopFraction = 0.22;
     const houseVisibleW = 230, houseX = 150, houseY = 60;
     const cropped = buildCroppedHouseImage(house.href, house.w, house.h, houseCropLeftFraction, houseCropTopFraction, houseX, houseY, houseVisibleW);
@@ -3085,6 +3140,8 @@ function buildEnergyFlowWidget(data) {
     const houseCx = houseX + houseVisibleW / 2, houseCy = houseY + houseH / 2;
     svg.appendChild(cropped.group);
 
+    // In der freien Luecke zwischen Haus und Verbraucher-Spalte statt am rechten Rand (dort war es
+    // zu nah an den Verbraucher-Labels und wirkte "verrutscht").
     svg.appendChild(renderSkyIcon(870, 45));
 
     if (data.grid && data.grid.configured) {

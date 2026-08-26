@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.0.44.3
+
+* PV-Überschussladen-Regelkreis: neue Konfigurationsfelder "Max. Anzahl an Phasen" (1/3, vorbelegt 3) und "Max. Stromstärke (pro Phase)" (vorbelegt 16A) unter Wallbox begrenzen jetzt den maximal angeforderten Ladewert - vorher konnte der Regelkreis bei anhaltender Einspeisung unbegrenzt weiter aufaddieren und Werte weit jenseits dessen anfordern, was die Wallbox überhaupt zulässt (beobachtet: 180A/41kW, durchgehend von Easee mit 400 Bad Request abgelehnt). Außerdem wird der Zielwert nicht mehr aktualisiert, wenn der Wallbox-Befehl fehlschlägt - vorher baute jeder fehlgeschlagene Versuch auf dem vorherigen (ungültigen) Wert weiter auf, statt zurückzufallen
+
 ## 0.0.44.2
 
 * Energiefluss-Widget: Hausbild-Ausschnitt schneidet jetzt auch von oben zu (nicht nur von links), damit die schräg laufende Freileitung im Bild vollständig verschwindet, nicht nur der Mast-Pfosten; Batterie-Grafik deutlich verkleinert (war viel zu groß); Sonne/Mond-Symbol repariert (der Mond-Sichel-Pfad war durch einen ungültigen Bogenradius unsichtbar); Netz-Werte sitzen jetzt oberhalb statt unterhalb des Mastes, mit mehr Abstand zum Haus; die Wärmepumpen-Leitung animiert nur noch, wenn sie tatsächlich läuft (vorher auch im "Aus"-Zustand, was wie eine falsche Verbindung wirkte)

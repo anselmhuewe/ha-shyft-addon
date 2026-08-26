@@ -1099,6 +1099,22 @@ def execute_car_charge_stop(target_kw=None):
 # ob shyft-power selbst gerade eine "Auto laden"-Aktion laufen hat (siehe run_pv_surplus_charging_tick).
 PV_SURPLUS_MIN_KW = CHARGING_MIN_AMPS * CHARGING_PHASE_VOLTAGE / 1000  # 6A/1-phasig als Untergrenze
 
+WALLBOX_MAX_PHASES_DEFAULT = 3
+WALLBOX_MAX_CURRENT_AMPS_DEFAULT = 16
+
+
+def compute_wallbox_max_kw(config):
+    """Obergrenze fuer jeden an die Wallbox gesendeten Ziel-kW-Wert, aus den vom Nutzer
+    hinterlegten Wallbox-Eckdaten ("Max. Anzahl an Phasen", "Max. Stromstärke (pro Phase)") - ohne
+    dieses Cap kann die additive PV-Ueberschussladen-Rueckfalllogik (siehe
+    _run_pv_surplus_charging_tick_impl) unbegrenzt weiter aufaddieren, solange eingespeist wird,
+    und Werte weit jenseits dessen anfordern, was die Wallbox ueberhaupt zulaesst (beobachtet: ein
+    Regelkreis, der bis 180A/41kW hochlief und von Easee durchgehend mit 400 Bad Request abgelehnt
+    wurde, da das Stromkreislimit dort bei 40A lag)."""
+    phases = config.get("wallboxMaxPhases") or WALLBOX_MAX_PHASES_DEFAULT
+    amps = config.get("wallboxMaxCurrentAmps") or WALLBOX_MAX_CURRENT_AMPS_DEFAULT
+    return phases * amps * CHARGING_PHASE_VOLTAGE / 1000
+
 
 def read_grid_power_kw(config):
     "Aktuelle Netzeinspeisung/-bezug in kW (negativ = Einspeisung) - konvertiert die Home-Assistant-Einheit (z.B. W) wie sync_service es auch fuer shyft-power tut. None, wenn kein Sensor zugeordnet oder nicht lesbar."
@@ -1528,16 +1544,26 @@ def _run_pv_surplus_charging_tick_impl():
             else:
                 decrease = max(target_kw * PV_SURPLUS_NO_BATTERY_DECREASE_RATIO, PV_SURPLUS_NO_BATTERY_MIN_DECREASE_KW)
                 new_target = target_kw - decrease
-        new_target = max(PV_SURPLUS_MIN_KW, new_target)
+        # obere Grenze aus den Wallbox-Eckdaten (siehe compute_wallbox_max_kw) - ohne dieses Cap
+        # kann der additive Zweig oben (grid_kw <= Schwelle: "immer draufaddieren, solange
+        # eingespeist wird") unbegrenzt weiter wachsen, weit ueber das hinaus, was die Wallbox
+        # ueberhaupt zulaesst.
+        new_target = max(PV_SURPLUS_MIN_KW, min(compute_wallbox_max_kw(config), new_target))
 
+        session["has_battery"] = has_battery
         try:
             execute_car_charge_start(new_target)
-            _append_pv_surplus_log(session, new_target)
         except Exception as e:
+            # target_kw bewusst NICHT aktualisieren: ein fehlgeschlagener Call hat die Wallbox nicht
+            # veraendert, der naechste Tick soll also wieder vom zuletzt tatsaechlich angewendeten
+            # Wert aus rechnen statt auf dem verworfenen (und damit weiter aufaddieren, ohne dass
+            # jemals wieder ein gueltiger Wert zustande kommt).
             _append_pv_surplus_log(session, new_target, note=f"Fehler: {e}")
             print("[Shyft] PV-Überschussladen: Update fehlgeschlagen:", repr(e))
+            _write_pv_surplus_actions(actions)
+            return
+        _append_pv_surplus_log(session, new_target)
         session["target_kw"] = new_target
-        session["has_battery"] = has_battery
         _write_pv_surplus_actions(actions)
     else:
         if grid_kw is None or not car_ready:
@@ -1546,7 +1572,7 @@ def _run_pv_surplus_charging_tick_impl():
         if grid_kw > start_threshold:
             return
 
-        target_kw = max(PV_SURPLUS_MIN_KW, abs(grid_kw))
+        target_kw = max(PV_SURPLUS_MIN_KW, min(compute_wallbox_max_kw(config), abs(grid_kw)))
         try:
             execute_car_charge_start(target_kw)
         except Exception as e:
