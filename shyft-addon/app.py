@@ -1057,6 +1057,12 @@ def trigger_ha_automation_recipe(recipe, phase, target_kw):
 
 def execute_car_charge_start(target_kw):
     config = _read_current_config()
+    # Gilt fuer JEDEN Aufrufer (die lokale PV-Ueberschussladen-Rueckfalllogik UND shyft-powers
+    # eigene "Auto laden"-Cloud-Aktionen, siehe handle_shyft_action_start) - beide koennen einen zu
+    # hohen Zielwert anfordern, und die Wallbox soll so oder so nie mehr bekommen, als sie selbst
+    # zulaesst (siehe compute_wallbox_max_kw).
+    if target_kw is not None:
+        target_kw = min(target_kw, compute_wallbox_max_kw(config))
     recipe = config.get("carChargeRecipe", {})
     recipe_type = recipe.get("type")
 
