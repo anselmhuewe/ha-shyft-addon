@@ -89,17 +89,15 @@ class SyncService:
         pv_history = self.homeassistant_adapter.load_entity_history(pv_entity_id, start_timestamp, end_timestamp)
         return self.shyft_adapter.send_pv_history(pv_history)
 
-    def sync_all_sensors(self):
-        sensorValues = []
+    def collect_live_values(self):
+        "Builds {Bubble field name: value} for every sensor with a currently readable value - the liveValues half of the addon_sensor_data_JSON payload sent via update_site_addon (replaces the old sync_all_sensors/addon_sensor_data sensor_list workflow)."
+        live_values = {}
         data = self._load_config()
-        for key, value in LIST_OF_SENSORS.items():
-            valueForSensor = self._load_sensor_value(key, value, data)
-            if valueForSensor != "":
-                sensorValues.append(json.dumps(valueForSensor))
-        if len(sensorValues) > 0:
-            sensorList = ",".join(sensorValues)
-            payload = f"{{\"sensor_list\" : [{sensorList}]}}"
-            return self.shyft_adapter.send_sensor_values(payload)
+        for key, bubble_name in LIST_OF_SENSORS.items():
+            entry = self._load_sensor_value(key, bubble_name, data)
+            if entry != "":
+                live_values[entry["sensor"]] = entry["state"]
+        return live_values
 
     def _load_sensor_value(self, key, bubbleSensorIdentifier, data):
         sensorId = data["sensorMappings"][key]

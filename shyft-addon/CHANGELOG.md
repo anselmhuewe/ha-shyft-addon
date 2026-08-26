@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.0.44.8
+
+* Ersetzt den alten stündlichen `addon_sensor_data`-Sensor-Sync (`sync_all_sensors`/`send_sensor_values`) durch `update_site_addon`: `sync_site_data()` baut jetzt `liveValues` (aus den bestehenden Sensor-Mappings, `SyncService.collect_live_values()`) plus die EV-Prognosefelder (`build_ev_optimizer_fields`, siehe 0.0.44.7) zu einem `addon_sensor_data_JSON` zusammen und schickt das als Ganzes. Betrifft sowohl den stündlichen Cron-Job als auch den "Verbindung testen"-Button (`/trigger`). `staticConfig` fehlt hier noch (keine Konfigurationsseite dafür), `update_location_addon` (Latitude/Longitude) ist ebenfalls noch nicht angebunden.
+
 ## 0.0.44.7
 
 * Vorarbeit für den Bubble-JSON-Sync (`addon_sensor_data_JSON`): `compute_car_presence_forecast` nimmt jetzt einen `hours`-Parameter (Dashboard-Route bleibt bei 48h); neue `build_ev_optimizer_fields` leitet daraus `ev_usage_h`/`d_ev_kwh` für den Julia-Optimizer ab (leer, wenn kein EV/Wallbox konfiguriert ist, sonst pro Stunde ein Verbrauchswert plus kompakte Liste der Abwesenheitsstunden - mit Fallback, falls die Prognose innerhalb der optimizer_period nie über die Weg-Wahrscheinlichkeits-Schwelle kommt, damit shyft nicht fälschlich "kein EV" annimmt). Noch nicht an einen Endpunkt/Trigger angebunden.

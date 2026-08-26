@@ -14,8 +14,8 @@ def sut():
 def test_sync_pv_history(sut):
     sut.sync_pv_history()
 
-def test_sync_all_sensors(sut):
-    sut.sync_all_sensors()
+def test_collect_live_values(sut):
+    sut.collect_live_values()
 
 def test_load_config(sut):
     actual = sut._load_config()

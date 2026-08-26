@@ -131,11 +131,19 @@ def index():
 # Delivers data to bubble
 @app.route("/trigger", methods=["POST"])
 def triggerEndpoint():
-    return sync_sensors()
+    return sync_site_data()
 
-def sync_sensors():
-    "Step 1 04 hourly run ha addon"
-    return sync_service.sync_all_sensors()
+def sync_site_data():
+    "Hourly addon->Bubble sync (also the manual 'Verbindung testen' trigger): builds the consolidated liveValues+EV-forecast JSON and sends it via update_site_addon - replaces the old per-sensor addon_sensor_data workflow."
+    config = _read_current_config()
+    live_values = sync_service.collect_live_values()
+    ev_fields = build_ev_optimizer_fields(config, optimizer_period=48)
+    if ev_fields:
+        live_values["ev_usage_h"] = ev_fields["ev_usage_h"]
+        live_values["d_ev_kwh"] = ev_fields["d_ev_kwh"]
+        live_values["baseTime"] = ev_fields["baseTime"]
+    payload = json.dumps({"liveValues": live_values})
+    return shyft_adapter.send_site_data(payload)
 
 def sync_pv_history():
     "Step01 pv history addon"
@@ -2404,7 +2412,7 @@ def sync_dashboard_chart_data():
 
 def sync_sensors_periodically():
     with app.app_context():
-        sync_sensors()
+        sync_site_data()
 
 def sync_pv_history_periodically():
     with app.app_context():

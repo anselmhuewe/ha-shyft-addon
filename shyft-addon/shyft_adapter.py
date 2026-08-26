@@ -22,9 +22,13 @@ class ShyftAdapter:
         payload = self._map_to_json(pv_history)
         return self._call_workflow("addon_pv_history", payload)
 
-    def send_sensor_values(self,
-                           sensor_values : str):
-        return self._call_workflow("addon_sensor_data", sensor_values)
+    def send_site_data(self, addon_sensor_data_json: str):
+        "Sends the consolidated staticConfig+liveValues+EV-forecast JSON to shyft-power (update_site_addon workflow) - replaces the old per-sensor addon_sensor_data workflow (send_sensor_values/sensor_list)."
+        return self._call_workflow("update_site_addon", json.dumps({"addon_sensor_data_JSON": addon_sensor_data_json}))
+
+    def send_location(self, latitude, longitude):
+        "Sends Home Assistant's zone.home coordinates to shyft-power (update_location_addon workflow) - called on location change or first setup (Verbindung testen), not on the hourly sync."
+        return self._call_workflow("update_location_addon", json.dumps({"Latitude": latitude, "Longitude": longitude}))
 
     def send_error_log(self, payload: dict):
         "Best-effort error report to shyft-power, sent whenever a Test-Button click in the addon returns an error (see log_error_to_shyft in app.py for how the payload is assembled)."
