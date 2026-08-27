@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.0.44.16
+
+* Gerätesteuerung: Hinweistext "Keine Aktionen in den nächsten 3 Stunden geplant." wird jetzt angezeigt, wenn gerade keine Aktion aktiv ist und auch keine innerhalb der nächsten 3 Stunden startet (anhand `Date Start` der von `/shyft/actions` gelieferten Aktionen, unabhängig vom genauen Status-Wortlaut).
+
 ## 0.0.44.15
 
 * Energiefluss-Widget, mehrere Anpassungen:

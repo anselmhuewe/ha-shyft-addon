@@ -2811,6 +2811,24 @@ function buildShyftActionCard(action) {
     return card;
 }
 
+// Stunden, innerhalb derer eine noch nicht gestartete Aktion als "demnaechst geplant" zaehlt (siehe
+// renderShyftActions) - rein informativ fuer den Hinweistext, kein Schwellwert fuer irgendeine Logik.
+const UPCOMING_ACTION_WINDOW_HOURS = 3;
+
+// True, wenn mindestens eine Aktion gerade laeuft (Status "Aktiv...") oder innerhalb der naechsten
+// UPCOMING_ACTION_WINDOW_HOURS startet - unabhaengig vom Status-Text, allein anhand von "Date Start"
+// (robuster als auf einen bestimmten "geplant"-Wortlaut zu pruefen).
+function hasActiveOrUpcomingAction(actions) {
+    const now = Date.now();
+    const windowEnd = now + UPCOMING_ACTION_WINDOW_HOURS * 3600 * 1000;
+    return actions.some(action => {
+        const status = (action['Status'] || '').toLowerCase();
+        if (status.startsWith('aktiv')) return true;
+        const start = action['Date Start'];
+        return typeof start === 'number' && start >= now && start <= windowEnd;
+    });
+}
+
 function renderShyftActions(container, actions) {
     container.innerHTML = '';
 
@@ -2820,6 +2838,13 @@ function renderShyftActions(container, actions) {
         empty.textContent = 'Es wurden in den letzten drei Tagen keine Aktionen berechnet.';
         container.appendChild(empty);
         return;
+    }
+
+    if (!hasActiveOrUpcomingAction(actions)) {
+        const hint = document.createElement('div');
+        hint.className = 'shyftActionsEmpty';
+        hint.textContent = `Keine Aktionen in den nächsten ${UPCOMING_ACTION_WINDOW_HOURS} Stunden geplant.`;
+        container.appendChild(hint);
     }
 
     // sorted by Date End descending to match shyft-power's own ordering
