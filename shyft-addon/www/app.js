@@ -6,6 +6,7 @@ const integrationsUri = insideHomeAssistant + "/integrations";
 const shyftActionsUri = insideHomeAssistant + "/shyft/actions";
 const notificationTargetsUri = insideHomeAssistant + "/notification-targets";
 const servicesUri = insideHomeAssistant + "/services";
+const systemHealthUri = insideHomeAssistant + "/system-health";
 let configData = {}
 let integrationsData = {integrations: [], entityMap: {}};
 let allSensorIdOptions = [];
@@ -538,6 +539,51 @@ async function renderConfigWarnings() {
     }
 }
 
+// Nutzer-sichtbare Fehler-/Statuskarte ganz oben auf der Konfigurationsseite: entweder
+// "Alle Systeme laufen" (dezent gruen) oder bis zu 5 laufende Probleme in Klartext.
+// Datenquelle ist /system-health (problem_registry.py serverseitig) - eine Problem-ID wird
+// vom jeweiligen Code-Pfad selbst wieder freigegeben, sobald er wieder erfolgreich laeuft.
+async function renderSystemHealth() {
+    const container = document.getElementById('systemHealthCard');
+    if (!container) return;
+    let health;
+    try {
+        health = await getJson(systemHealthUri);
+    } catch (err) {
+        console.log(err);
+        return;
+    }
+    container.innerHTML = '';
+    if (health.ok) {
+        container.className = 'systemHealthCard is-ok';
+        const icon = document.createElement('span');
+        icon.className = 'systemHealthCardIcon';
+        icon.textContent = '✓';
+        container.appendChild(icon);
+        const text = document.createElement('span');
+        text.textContent = 'Alle Systeme laufen';
+        container.appendChild(text);
+        return;
+    }
+    container.className = 'systemHealthCard has-problems';
+    const problems = health.problems || [];
+    const count = health.problemCount || problems.length;
+    const title = document.createElement('div');
+    title.className = 'systemHealthCardTitle';
+    title.textContent = count === 1
+        ? 'Ein Problem erfordert deine Aufmerksamkeit:'
+        : count + ' Probleme erfordern deine Aufmerksamkeit:';
+    container.appendChild(title);
+    const list = document.createElement('ul');
+    list.className = 'systemHealthProblemList';
+    for (const problem of problems) {
+        const item = document.createElement('li');
+        item.textContent = problem.message;
+        list.appendChild(item);
+    }
+    container.appendChild(list);
+}
+
 async function autoSave() {
     const statusElement = document.getElementById('saveStatus');
     try {
@@ -547,6 +593,7 @@ async function autoSave() {
         }
         await saveConfigurationNow();
         renderConfigWarnings();
+        renderSystemHealth();
         if (statusElement) {
             statusElement.classList.remove('status-error');
             statusElement.classList.add('status-saved');
@@ -597,6 +644,7 @@ const loadConfiguration = async (event) => {
         renderIntegrationSections();
         renderNotificationSection();
         renderConfigWarnings();
+        renderSystemHealth();
     } catch (err) {
         console.log(err);
     }
@@ -3875,3 +3923,13 @@ if (document.readyState === 'complete') {
 }
 
 setInterval(refreshLiveSensorValues, LIVE_VALUE_REFRESH_INTERVAL_MS);
+
+// Statuskarte oben auf der Konfigurationsseite regelmaessig auffrischen (wie das Dashboard seine
+// Live-Werte), damit ein zwischenzeitlich behobenes/neu aufgetretenes Problem sichtbar wird, ohne
+// dass der Nutzer die Seite neu laden muss.
+const SYSTEM_HEALTH_REFRESH_INTERVAL_MS = 30000;
+setInterval(() => {
+    if (document.visibilityState === 'visible') {
+        renderSystemHealth();
+    }
+}, SYSTEM_HEALTH_REFRESH_INTERVAL_MS);

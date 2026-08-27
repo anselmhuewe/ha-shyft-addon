@@ -2,6 +2,7 @@ from sync_service import SyncService, convert_to_expected_unit
 from homeassistant_adapter import HomeAssistantAdapter
 from shyft_adapter import ShyftAdapter
 from live_entity_watcher import LiveEntityWatcher
+import problem_registry
 
 import os
 from flask import Flask, send_from_directory, jsonify, request, Response
@@ -145,6 +146,10 @@ def sync_site_data():
         live_values["d_ev_kwh"] = ev_fields["d_ev_kwh"]
         live_values["baseTime"] = ev_fields["baseTime"]
     payload = json.dumps({"staticConfig": static_config, "liveValues": live_values})
+    try:
+        _update_input_csv_health(config, live_values)
+    except Exception as e:
+        print("[Shyft] Problem-Registry-Abgleich (input.csv) fehlgeschlagen:", repr(e))
     return shyft_adapter.send_site_data(payload)
 
 def sync_pv_history():
@@ -343,6 +348,79 @@ def compute_config_warnings():
 @app.route("/config/warnings", methods=["GET"])
 def readConfigWarnings():
     return jsonify({"warnings": compute_config_warnings()})
+
+
+# Sensoren, deren Live-Wert in die an shyft-power gesendeten Optimierungsdaten (letztlich die
+# input.csv des Optimizers) einfliesst - Schluessel wie in sync_service.LIST_OF_SENSORS, Wert ist
+# die deutsche Klartext-Bezeichnung fuer die Fehlerkarte. Nur fuer diese Sensoren meldet
+# _read_mapped_entity_state ein "unavailable" als Problem; rein optionale Sensoren duerfen
+# unauffaellig fehlen.
+HEALTH_MONITORED_SENSOR_KEYS = {
+    "photovoltaic_powerflow_pv": "Aktueller Strom - PV",
+    "photovoltaic_powerflow_load": "Aktueller Strom - Haushalt",
+    "photovoltaic_powerflow_grid": "Aktueller Strom - Netz",
+    "photovoltaic_powerflow_battery": "Aktueller Strom - Batterie",
+    "battery_state_of_charge": "Ladestand Heimspeicher",
+    "heatpump_current_power_elect": "Aktuelle Leistung Waermepumpe",
+    "heatpump_temp_indoor_measured": "Innenraumtemperatur (gemessen)",
+    "electronicvehicle_state_of_charge": "Auto - Ladestand",
+    "wallbox_current_charging_power": "Wallbox - Ladestrom",
+}
+
+# Ohne mindestens einen dieser Live-Werte (Bubble-Feldnamen, siehe sync_service.LIST_OF_SENSORS)
+# kann shyft-power keine sinnvolle Optimierung fuer die Anlage rechnen.
+INPUT_CSV_CORE_BUBBLE_NAMES = {
+    "PV - PowerFlow Grid",
+    "PV - PowerFlow Load",
+    "PV - PowerFlow PV",
+}
+
+
+def _note_sensor_health(sensor_key, entity_id, ok):
+    "Meldet bzw. loescht in der Problem-Registry ein 'sensor_unavailable:<entity_id>'-Problem - nur fuer die fuer die input.csv benoetigten Sensoren (siehe HEALTH_MONITORED_SENSOR_KEYS)."
+    label = HEALTH_MONITORED_SENSOR_KEYS.get(sensor_key)
+    if not label or not entity_id:
+        return
+    problem_id = f"sensor_unavailable:{entity_id}"
+    if ok:
+        problem_registry.clear(problem_id)
+    else:
+        problem_registry.register(
+            problem_id,
+            f"Der Sensor fuer \"{label}\" ({entity_id}) liefert aktuell keinen Wert (unavailable). "
+            f"Solange er fehlt, rechnet shyft-power fuer dieses Geraet mit unvollstaendigen Daten.",
+        )
+
+
+def _update_input_csv_health(config, live_values):
+    "Pflegt das Sammelproblem 'input_csv_missing_data' - nur relevant, sobald ueberhaupt ein Wechselrichter zugeordnet ist (vorher ist die fehlende Zuordnung erwartetes Setup, kein Problem)."
+    if not config.get("integrationMappings", {}).get("wechselrichter"):
+        problem_registry.clear("input_csv_missing_data")
+        return
+    if any(name in live_values for name in INPUT_CSV_CORE_BUBBLE_NAMES):
+        problem_registry.clear("input_csv_missing_data")
+        return
+    problem_registry.register(
+        "input_csv_missing_data",
+        "Es fehlen aktuell die grundlegenden Stromfluss-Werte (PV, Haushalt, Netz), die shyft-power "
+        "zur Optimierung braucht. Pruefe die Sensor-Zuordnung fuer den Wechselrichter auf der "
+        "Konfigurationsseite.",
+    )
+
+
+@app.route("/system-health", methods=["GET"])
+def readSystemHealth():
+    "Aktuelle Liste laufender, nutzer-relevanter Probleme fuer die Statuskarte oben auf der Konfigurationsseite (siehe problem_registry und renderSystemHealth im Frontend)."
+    problems = problem_registry.active_problems()
+    visible = problems[:problem_registry.MAX_VISIBLE_PROBLEMS]
+    return jsonify({
+        "ok": len(problems) == 0,
+        "problemCount": len(problems),
+        "problems": [
+            {"id": p["id"], "message": p["message"], "lastSeen": p.get("lastSeen")}
+            for p in visible
+        ],
+    })
 
 
 def classify_wallbox_connection_state(state_value, config=None):
@@ -1239,9 +1317,12 @@ def _read_mapped_entity_state(config, sensor_key):
     try:
         state = homeassistant_adapter.load_entity_state(entity_id)
         if state.state in (None, "unknown", "unavailable", ""):
+            _note_sensor_health(sensor_key, entity_id, ok=False)
             return None
+        _note_sensor_health(sensor_key, entity_id, ok=True)
         return state
     except Exception:
+        _note_sensor_health(sensor_key, entity_id, ok=False)
         return None
 
 
@@ -1924,6 +2005,10 @@ def writeConfig():
     data = _read_current_config()
     old_action_type_enabled = data.get("actionTypeEnabled", {})
     old_wallbox_mapping = data.get("wallboxConnectionStatusMapping", {})
+    old_health_entity_ids = {
+        key: data.get("sensorMappings", {}).get(key, "")
+        for key in HEALTH_MONITORED_SENSOR_KEYS
+    }
     old_battery_sensors = (
         data.get("sensorMappings", {}).get("battery_state_of_charge"),
         data.get("sensorMappings", {}).get("photovoltaic_powerflow_battery"),
@@ -1955,6 +2040,14 @@ def writeConfig():
             print("[Shyft] Sofort-Abgleich nach Toggle-Aenderung fehlgeschlagen:", repr(e))
 
     _write_current_config(data)
+
+    # Ein neu zugeordneter/entfernter Sensor macht ein evtl. noch offenes "sensor_unavailable"-
+    # Problem fuer die alte Entity gegenstandslos - aktiv freigeben, statt auf ein Timeout zu warten
+    # (das es bewusst nicht gibt, siehe problem_registry).
+    for key, old_entity_id in old_health_entity_ids.items():
+        new_entity_id = data.get("sensorMappings", {}).get(key, "")
+        if old_entity_id and old_entity_id != new_entity_id:
+            problem_registry.clear(f"sensor_unavailable:{old_entity_id}")
 
     new_wallbox_mapping = data.get("wallboxConnectionStatusMapping", {})
     if new_wallbox_mapping and new_wallbox_mapping != old_wallbox_mapping:
@@ -2244,6 +2337,25 @@ def check_device_status_deviation(action, config):
     # no per-action comparison logic yet - nothing to detect or notify about
 
 
+def _action_problem_id(label):
+    "Stabile Problem-Registry-ID aus einem Action-Name, z.B. 'Auto laden' -> 'action_failed:auto_laden'."
+    slug = re.sub(r"[^a-z0-9]+", "_", (label or "unbekannt").lower()).strip("_") or "unbekannt"
+    return f"action_failed:{slug}"
+
+
+def _note_action_outcome(label, phase, error=None):
+    "Meldet bzw. loescht in der Problem-Registry ein 'action_failed:<label>'-Problem: error=None gibt es frei, sonst wird die Geraete-Fehlermeldung als Klartext-Problem hinterlegt. phase ist 'gestartet' oder 'beendet'."
+    problem_id = _action_problem_id(label)
+    if error is None:
+        problem_registry.clear(problem_id)
+    else:
+        problem_registry.register(
+            problem_id,
+            f"Die Aktion \"{label}\" konnte nicht {phase} werden: {error}. shyft-power hat die "
+            f"Aktion angefordert, aber vom Geraet kam eine Fehlermeldung.",
+        )
+
+
 def handle_shyft_action_start(action, actions_enabled, config):
     "For direct-entity-control Aktionstypen (see AUTO_MANAGED_CONTROLS) this really executes; everything else is still a placeholder pending a later step."
     label = action.get("Action Name", "?")
@@ -2252,31 +2364,40 @@ def handle_shyft_action_start(action, actions_enabled, config):
 
     if not actions_enabled:
         print(f"[Shyft] Start faellig fuer '{label}' (Ziel: {target}) - Aktionstyp ist deaktiviert, nur simuliert.")
+        _note_action_outcome(label, "gestartet")  # deaktiviert = kein Ausfuehrungsfehler, evtl. alten Eintrag freigeben
     elif label == "Auto laden":
         try:
             execute_car_charge_start(target)
             print(f"[Shyft] Start ausgefuehrt fuer '{label}' (Ziel: {target} kW).")
+            _note_action_outcome(label, "gestartet")
         except Exception as e:
             print(f"[Shyft] Start fuer '{label}' fehlgeschlagen: {e!r}")
+            _note_action_outcome(label, "gestartet", e)
     elif label == "Warmwasser":
         try:
             execute_hot_water_activate()
             print(f"[Shyft] Start ausgefuehrt fuer '{label}'.")
+            _note_action_outcome(label, "gestartet")
         except Exception as e:
             print(f"[Shyft] Start fuer '{label}' fehlgeschlagen: {e!r}")
+            _note_action_outcome(label, "gestartet", e)
     elif ACTION_NAME_TO_ACTOR_KEY.get(label) in BATTERY_SHIFT_ACTOR_KEYS:
         try:
             automation_entity_id = config.get("actorMappings", {}).get(ACTION_NAME_TO_ACTOR_KEY[label])
             trigger_ha_automation(automation_entity_id, "start", target)
             print(f"[Shyft] Start ausgefuehrt fuer '{label}' (Ziel: {target}).")
+            _note_action_outcome(label, "gestartet")
         except Exception as e:
             print(f"[Shyft] Start fuer '{label}' fehlgeschlagen: {e!r}")
+            _note_action_outcome(label, "gestartet", e)
     elif control_key:
         try:
             execute_auto_managed_action(control_key, "start", target)
             print(f"[Shyft] Start ausgefuehrt fuer '{label}' (Ziel: {target}).")
+            _note_action_outcome(label, "gestartet")
         except Exception as e:
             print(f"[Shyft] Start fuer '{label}' fehlgeschlagen: {e!r}")
+            _note_action_outcome(label, "gestartet", e)
     else:
         print(f"[Shyft] Start faellig fuer '{label}' (Ziel: {target}) - Ausfuehrung pro Aktion noch nicht implementiert.")
 
@@ -2293,14 +2414,17 @@ def handle_shyft_action_end(action, actions_enabled, config):
 
     if not actions_enabled:
         print(f"[Shyft] Ende faellig fuer '{label}' - Aktionstyp ist deaktiviert, nur simuliert.")
+        _note_action_outcome(label, "beendet")  # deaktiviert = kein Ausfuehrungsfehler, evtl. alten Eintrag freigeben
     elif label == "Auto laden":
         try:
             execute_car_charge_stop(target)
             print(f"[Shyft] Ende ausgefuehrt fuer '{label}'.")
+            _note_action_outcome(label, "beendet")
         except Exception as e:
             print(f"[Shyft] Ende fuer '{label}' fehlgeschlagen: {e!r}")
+            _note_action_outcome(label, "beendet", e)
     elif label == "Warmwasser":
-        pass  # single-action Aktionstyp, kein Ende-Verhalten (siehe execute_hot_water_activate)
+        _note_action_outcome(label, "beendet")  # single-action Aktionstyp, kein Ende-Verhalten (siehe execute_hot_water_activate)
     elif ACTION_NAME_TO_ACTOR_KEY.get(label) in BATTERY_SHIFT_ACTOR_KEYS:
         try:
             # shared across all three battery Aktionstypen - see BATTERY_SHIFT_ACTOR_KEYS - and no
@@ -2308,14 +2432,18 @@ def handle_shyft_action_end(action, actions_enabled, config):
             automation_entity_id = config.get("actorMappings", {}).get("battery_action_stop")
             trigger_ha_automation(automation_entity_id, "stop", None)
             print(f"[Shyft] Ende ausgefuehrt fuer '{label}'.")
+            _note_action_outcome(label, "beendet")
         except Exception as e:
             print(f"[Shyft] Ende fuer '{label}' fehlgeschlagen: {e!r}")
+            _note_action_outcome(label, "beendet", e)
     elif control_key:
         try:
             execute_auto_managed_action(control_key, "end", None)
             print(f"[Shyft] Ende ausgefuehrt fuer '{label}'.")
+            _note_action_outcome(label, "beendet")
         except Exception as e:
             print(f"[Shyft] Ende fuer '{label}' fehlgeschlagen: {e!r}")
+            _note_action_outcome(label, "beendet", e)
     else:
         print(f"[Shyft] Ende faellig fuer '{label}' - Ausfuehrung pro Aktion noch nicht implementiert.")
 

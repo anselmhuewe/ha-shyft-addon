@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.0.44.17
+
+* Neue nutzer-sichtbare Fehler-/Statuskarte ganz oben auf der Konfigurationsseite (unter dem Erklärtext): zeigt entweder „Alle Systeme laufen" (dezent grün, mit Häkchen) oder bis zu 5 laufende Probleme in Klartext (Deutsch). Aktualisiert sich beim Laden der Seite, nach jedem Speichern und alle 30 s.
+* Serverseitig neu: eine „Problem-Registry" (`problem_registry.py`, persistiert nach `/data/problems.json`, eigenes Modul ohne Import-Zyklus zu `app.py`/`sync_service.py`). Jedes Problem hat eine stabile ID (z.B. `action_failed:auto_laden`, `input_csv_missing_data`, `sensor_unavailable:<entity_id>`); tritt dasselbe Problem erneut auf, werden nur Zeitstempel/Zähler aktualisiert statt ein Duplikat anzulegen. Ein Problem verfällt **nicht** von selbst – der jeweilige Code-Pfad gibt seine ID aktiv wieder frei, sobald er wieder erfolgreich durchläuft. Neuer Endpunkt `GET /system-health`.
+* Erste drei angebundene Quellen:
+  * **Aktion vom Gerät abgelehnt:** `handle_shyft_action_start`/`handle_shyft_action_end` melden bei einer Ausnahme aus `execute_car_charge_start`/`execute_hot_water_activate`/`execute_auto_managed_action`/`trigger_ha_automation` ein `action_failed:<Aktionsname>` mit der Fehlermeldung des Geräts; ein erfolgreicher Lauf (oder ein deaktivierter Aktionstyp) gibt es wieder frei.
+  * **Sensordaten unavailable:** `_read_mapped_entity_state` meldet für die für die `input.csv` benötigten Sensoren (`HEALTH_MONITORED_SENSOR_KEYS`) ein `sensor_unavailable:<entity_id>`, sobald der zugeordnete Sensor `unavailable`/nicht lesbar ist, und gibt es beim nächsten gültigen Wert wieder frei. Beim Neu-Zuordnen/Entfernen eines Sensors wird ein noch offener Eintrag der alten Entity in `writeConfig` aktiv gelöscht.
+  * **Daten für die `input.csv` fehlen:** `sync_site_data` meldet `input_csv_missing_data`, wenn ein Wechselrichter zugeordnet ist, aber keiner der Kern-Stromfluss-Werte (PV/Haushalt/Netz) an shyft-power gesendet werden konnte.
+
 ## 0.0.44.16
 
 * Gerätesteuerung: Hinweistext "Keine Aktionen in den nächsten 3 Stunden geplant." wird jetzt angezeigt, wenn gerade keine Aktion aktiv ist und auch keine innerhalb der nächsten 3 Stunden startet (anhand `Date Start` der von `/shyft/actions` gelieferten Aktionen, unabhängig vom genauen Status-Wortlaut).

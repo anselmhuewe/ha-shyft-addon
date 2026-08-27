@@ -639,6 +639,48 @@
             font-size: 0.95em;
         }
 
+        /* Nutzer-sichtbare Fehler-/Statuskarte oben auf der Konfigurationsseite (siehe
+           renderSystemHealth in app.js, /system-health + problem_registry.py serverseitig).
+           Zwei Zustaende: "Alle Systeme laufen" (dezent gruen) oder bis zu 5 Klartext-Zeilen. */
+        #systemHealthCard:empty {
+            display: none;
+        }
+        .systemHealthCard {
+            border-radius: 8px;
+            padding: 0.8em 1em;
+            margin-bottom: 1.5em;
+            font-size: 0.95em;
+        }
+        .systemHealthCard.is-ok {
+            display: flex;
+            align-items: center;
+            gap: 0.6em;
+            color: var(--color-accent);
+            border: 1px solid var(--color-accent);
+            background: rgba(46, 204, 113, 0.08);
+        }
+        .systemHealthCard.has-problems {
+            color: var(--color-text);
+            background: var(--color-bg-card);
+            border: 1px solid var(--color-border);
+            border-left: 4px solid var(--color-error);
+        }
+        .systemHealthCardIcon {
+            font-weight: 700;
+            flex-shrink: 0;
+        }
+        .systemHealthCardTitle {
+            font-weight: 700;
+            margin-bottom: 0.4em;
+        }
+        .systemHealthProblemList {
+            margin: 0;
+            padding-left: 1.2em;
+        }
+        .systemHealthProblemList li:not(:last-child) {
+            margin-bottom: 0.3em;
+        }
+
         .dashboardChart {
             margin-bottom: 2em;
         }
@@ -915,6 +957,7 @@
         Wenn du keine Integration auswählst, bleibt der Bereich auf "nicht vorhanden".
         Änderungen werden automatisch gespeichert.
     </div>
+    <div id="systemHealthCard"></div>
     <div id="configWarnings"></div>
     <div id="config"></div>
     <datalist id="allEntityOptions">
