@@ -3225,14 +3225,20 @@ function formatKwValue(kw) {
     return kw.toLocaleString('de-DE', {minimumFractionDigits: 1, maximumFractionDigits: 1}) + ' kW';
 }
 
-// Animationsdauer einer Flusslinie: schneller/kuerzere Dauer bei hoeherer Leistung, aber nie
-// komplett angehalten - auch bei 0 kW (bzw. beim Haushaltsstrom, siehe compute_energy_flow_data's
-// residualKw) bewegt sich die Linie noch leicht, wie gewuenscht ("ständig einen leichten
-// Stromverbrauch simulieren").
-function flowAnimationDuration(kw) {
-    const absKw = Math.min(Math.abs(kw || 0), 3);
-    const minDuration = 0.6, maxDuration = 3.2;
-    return maxDuration - (absKw / 3) * (maxDuration - minDuration);
+// Unterhalb dieser Schwelle (kW, absolut) gilt eine Leitung als "kein nennenswerter Fluss" - sie
+// bleibt als graue Leitung sichtbar, bekommt aber keine wandernden Punkte. Grid nutzt stattdessen
+// die explizit gewuenschten 0.1 kW (siehe buildEnergyFlowWidget).
+const FLOW_DOT_THRESHOLD_KW = 0.05;
+let flowDotIdCounter = 0;
+
+// Wanderungsdauer eines Punkts: logarithmisch schneller bei mehr kW, ohne harte Obergrenze bei
+// kW selbst (nur die Dauer naehert sich einem praktischen Minimum an, damit es nie "hektisch"
+// wirkt). 10 kW ist bewusst kein hartes Maximum, sondern nur ein Bezugspunkt der Kurve.
+function flowDotDuration(kw) {
+    const absKw = Math.abs(kw || 0);
+    const minDuration = 0.35, maxDuration = 3.2;
+    const duration = maxDuration / (1 + Math.log2(1 + absKw));
+    return Math.max(minDuration, duration);
 }
 
 // Gerade Verbindung (Netz/Batterie), oder ein rechtwinkliger Knick, falls y1 != y2.
@@ -3249,16 +3255,46 @@ function buildBusFlowPath(x1, y1, busX, y2, x2) {
     return `M ${x1},${y1} H ${busX} V ${y2} H ${x2}`;
 }
 
-function buildFlowLineFromPath(d, kw, {reversed = false, colorVar = 'var(--color-accent)'} = {}) {
+// Die Leitung selbst (grau, statisch, immer sichtbar sobald das Geraet konfiguriert ist - auch
+// ohne Fluss, siehe buildFlowLineFromPath) plus, bei nennenswertem Fluss, 2 versetzt wandernde
+// leuchtende Punkte per <animateMotion an <mpath>, die derselben Pfad-Geometrie folgen.
+// reversed dreht die Laufrichtung um (Ende->Start statt Start->Ende), fuer z.B. Einspeisung
+// Richtung Netz statt Bezug vom Netz.
+function buildFlowDots(d, kw, {reversed = false, thresholdKw = FLOW_DOT_THRESHOLD_KW} = {}) {
+    const g = svgEl('g');
+    const pathId = 'efw-flow-path-' + (flowDotIdCounter++);
+    const conduit = svgEl('path', {d, id: pathId, class: 'energyFlowConduit', fill: 'none'});
+    g.appendChild(conduit);
+
+    const absKw = Math.abs(kw || 0);
+    if (absKw < thresholdKw) {
+        return g;
+    }
+
+    const duration = flowDotDuration(kw);
+    for (const offsetFraction of [0, 0.5]) {
+        const dot = svgEl('circle', {r: 3.2, class: 'energyFlowDot'});
+        const motion = svgEl('animateMotion', {
+            dur: duration + 's',
+            begin: (-offsetFraction * duration) + 's',
+            repeatCount: 'indefinite',
+            rotate: 'auto',
+        });
+        if (reversed) {
+            motion.setAttribute('keyPoints', '1;0');
+            motion.setAttribute('keyTimes', '0;1');
+            motion.setAttribute('calcMode', 'linear');
+        }
+        motion.appendChild(svgEl('mpath', {href: '#' + pathId}));
+        dot.appendChild(motion);
+        g.appendChild(dot);
+    }
+    return g;
+}
+
+function buildFlowLineFromPath(d, kw, options = {}) {
     if (kw === null || kw === undefined) return null;
-    const path = svgEl('path', {
-        d,
-        class: 'energyFlowLine' + (reversed ? ' energyFlowLine-reverse' : ''),
-        stroke: colorVar,
-        fill: 'none',
-    });
-    path.style.animationDuration = flowAnimationDuration(kw) + 's';
-    return path;
+    return buildFlowDots(d, kw, options);
 }
 
 function buildFlowLine(x1, y1, x2, y2, kw, options = {}) {
@@ -3350,11 +3386,13 @@ function houseImageFor(data) {
     return {href: 'assets/house-none.png', w: 962, h: 598};
 }
 
-function buildPlugIcon(cx, cy, on) {
+// scale 2.4 bringt die Groesse in etwa auf Augenhoehe mit den anderen Verbraucher-Icons (Bilder,
+// 80-130px Zielbreite) - das schematisch gezeichnete Steckersymbol wirkte vorher winzig daneben.
+function buildPlugIcon(cx, cy, on, scale = 2.4) {
     // Feste (nicht theme-abhaengige) Farbe fuer den Aus-Zustand - das Widget bleibt immer hell
     // (siehe .energyFlowWidget), var(--color-text-secondary) waere im Dark Mode zu blass dafuer.
     const color = on ? 'var(--color-accent)' : '#8b95ab';
-    const g = svgEl('g', {opacity: on ? 1 : 0.45});
+    const g = svgEl('g', {opacity: on ? 1 : 0.45, transform: `translate(${cx},${cy}) scale(${scale}) translate(${-cx},${-cy})`});
     g.appendChild(svgEl('rect', {x: cx - 11, y: cy - 12, width: 22, height: 20, rx: 6, fill: 'var(--flow-metal-light)', stroke: color, 'stroke-width': 2}));
     for (const dx of [-4, 4]) {
         g.appendChild(svgEl('circle', {cx: cx + dx, cy: cy - 4, r: 1.8, fill: color}));
@@ -3437,14 +3475,16 @@ function buildEnergyFlowWidget(data) {
     const houseCx = houseX + houseVisibleW / 2, houseCy = houseY + houseH / 2;
     svg.appendChild(cropped.group);
 
-    // In der freien Luecke zwischen Haus und Verbraucher-Spalte statt am rechten Rand (dort war es
-    // zu nah an den Verbraucher-Labels und wirkte "verrutscht").
-    svg.appendChild(renderSkyIcon(520, 42));
+    // Mittig ueber dem Haus statt an einer festen Position - so bleibt es zentriert, egal wie breit
+    // das Hausbild gerade ausfaellt (PV/Batterie-Varianten haben leicht unterschiedliche Breiten).
+    svg.appendChild(renderSkyIcon(houseCx, 42));
 
     if (data.grid && data.grid.configured) {
         const pylonCx = 60, pylonCy = houseCy;
         svg.appendChild(buildPylonIcon(pylonCx, pylonCy));
-        const line = buildFlowLine(pylonCx + 24, pylonCy, houseX, houseCy, data.grid.kw, {reversed: (data.grid.kw || 0) < 0});
+        // Bagatellgrenze 0.1 kW (absolut): darunter bleibt die Leitung sichtbar, aber grau/inaktiv
+        // statt einen kaum vorhandenen Fluss zu animieren.
+        const line = buildFlowLine(pylonCx + 24, pylonCy, houseX, houseCy, data.grid.kw, {reversed: (data.grid.kw || 0) < 0, thresholdKw: 0.1});
         if (line) svg.appendChild(line);
         // Feste Farben statt der theme-abhaengigen --color-error/--color-text-secondary - das
         // Widget bleibt immer hell (siehe .energyFlowWidget), Dark-Mode-Toene waeren hier blass.
@@ -3483,17 +3523,17 @@ function buildEnergyFlowWidget(data) {
     // Gemeinsamer Bus "Haus -> Verbraucher": alle vier rechten Verbraucher gehen vom selben
     // Hausaustrittspunkt ab und teilen sich diese senkrechte Spalte, bevor sie zur jeweiligen
     // Reihe abzweigen - so laeuft z.B. die Waermepumpen-Leitung nicht quer durchs Wallbox-Icon.
-    const busX = 660;
-    const consumerAnchorX = columnX - 40;
+    // Bus naeher am Haus (kuerzere gemeinsame Strecke), dafuer laengere individuelle Leitungen von
+    // busX bis dicht ans jeweilige Geraet-Icon heran.
+    const busX = 480;
+    const consumerAnchorX = columnX - 10;
 
     if (data.heatpump && data.heatpump.configured) {
         const rowY = 110;
-        // Nur animieren, wenn sie tatsaechlich laeuft - sonst wirkt es so, als flösse Strom zu
-        // einem ausgeschalteten Geraet (dieselbe Logik wie bei Auto/Sonstiges Geraet unten)
-        if (data.heatpump.on) {
-            const line = buildFlowLineFromPath(buildBusFlowPath(houseRightX, houseCy, busX, rowY, consumerAnchorX), data.heatpump.kw || 0.3);
-            if (line) svg.appendChild(line);
-        }
+        // Leitung immer sichtbar (grau, siehe buildFlowDots), Punkte nur wenn sie tatsaechlich
+        // laeuft - sonst wirkt es so, als flösse Strom zu einem ausgeschalteten Geraet.
+        const line = buildFlowLineFromPath(buildBusFlowPath(houseRightX, houseCy, busX, rowY, consumerAnchorX), data.heatpump.on ? (data.heatpump.kw || 0.3) : 0);
+        if (line) svg.appendChild(line);
         const hp = buildFlowImage('assets/heatpump.jpg', columnX, rowY, 499, 492, 80);
         if (data.heatpump.on) hp.setAttribute('class', 'energyFlowPulse');
         svg.appendChild(hp);
@@ -3513,15 +3553,10 @@ function buildEnergyFlowWidget(data) {
         const rowY = 250;
         const isAway = data.car.state === 'away';
         const isCharging = data.car.state === 'charging';
-        if (isCharging) {
-            // laedt: animierte Linie mit der tatsaechlichen Ladeleistung (Platzhalter 0.5 kW nur,
-            // falls die Wallbox-Ladeleistung selbst nicht zugeordnet/lesbar ist)
-            const line = buildFlowLineFromPath(buildBusFlowPath(houseRightX, houseCy, busX, rowY, consumerAnchorX), data.car.chargingKw || 0.5);
-            if (line) svg.appendChild(line);
-        } else if (!isAway && data.car.state !== null) {
-            // eingesteckt, aber laedt gerade nicht: ruhige, unbewegte Verbindungslinie statt der animierten Flusslinie
-            svg.appendChild(svgEl('path', {d: buildBusFlowPath(houseRightX, houseCy, busX, rowY, consumerAnchorX), stroke: 'var(--color-border)', 'stroke-width': 2, fill: 'none'}));
-        }
+        // Leitung immer sichtbar (auch "abwesend"), Punkte nur waehrend des Ladens - Ladeleistung
+        // notfalls Platzhalter 0.5 kW, falls die Wallbox-Ladeleistung selbst nicht zugeordnet/lesbar ist.
+        const line = buildFlowLineFromPath(buildBusFlowPath(houseRightX, houseCy, busX, rowY, consumerAnchorX), isCharging ? (data.car.chargingKw || 0.5) : 0);
+        if (line) svg.appendChild(line);
         // Ein Bild pro Zustand (das "verbunden"-Bild zeigt Auto+Wallbox bereits zusammen) statt
         // zweier separater Icons - siehe ev-connected.jpg/ev-away.jpg
         const carImg = isAway ? {href: 'assets/ev-away.jpg', w: 356, h: 239} : {href: 'assets/ev-connected.jpg', w: 464, h: 229};
@@ -3538,12 +3573,10 @@ function buildEnergyFlowWidget(data) {
     if (data.sonstigerVerbraucher && data.sonstigerVerbraucher.configured) {
         const rowY = 390;
         const on = !!data.sonstigerVerbraucher.on;
-        if (on) {
-            // kein Leistungssensor fuer "Sonstiger Verbraucher" vorgesehen (nur an/aus) - fester
-            // Platzhalterwert nur fuer eine plausible Animationsgeschwindigkeit, keine echte Messung
-            const line = buildFlowLineFromPath(buildBusFlowPath(houseRightX, houseCy, busX, rowY, consumerAnchorX), 0.3);
-            if (line) svg.appendChild(line);
-        }
+        // Leitung immer sichtbar; kein Leistungssensor fuer "Sonstiger Verbraucher" vorgesehen (nur
+        // an/aus) - fester Platzhalterwert nur fuer eine plausible Punkte-Geschwindigkeit, wenn an.
+        const line = buildFlowLineFromPath(buildBusFlowPath(houseRightX, houseCy, busX, rowY, consumerAnchorX), on ? 0.3 : 0);
+        if (line) svg.appendChild(line);
         svg.appendChild(buildPlugIcon(columnX, rowY, on));
         svg.appendChild(buildEnergyFlowLabel(columnX + 26, rowY + 4, ['Sonstiges Gerät']));
     }

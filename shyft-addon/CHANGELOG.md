@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.0.44.10
+
+* Energiefluss-Widget überarbeitet: Sonne jetzt zentriert über dem Haus (statt fester Position), Batterie senkrecht darunter/darunter der Sonne. Sammelbus zu den Verbrauchern kürzer, individuelle Leitungen zum jeweiligen Gerät länger. Leitungen sind jetzt immer sichtbar (grau/inaktiv statt komplett unsichtbar), auch wenn gerade kein Strom fließt (z.B. Wärmepumpe aus, Auto abwesend) - Netzleitung nutzt dafür eine Bagatellgrenze von 0.1 kW. Neue Animation: statt einer grün gestrichelten Linie wandern kleine leuchtende Punkte auf der (grauen) Leitung entlang, Geschwindigkeit logarithmisch zur Leistung (Bezugspunkt 10 kW, keine harte Obergrenze). "Sonstiges Gerät"-Icon vergrößert, war im Vergleich zu den anderen Geräte-Icons zu klein.
+
 ## 0.0.44.9
 
 * Neue Konfigurationsfelder für die `staticConfig`-Hälfte von `addon_sensor_data_JSON`: Wärmepumpe (Typ, Wohnfläche, Energieeffizienz, Warmwasser-Speichergröße, max. Leistung, max. Vorlauftemperatur, Heizkurve Niveau/Steigung, Heizungspuffer), Batterie (Kapazität, min. Ladestand), Auto (Ziel-Ladestand normal - Batteriegröße nutzt weiterhin das bestehende Zahlenfeld, wird beim Senden auf die nächstgelegene Bubble-Option gerundet) sowie ein neuer "Allgemein"-Block oberhalb der Geräte-Kacheln (Optimierungszeitraum, Gaspreis, Stromgrundlast, Strompreis Ein-/Verkauf). `Electricity Base Load` bettet den kWh-Wert direkt im gesendeten Text ein (`label__wert`, wie bei `Heating Buffer`), damit Java dafür keinen zusätzlichen Bubble-Aufruf braucht.

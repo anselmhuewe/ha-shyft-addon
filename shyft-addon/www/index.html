@@ -644,21 +644,18 @@
             font-size: 13px;
             fill: #091747;
         }
-        @keyframes energyFlowDash {
-            to {
-                stroke-dashoffset: -24;
-            }
-        }
-        .energyFlowLine {
-            stroke-width: 3;
-            stroke-dasharray: 6 6;
+        /* Die Leitung selbst ist immer sichtbar (grau, statisch) - siehe buildFlowConduit. Fliesst
+           Strom, wandern zusaetzlich kleine leuchtende Punkte darauf entlang (buildFlowDots), statt
+           wie frueher die ganze Linie gruen gestrichelt zu animieren. */
+        .energyFlowConduit {
+            stroke: var(--flow-metal-dark);
+            stroke-width: 2.5;
             stroke-linecap: round;
-            animation-name: energyFlowDash;
-            animation-timing-function: linear;
-            animation-iteration-count: infinite;
+            opacity: 0.55;
         }
-        .energyFlowLine-reverse {
-            animation-direction: reverse;
+        .energyFlowDot {
+            fill: var(--color-accent);
+            filter: drop-shadow(0 0 3px var(--color-accent));
         }
         @keyframes energyFlowPulse {
             0%, 100% {
