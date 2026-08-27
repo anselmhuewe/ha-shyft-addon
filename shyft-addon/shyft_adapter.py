@@ -1,6 +1,6 @@
 import json
 
-from constants import BUBBLE_URI_TEST, BUBBLE_URI_PRD,  BUBBLE_TOKEN
+from constants import BUBBLE_URI_TEST, BUBBLE_URI_PRD,  BUBBLE_TOKEN, DEV_ACCESS_KEY_PREFIX
 from homeassistant_adapter import PeriodElement
 
 import requests
@@ -16,6 +16,20 @@ class ShyftAdapter:
         self.bubble_token = bubble_token
         self.detailed_logging = False
         self.development_mode = False
+
+    def set_access_key(self, raw_access_key):
+        """Parst den rohen shyft_access_key (siehe DEV_ACCESS_KEY_PREFIX in constants.py) und setzt
+        bubble_token/development_mode gemeinsam - immer diese Methode statt die beiden Attribute
+        einzeln zu setzen, sonst koennten sie auseinanderlaufen. Es gibt bewusst keine eigene
+        Konfigurationsoption dafuer mehr (siehe app.py) - die Umgebung ergibt sich allein aus dem
+        Schluessel."""
+        raw_access_key = raw_access_key or ""
+        if raw_access_key.startswith(DEV_ACCESS_KEY_PREFIX):
+            self.bubble_token = raw_access_key[len(DEV_ACCESS_KEY_PREFIX):]
+            self.development_mode = True
+        else:
+            self.bubble_token = raw_access_key
+            self.development_mode = False
 
     def send_pv_history(self,
                         pv_history: [PeriodElement]):

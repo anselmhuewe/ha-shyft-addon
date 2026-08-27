@@ -23,3 +23,21 @@ def test_create_complete_uri_prod_mode():
     actual = sut._create_complete_uri("given_workflow_name")
     assert "https://shyft-power.com/api/1.1/wf/given_workflow_name" == actual
 
+def test_set_access_key_without_prefix_is_prod():
+    sut = ShyftAdapter()
+    sut.set_access_key("bus|123|secret")
+    assert sut.bubble_token == "bus|123|secret"
+    assert sut.development_mode is False
+
+def test_set_access_key_with_test_prefix_is_dev_and_strips_prefix():
+    sut = ShyftAdapter()
+    sut.set_access_key("test_bus|123|secret")
+    assert sut.bubble_token == "bus|123|secret"
+    assert sut.development_mode is True
+
+def test_set_access_key_empty():
+    sut = ShyftAdapter()
+    sut.set_access_key(None)
+    assert sut.bubble_token == ""
+    assert sut.development_mode is False
+

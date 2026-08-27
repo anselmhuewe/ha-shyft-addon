@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.0.44.18
+
+* **Verhaltensänderung:** Die `development_mode`-Konfigurationsoption (Umschalter Prod/Test-Umgebung, für jeden Nutzer in der Addon-Konfiguration sichtbar) ist entfernt. Stattdessen entscheidet jetzt der `shyft_access_key` selbst: ein Key mit `test_`-Präfix routet an die shyft-power-Testumgebung (Präfix wird vor dem eigentlichen Request abgeschnitten), alles andere an Prod - analog zu z.B. Stripes `sk_test_...`/`sk_live_...`-Schlüsseln. Kein normaler Nutzer bekommt einen Key mit diesem Präfix, kann also nicht mehr versehentlich (oder absichtlich) seine eigenen Daten in die Testumgebung umleiten. `ShyftAdapter.set_access_key(raw_key)` kapselt das Parsen; `bubble_token`/`development_mode` werden nie mehr einzeln gesetzt. **Wer bisher `development_mode: true` genutzt hat** (z.B. für eigene Tests), muss dem eigenen `shyft_access_key` in der Addon-Konfiguration manuell `test_` voranstellen, sonst läuft der Key ab diesem Update gegen Prod.
+
 ## 0.0.44.17
 
 * Neue nutzer-sichtbare Fehler-/Statuskarte ganz oben auf der Konfigurationsseite (unter dem Erklärtext): zeigt entweder „Alle Systeme laufen" (dezent grün, mit Häkchen) oder bis zu 5 laufende Probleme in Klartext (Deutsch). Aktualisiert sich beim Laden der Seite, nach jedem Speichern und alle 30 s.

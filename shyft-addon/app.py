@@ -38,7 +38,6 @@ app = Flask(__name__, static_folder="www", static_url_path="")
 VERSION = load_addon_version()
 SHYFT_ACCESS_KEY = "not_set_yet"
 DETAILED_LOGGING = False
-DEVELOPMENT_MODE = False
 OPTIONS_PATH = "/data/options.json"
 CONFIG_PATH = "/data/config.json"
 DASHBOARD_CACHE_PATH = "/data/dashboard_cache.json"
@@ -2695,7 +2694,6 @@ if __name__ == "__main__":
             options = json.load(f)
             SHYFT_ACCESS_KEY = options.get("shyft_access_key", SHYFT_ACCESS_KEY)
             DETAILED_LOGGING = options.get("detailed_logging", DETAILED_LOGGING)
-            DEVELOPMENT_MODE = options.get("development_mode", DEVELOPMENT_MODE)
         if not os.path.exists(CONFIG_PATH):
             print("File does not exists")
             shutil.copy("www/defaultShyftConfig.json", CONFIG_PATH)
@@ -2705,13 +2703,16 @@ if __name__ == "__main__":
     except Exception as e:
         print("Failed to load config from options.json:", e)
 
-    shyft_adapter.bubble_token = SHYFT_ACCESS_KEY;
+    # set_access_key statt bubble_token/development_mode einzeln zu setzen: die Umgebung (Prod/Test)
+    # ergibt sich allein aus einem evtl. DEV_ACCESS_KEY_PREFIX-Praefix im Schluessel selbst (siehe
+    # constants.py) - es gibt bewusst keine eigene development_mode-Konfigurationsoption mehr, die
+    # jeder Nutzer in der Addon-Konfiguration haette umschalten koennen.
+    shyft_adapter.set_access_key(SHYFT_ACCESS_KEY)
     shyft_adapter.detailed_logging = DETAILED_LOGGING;
-    shyft_adapter.development_mode = DEVELOPMENT_MODE;
 
     homeassistant_adapter.detailed_logging = DETAILED_LOGGING
     print("TOKEN FOR HAOS_API", mask_secret(SUPERVISOR_TOKEN))
-    print("Loaded SHYFT_ACCESS_KEY:", mask_secret(SHYFT_ACCESS_KEY))
+    print("Loaded SHYFT_ACCESS_KEY:", mask_secret(SHYFT_ACCESS_KEY), "- Testumgebung" if shyft_adapter.development_mode else "- Produktivumgebung")
     print("Detailed logging:", DETAILED_LOGGING)
 
     try:
