@@ -729,7 +729,7 @@ def compute_car_presence_forecast(hours=48):
         p, fb0 = (1.0 if current_connected else 0.0), False
     probabilities.append(p)
     low_data_basis.append(fb0)
-    for i in range(1, 48):
+    for i in range(1, hours):
         source_ts = start + timedelta(hours=i - 1)
         p_home_given_home, fb_home = transition_rate(source_ts.weekday(), source_ts.hour, True)
         p_home_given_away, fb_away = transition_rate(source_ts.weekday(), source_ts.hour, False)
@@ -744,7 +744,7 @@ def compute_car_presence_forecast(hours=48):
     standing_probabilities = []
     driving_probabilities = []
     consumption_kwh_forecast = []
-    for i in range(48):
+    for i in range(hours):
         ts_i = start + timedelta(hours=i)
         p_away = 1 - probabilities[i]
         frac_driving, fb_driving = driving_fraction(ts_i.weekday(), ts_i.hour)

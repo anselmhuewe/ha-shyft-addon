@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.0.44.14
+
+* **Kritischer Fix:** `compute_car_presence_forecast(hours=...)` hatte zwei interne Schleifen, die trotz des neuen `hours`-Parameters weiterhin fest auf `48` verdrahtet waren - bei `hours=49` (der übliche Fall, `optimizer_period=48 + 1` Puffer) führte das zu `IndexError: list index out of range` in `build_ev_optimizer_fields`. Dadurch schlug **jeder** `/trigger`-Aufruf (Button "Verbindung testen" wie auch der stündliche Cron-Job) mit HTTP 500 fehl - der stündliche Bubble-Sync lief seit Einführung in 0.0.44.8 nie erfolgreich durch. Live per `ha_get_logs(source=supervisor)` gefunden und verifiziert.
+
 ## 0.0.44.13
 
 * "Auto laden"-Stufen (1./2./3.): Der Verbindungspunkt auf der Linie sitzt jetzt exakt vertikal mittig zur Zeile, statt einen festen `top`-Wert zu schätzen, der nicht immer genau passte.
