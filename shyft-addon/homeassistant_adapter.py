@@ -36,9 +36,10 @@ class PeriodElement:
 
 
 class EntityState:
-    def __init__(self, state: str, unit: str):
+    def __init__(self, state: str, unit: str, last_updated: datetime = None):
         self.state = state
         self.unit = unit
+        self.last_updated = last_updated
 
 
 # Adapter for integrating homeassistant
@@ -61,7 +62,14 @@ class HomeAssistantAdapter:
         response = self.get_from_homeassistant(query)
         unit = response.get("attributes", {}).get("unit_of_measurement", "")
         self._log_info("load_entity_state result " + str(response))
-        return EntityState(response["state"], unit)
+        last_updated_raw = response.get("last_updated")
+        last_updated = None
+        if last_updated_raw:
+            try:
+                last_updated = datetime.fromisoformat(last_updated_raw)
+            except ValueError:
+                last_updated = None
+        return EntityState(response["state"], unit, last_updated)
 
     def _fetch_history_events(self, sensor_id: str,
                               start_timestamp: datetime,

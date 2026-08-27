@@ -661,6 +661,16 @@
             font-size: 13px;
             fill: #091747;
         }
+        /* font-size hier ist in SVG-Nutzereinheiten (das viewBox skaliert bei width:100% als Ganzes
+           herunter) - auf schmalen Bildschirmen schrumpft der Text dadurch proportional mit der
+           Breite mit und wird unleserlich klein. Auf mobil deutlich groesser ansetzen, damit er nach
+           dem Herunterskalieren noch lesbar bleibt (buildEnergyFlowLabel nutzt em-basierte
+           Zeilenabstaende, die automatisch mitwachsen). */
+        @media (max-width: 600px) {
+            .energyFlowLabel {
+                font-size: 16px;
+            }
+        }
         /* Die Leitung selbst ist immer sichtbar (grau, statisch) - siehe buildFlowConduit. Fliesst
            Strom, wandern zusaetzlich kleine leuchtende Punkte darauf entlang (buildFlowDots), statt
            wie frueher die ganze Linie gruen gestrichelt zu animieren. */

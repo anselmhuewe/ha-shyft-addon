@@ -1231,8 +1231,8 @@ def is_car_ready_to_charge(config):
         return False
 
 
-def _read_mapped_numeric(config, sensor_key):
-    "Generischer Live-Zahlenwert fuer einen beliebigen sensorMappings-Eintrag, konvertiert in die erwartete Einheit (siehe convert_to_expected_unit) - None, wenn nicht zugeordnet/unavailable/nicht lesbar. Fuer das Energiefluss-Widget (siehe compute_energy_flow_data), das viele verschiedene Sensoren auf dieselbe Art liest."
+def _read_mapped_entity_state(config, sensor_key):
+    "Shared Lookup: rohes EntityState (state/unit/last_updated) fuer einen sensorMappings-Eintrag - None, wenn nicht zugeordnet/unavailable/nicht lesbar. Basis fuer _read_mapped_numeric/_read_mapped_raw_state und (fuers Energiefluss-Widget) die *_ts-Varianten, die zusaetzlich den Zeitstempel brauchen."
     entity_id = config.get("sensorMappings", {}).get(sensor_key, "")
     if not entity_id:
         return None
@@ -1240,6 +1240,17 @@ def _read_mapped_numeric(config, sensor_key):
         state = homeassistant_adapter.load_entity_state(entity_id)
         if state.state in (None, "unknown", "unavailable", ""):
             return None
+        return state
+    except Exception:
+        return None
+
+
+def _read_mapped_numeric(config, sensor_key):
+    "Generischer Live-Zahlenwert fuer einen beliebigen sensorMappings-Eintrag, konvertiert in die erwartete Einheit (siehe convert_to_expected_unit) - None, wenn nicht zugeordnet/unavailable/nicht lesbar. Fuer das Energiefluss-Widget (siehe compute_energy_flow_data), das viele verschiedene Sensoren auf dieselbe Art liest."
+    state = _read_mapped_entity_state(config, sensor_key)
+    if state is None:
+        return None
+    try:
         value, _ = convert_to_expected_unit(sensor_key, state.state, state.unit)
         return float(value)
     except Exception:
@@ -1248,16 +1259,16 @@ def _read_mapped_numeric(config, sensor_key):
 
 def _read_mapped_raw_state(config, sensor_key):
     "Wie _read_mapped_numeric, aber der rohe (unkonvertierte) Zustandswert als String - fuer Modus-/An-Aus-Sensoren ohne numerische Einheit."
-    entity_id = config.get("sensorMappings", {}).get(sensor_key, "")
-    if not entity_id:
+    state = _read_mapped_entity_state(config, sensor_key)
+    return state.state if state is not None else None
+
+
+def _read_mapped_last_updated_iso(config, sensor_key):
+    "ISO-Zeitstempel (last_updated), zu dem HA den zugeordneten Sensor zuletzt aktualisiert hat - None, wenn nicht zugeordnet/nicht lesbar/kein Zeitstempel geliefert. Fuers Energiefluss-Widget (Staleness-Anzeige, siehe compute_energy_flow_data)."
+    state = _read_mapped_entity_state(config, sensor_key)
+    if state is None or state.last_updated is None:
         return None
-    try:
-        state = homeassistant_adapter.load_entity_state(entity_id)
-        if state.state in (None, "unknown", "unavailable", ""):
-            return None
-        return state.state
-    except Exception:
-        return None
+    return state.last_updated.isoformat()
 
 
 def _read_mapped_bool_on(config, sensor_key):
@@ -1406,21 +1417,31 @@ def compute_energy_flow_data():
 
     result = {}
 
+    # last_updated-Zeitstempel je Rohsensor (ISO, oder None wenn nicht zugeordnet/nicht lesbar) -
+    # das Frontend zeigt sie nur an, wenn der Wert aelter als ein Schwellwert ist (1min fuer die
+    # Wechselrichter-Fluesse Grid/Household/Battery/PV, 10min fuer die uebrigen HA-Sensorwerte
+    # z.B. Waermepumpe/Auto - siehe buildEnergyFlowLabel/formatKwWithTimestamp im Frontend). Werte,
+    # die NICHT direkt aus HA kommen (z.B. der Strompreis aus _read_current_price_info, der aus dem
+    # shyft-Cache stammt), bekommen bewusst keinen Zeitstempel.
     pv_configured = configured("wechselrichter")
     price_info = _read_current_price_info() if pv_configured else None
     result["grid"] = {
         "configured": pv_configured,
         "kw": _read_mapped_numeric(config, "photovoltaic_powerflow_grid") if pv_configured else None,
+        "updatedAt": _read_mapped_last_updated_iso(config, "photovoltaic_powerflow_grid") if pv_configured else None,
         "priceCent": price_info["cent"] if price_info else None,
         "priceLevel": price_info["level"] if price_info else None,
     }
     result["pv"] = {
         "configured": pv_configured,
         "kw": _read_mapped_numeric(config, "photovoltaic_powerflow_pv") if pv_configured else None,
+        "updatedAt": _read_mapped_last_updated_iso(config, "photovoltaic_powerflow_pv") if pv_configured else None,
     }
     load_kw = _read_mapped_numeric(config, "photovoltaic_powerflow_load") if pv_configured else None
+    load_updated_at = _read_mapped_last_updated_iso(config, "photovoltaic_powerflow_load") if pv_configured else None
     wallbox_kw = _read_mapped_numeric(config, "wallbox_current_charging_power")
     heatpump_kw = _read_mapped_numeric(config, "heatpump_current_power_elect")
+    heatpump_kw_updated_at = _read_mapped_last_updated_iso(config, "heatpump_current_power_elect")
     residual_kw = load_kw
     if load_kw is not None and (wallbox_kw is not None or heatpump_kw is not None):
         residual_kw = max(0.0, load_kw - (wallbox_kw or 0.0) - (heatpump_kw or 0.0))
@@ -1428,6 +1449,9 @@ def compute_energy_flow_data():
         "configured": pv_configured,
         "kw": load_kw,
         "residualKw": residual_kw,
+        # Der Haushaltsstrom-Wert kommt direkt vom Haus-Verbrauchssensor (photovoltaic_powerflow_load)
+        # - dessen Zeitstempel gilt, auch wenn residualKw rechnerisch noch Wallbox/Waermepumpe abzieht.
+        "updatedAt": load_updated_at,
     }
 
     battery_configured = configured("batterie")
@@ -1436,6 +1460,7 @@ def compute_energy_flow_data():
         "soc": _read_mapped_numeric(config, "battery_state_of_charge") if battery_configured else None,
         "mode": _read_mapped_raw_state(config, "battery_storage_command_mode") if battery_configured else None,
         "kw": _normalized_battery_kw(config, _read_mapped_numeric(config, "photovoltaic_powerflow_battery")) if battery_configured and pv_configured else None,
+        "updatedAt": _read_mapped_last_updated_iso(config, "photovoltaic_powerflow_battery") if battery_configured and pv_configured else None,
     }
 
     heatpump_configured = configured("waermepumpe")
@@ -1447,12 +1472,16 @@ def compute_energy_flow_data():
         "dhwTankTempC": _read_mapped_numeric(config, "heatpump_dhw_tank_temp") if heatpump_configured else None,
         "targetTempC": _read_mapped_numeric(config, "heatpump_heating_target_temp_normal") if heatpump_configured else None,
         "kw": heatpump_kw if heatpump_configured else None,
+        # Ein einzelner Zeitstempel fuer die ganze Waermepumpen-Kachel (statt je Einzelwert) reicht -
+        # das Frontend zeigt hier ohnehin primaer den kW-Wert mit Zeitstempel an.
+        "updatedAt": heatpump_kw_updated_at if heatpump_configured else None,
     }
 
     raumtemperatur_configured = configured("raumtemperatur")
     result["indoorTemp"] = {
         "configured": raumtemperatur_configured,
         "tempC": _read_mapped_numeric(config, "heatpump_temp_indoor_measured") if raumtemperatur_configured else None,
+        "updatedAt": _read_mapped_last_updated_iso(config, "heatpump_temp_indoor_measured") if raumtemperatur_configured else None,
     }
 
     car_configured = configured("auto")
@@ -1469,6 +1498,7 @@ def compute_energy_flow_data():
     battery_capacity_kwh = config.get("carBatteryCapacityKwh")
     consumption_kwh_per_100km = config.get("carConsumptionKwhPer100km")
     car_soc = _read_mapped_numeric(config, "electronicvehicle_state_of_charge") if car_configured else None
+    car_soc_updated_at = _read_mapped_last_updated_iso(config, "electronicvehicle_state_of_charge") if car_configured else None
     range_km = None
     if car_soc is not None and battery_capacity_kwh and consumption_kwh_per_100km:
         try:
@@ -1482,12 +1512,18 @@ def compute_energy_flow_data():
         "wallboxConfigured": wallbox_configured,
         "state": car_state,
         "chargingKw": wallbox_kw if car_state == "charging" else None,
+        # SOC- und Lade-kW-Zeitstempel koennen auseinanderlaufen (unterschiedliche Sensoren) - das
+        # Frontend zeigt bei "lädt" den Lade-kW-Zeitstempel, sonst den SOC-Zeitstempel (siehe
+        # buildCarFlowValue im Frontend).
+        "updatedAt": car_soc_updated_at,
+        "chargingKwUpdatedAt": _read_mapped_last_updated_iso(config, "wallbox_current_charging_power") if car_state == "charging" else None,
     }
 
     sonstiger_verbraucher_configured = configured("sonstiger_verbraucher")
     result["sonstigerVerbraucher"] = {
         "configured": sonstiger_verbraucher_configured,
         "on": _read_mapped_bool_on(config, "sonstiger_verbraucher_switch_entity") if sonstiger_verbraucher_configured else None,
+        "updatedAt": _read_mapped_last_updated_iso(config, "sonstiger_verbraucher_switch_entity") if sonstiger_verbraucher_configured else None,
     }
 
     return result

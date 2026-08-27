@@ -3466,10 +3466,42 @@ function renderSkyIcon(cx, cy) {
 
 function buildEnergyFlowLabel(x, y, lines, {anchor = 'start'} = {}) {
     const text = svgEl('text', {x, y, 'text-anchor': anchor, class: 'energyFlowLabel'});
+    // dy in em (relativ zur aktuellen Schriftgroesse) statt fest 14px - so bleibt der Zeilenabstand
+    // korrekt, wenn .energyFlowLabel die Schriftgroesse per Media Query fuer mobile aendert (siehe
+    // index.html), statt dass sich mehrzeilige Labels dann ueberlappen.
     lines.forEach((line, i) => {
-        text.appendChild(svgEl('tspan', {x, dy: i === 0 ? 0 : 14}, [document.createTextNode(line)]));
+        text.appendChild(svgEl('tspan', {x, dy: i === 0 ? 0 : '1.2em'}, [document.createTextNode(line)]));
     });
     return text;
+}
+
+// Schwellwerte (Minuten), ab denen ein Sensorwert im Widget als "veraltet" gilt und sein
+// Zeitstempel eingeblendet wird - 1 Minute fuer die direkten Wechselrichter-Fluesse (Grid/
+// Household/Battery/PV), 10 Minuten fuer alle uebrigen HA-Sensorwerte im Bild (Waermepumpe, Auto
+// etc.). Werte, die nicht direkt aus HA kommen (z.B. der Strompreis), bekommen gar keinen
+// Zeitstempel - dafuer withStaleness einfach nicht aufrufen.
+const INVERTER_STALE_MINUTES = 1;
+const OTHER_STALE_MINUTES = 10;
+
+function isStale(updatedAtIso, thresholdMinutes) {
+    if (!updatedAtIso) return false;
+    const updatedAt = new Date(updatedAtIso);
+    if (Number.isNaN(updatedAt.getTime())) return false;
+    return (Date.now() - updatedAt.getTime()) / 60000 > thresholdMinutes;
+}
+
+function formatTimeHHMM(updatedAtIso) {
+    const d = new Date(updatedAtIso);
+    if (Number.isNaN(d.getTime())) return '';
+    return d.toLocaleTimeString('de-DE', {hour: '2-digit', minute: '2-digit'});
+}
+
+// Haengt " (HH:MM)" an valueText an, wenn der zugehoerige HA-Sensor (updatedAtIso, siehe
+// compute_energy_flow_data in app.py) aelter als thresholdMinutes ist - sonst valueText
+// unveraendert.
+function withStaleness(valueText, updatedAtIso, thresholdMinutes) {
+    if (!isStale(updatedAtIso, thresholdMinutes)) return valueText;
+    return `${valueText} (${formatTimeHHMM(updatedAtIso)})`;
 }
 
 function buildEnergyFlowWidget(data) {
@@ -3514,8 +3546,24 @@ function buildEnergyFlowWidget(data) {
     const sunCy = houseY - 95;
     svg.appendChild(renderSkyIcon(houseCx, sunCy));
 
+    // Fluss-Groessen der vier rechten Verbraucher vorab bestimmen (statt wie frueher erst weiter
+    // unten, im jeweils eigenen Block) - der Trunk (Haus -> Knotenpunkt, siehe busX unten) braucht
+    // sie schon fuer seine eigene, gemeinsame Punkte-Animation, bevor die einzelnen Zweige gezeichnet
+    // werden.
+    const heatpumpOn = !!(data.heatpump && data.heatpump.configured && data.heatpump.on);
+    const heatpumpFlowKw = heatpumpOn ? (data.heatpump.kw || 0.3) : 0;
+    const carCharging = !!(data.car && data.car.configured && data.car.state === 'charging');
+    const carFlowKw = carCharging ? (data.car.chargingKw || 0.5) : 0;
+    const sonstigerOn = !!(data.sonstigerVerbraucher && data.sonstigerVerbraucher.configured && data.sonstigerVerbraucher.on);
+    const sonstigerFlowKw = sonstigerOn ? 0.3 : 0;
+    const householdFlowKw = (data.household && data.household.configured) ? (data.household.residualKw ?? 0.1) : 0;
+
     if (data.grid && data.grid.configured) {
-        const pylonCx = 90, pylonCy = houseCy;
+        const pylonCx = houseX - 135, pylonCy = houseCy;
+        // Mast-Abstand zum Haus jetzt genauso gross wie Haus-Abstand zum Verbraucher-Knotenpunkt
+        // (busX unten, ebenfalls 135) statt fest bei 90 - der ungenutzte linke Rand wird per
+        // Crop aus dem viewBox entfernt (siehe svg.setAttribute weiter unten), die Grafik wird
+        // dadurch insgesamt schmaler.
         svg.appendChild(buildPylonIcon(pylonCx, pylonCy));
         // Bagatellgrenze 0.1 kW (absolut): darunter bleibt die Leitung sichtbar, aber grau/inaktiv
         // statt einen kaum vorhandenen Fluss zu animieren.
@@ -3525,18 +3573,20 @@ function buildEnergyFlowWidget(data) {
         // Widget bleibt immer hell (siehe .energyFlowWidget), Dark-Mode-Toene waeren hier blass.
         const priceColor = data.grid.priceLevel === 'hoch' ? '#e74c3c' : data.grid.priceLevel === 'niedrig' ? 'var(--color-accent)' : '#5b6b8c';
         const priceText = data.grid.priceCent !== null ? `${data.grid.priceCent.toLocaleString('de-DE')} Cent` : '';
-        // Oberhalb des Masts statt darunter - dort war der Abstand zum Haus zu knapp und der Text
-        // reichte teils ins Hausbild hinein
-        svg.appendChild(buildEnergyFlowLabel(pylonCx, pylonCy - 70, [formatKwValue(data.grid.kw)], {anchor: 'middle'}));
+        // kW-Wert mittig ueber der Leitung (horizontaler Fluss -> Beschriftung ueber der Leitung),
+        // Mittelpunkt der Strecke Mast->Haus. Der Strompreis bleibt dagegen wie urspruenglich ueber
+        // dem Mast selbst - er ist kein Leitungs-Fluesswert, sondern eine dem Mast zugeordnete
+        // Zusatzinfo.
+        const gridLabelX = (pylonCx + 24 + houseX) / 2;
+        svg.appendChild(buildEnergyFlowLabel(gridLabelX, pylonCy - 34, [withStaleness(formatKwValue(data.grid.kw), data.grid.updatedAt, INVERTER_STALE_MINUTES)], {anchor: 'middle'}));
         if (priceText) {
+            // Kein Zeitstempel hier - der Strompreis kommt nicht direkt aus HA (siehe
+            // _read_current_price_info in app.py), sondern aus dem shyft-Cache.
             svg.appendChild(svgEl('text', {x: pylonCx, y: pylonCy - 54, 'text-anchor': 'middle', class: 'energyFlowLabel', fill: priceColor}, [document.createTextNode(priceText)]));
         }
     }
     if (data.pv && data.pv.configured) {
-        svg.appendChild(buildEnergyFlowLabel(houseCx + 30, houseY + 24, [formatKwValue(data.pv.kw)]));
-    }
-    if (data.household && data.household.configured && data.household.kw !== null) {
-        svg.appendChild(buildEnergyFlowLabel(houseX + houseVisibleW - 60, houseY + houseH - 26, [formatKwValue(data.household.kw)]));
+        svg.appendChild(buildEnergyFlowLabel(houseCx + 30, houseY + 24, [withStaleness(formatKwValue(data.pv.kw), data.pv.updatedAt, INVERTER_STALE_MINUTES)]));
     }
 
     if (data.battery && data.battery.configured) {
@@ -3549,7 +3599,10 @@ function buildEnergyFlowWidget(data) {
         const line = buildFlowLine(houseCx, houseY + houseH, batteryCx, batteryCy - batteryImgH / 2 - 4, data.battery.kw, {reversed: (data.battery.kw || 0) < 0});
         if (line) svg.appendChild(line);
         svg.appendChild(buildFlowImage(batteryImageFor(data.battery.soc), batteryCx, batteryCy, 240, 448, batteryImgW));
-        const batteryLines = [formatKwValue(data.battery.kw), `${Math.round(data.battery.soc ?? 0)} %`];
+        // Neben dem Icon (nicht ueber der Leitung) - Haus->Batterie ist ein senkrechter Fluss, und
+        // bei vertikalen Fluessen soll die Beschriftung daneben stehen statt darueber (anders als bei
+        // horizontalen Fluessen wie Grid/Trunk).
+        const batteryLines = [withStaleness(formatKwValue(data.battery.kw), data.battery.updatedAt, INVERTER_STALE_MINUTES), `${Math.round(data.battery.soc ?? 0)} %`];
         if (data.battery.mode) batteryLines.push(data.battery.mode);
         // Vertikal mittig am Icon ausgerichtet statt an einem festen Offset - haengt sonst davon ab,
         // ob 2 oder 3 Zeilen Text anfallen (mit/ohne Modus).
@@ -3557,20 +3610,17 @@ function buildEnergyFlowWidget(data) {
         svg.appendChild(buildEnergyFlowLabel(batteryCx + batteryImgW / 2 + 10, batteryLabelY, batteryLines));
     }
 
-    const columnX = 900;
+    // Etwas weiter links als vorher (860 statt 900) - schafft rechts mehr Puffer fuer die
+    // mehrzeiligen Status-Labels (Waermepumpe/Auto), die auf mobil eine groessere Schriftgroesse
+    // bekommen (siehe .energyFlowLabel Media Query in index.html) und sonst ueber den rechten
+    // viewBox-Rand hinauslaufen wuerden.
+    const columnX = 830;
     const houseRightX = houseX + houseVisibleW;
     // Gemeinsamer Bus "Haus -> Verbraucher": alle vier rechten Verbraucher gehen vom selben
     // Hausaustrittspunkt ab und teilen sich eine senkrechte Spalte (der "Trunk"), bevor sie zur
     // jeweiligen Reihe abzweigen - so laeuft z.B. die Waermepumpen-Leitung nicht quer durchs
     // Wallbox-Icon. Trunk kurz (Haus ist ja jetzt zentriert, direkt daneben), individuelle Leitungen
     // von busX bis dicht ans jeweilige Geraet-Icon heran entsprechend laenger.
-    //
-    // Der Trunk selbst ist nur EINE statische graue Leitung ohne eigene Punkte-Animation - jeder
-    // Verbraucher zeichnete vorher seine eigene komplette Leitung inklusive dieses gemeinsamen
-    // Stuecks, wodurch dort mehrere unabhaengig animierte Punktgruppen (mit ihrer jeweils eigenen,
-    // unterschiedlichen Geschwindigkeit) uebereinanderlagen - das wirkte wie ungleichmaessiger
-    // Fluss auf ein- und derselben Leitung. Nur noch die individuellen Zweige (busX -> Geraet)
-    // bekommen Punkte, mit ihrer eigenen, dafuer eindeutigen Geschwindigkeit.
     const busX = houseRightX + 135;
     const consumerAnchorX = columnX - 10;
     // Reihen symmetrisch um houseCy verteilt (Hausmitte liegt jetzt zwischen den Reihen), statt
@@ -3578,22 +3628,44 @@ function buildEnergyFlowWidget(data) {
     const rowYHeatpump = houseCy - 180, rowYCar = houseCy - 60, rowYOther = houseCy + 60, rowYHousehold = houseCy + 180;
     const trunkTopY = Math.min(rowYHeatpump, rowYCar, rowYOther, rowYHousehold);
     const trunkBottomY = Math.max(rowYHeatpump, rowYCar, rowYOther, rowYHousehold);
-    svg.appendChild(svgEl('path', {d: `M ${houseRightX},${houseCy} H ${busX}`, class: 'energyFlowConduit', fill: 'none'}));
-    svg.appendChild(svgEl('path', {d: `M ${busX},${trunkTopY} V ${trunkBottomY}`, class: 'energyFlowConduit', fill: 'none'}));
+    // Der Trunk (Haus -> Knotenpunkt -> obere/untere Haelfte des Verbraucher-Bus) bekommt jetzt
+    // wieder eine eigene, durchgehende Punkte-Animation, statt komplett statisch/punktlos zu sein.
+    // Anders als vorher NICHT mehr eine einzige Linie ueber die volle Bus-Hoehe (das erzwang eine
+    // Fliessrichtung fuer alle vier Zweige gleichzeitig, obwohl die obere Haelfte "nach oben" und
+    // die untere "nach unten" abzweigt) - stattdessen 3 Segmente, jedes mit seiner eigenen,
+    // plausiblen Geschwindigkeit: der horizontale Hausaustritt (Summe aller aktiven Verbraucher),
+    // sowie je ein Segment vom Knotenpunkt nach oben (Waermepumpe+Auto) bzw. nach unten
+    // (Sonstiges+Haushaltsstrom).
+    const trunkKw = heatpumpFlowKw + carFlowKw + sonstigerFlowKw + householdFlowKw;
+    const trunkLine = buildFlowLineFromPath(buildFlowPath(houseRightX, houseCy, busX, houseCy), trunkKw, {thresholdKw: 0.1});
+    if (trunkLine) svg.appendChild(trunkLine);
+    const upperSpineKw = heatpumpFlowKw + carFlowKw;
+    const upperSpine = buildFlowLineFromPath(`M ${busX},${houseCy} V ${trunkTopY}`, upperSpineKw, {thresholdKw: 0.1});
+    if (upperSpine) svg.appendChild(upperSpine);
+    const lowerSpineKw = sonstigerFlowKw + householdFlowKw;
+    const lowerSpine = buildFlowLineFromPath(`M ${busX},${houseCy} V ${trunkBottomY}`, lowerSpineKw, {thresholdKw: 0.1});
+    if (lowerSpine) svg.appendChild(lowerSpine);
+    // Der Haushaltsstrom-Wert (Gesamt-Hausverbrauch) gehoert auf diesen Trunk, nicht auf den
+    // separaten Zweig unten - dort steht ohnehin nur der Rest-Anteil (residualKw), der die
+    // Wallbox-/Waermepumpen-Leistung schon herausrechnet.
+    if (data.household && data.household.configured) {
+        const trunkLabelX = (houseRightX + busX) / 2;
+        svg.appendChild(buildEnergyFlowLabel(trunkLabelX, houseCy - 14, [withStaleness(formatKwValue(data.household.kw), data.household.updatedAt, INVERTER_STALE_MINUTES)], {anchor: 'middle'}));
+    }
 
     if (data.heatpump && data.heatpump.configured) {
         const rowY = rowYHeatpump;
         // Leitung immer sichtbar (grau, siehe buildFlowDots), Punkte nur wenn sie tatsaechlich
         // laeuft - sonst wirkt es so, als flösse Strom zu einem ausgeschalteten Geraet.
-        const line = buildFlowLineFromPath(buildFlowPath(busX, rowY, consumerAnchorX, rowY), data.heatpump.on ? (data.heatpump.kw || 0.3) : 0);
+        const line = buildFlowLineFromPath(buildFlowPath(busX, rowY, consumerAnchorX, rowY), heatpumpFlowKw);
         if (line) svg.appendChild(line);
         const hp = buildFlowImage('assets/heatpump.jpg', columnX, rowY, 499, 492, 80);
         if (data.heatpump.on) hp.setAttribute('class', 'energyFlowPulse');
         svg.appendChild(hp);
         const statusLines = [
-            data.heatpump.on === null ? 'Wärmepumpe' : (data.heatpump.on ? 'An' : 'Aus'),
+            withStaleness(data.heatpump.on === null ? 'Wärmepumpe' : (data.heatpump.on ? 'An' : 'Aus'), data.heatpump.updatedAt, OTHER_STALE_MINUTES),
             data.heatpump.targetTempC !== null ? `Soll: ${formatTemp(data.heatpump.targetTempC)}` : null,
-            data.indoorTemp && data.indoorTemp.configured && data.indoorTemp.tempC !== null ? `Ist: ${formatTemp(data.indoorTemp.tempC)}` : null,
+            data.indoorTemp && data.indoorTemp.configured && data.indoorTemp.tempC !== null ? withStaleness(`Ist: ${formatTemp(data.indoorTemp.tempC)}`, data.indoorTemp.updatedAt, OTHER_STALE_MINUTES) : null,
             data.heatpump.dhwTankTempC !== null ? `WW-Speicher: ${formatTemp(data.heatpump.dhwTankTempC)}` : null,
             (data.heatpump.heatingOn !== null || data.heatpump.supplyTempC !== null)
                 ? `Heizung: ${data.heatpump.heatingOn ? 'An' : 'Aus'}` + (data.heatpump.supplyTempC !== null ? ` (${formatTemp(data.heatpump.supplyTempC)})` : '')
@@ -3605,10 +3677,9 @@ function buildEnergyFlowWidget(data) {
     if (data.car && data.car.configured) {
         const rowY = rowYCar;
         const isAway = data.car.state === 'away';
-        const isCharging = data.car.state === 'charging';
-        // Leitung immer sichtbar (auch "abwesend"), Punkte nur waehrend des Ladens - Ladeleistung
-        // notfalls Platzhalter 0.5 kW, falls die Wallbox-Ladeleistung selbst nicht zugeordnet/lesbar ist.
-        const line = buildFlowLineFromPath(buildFlowPath(busX, rowY, consumerAnchorX, rowY), isCharging ? (data.car.chargingKw || 0.5) : 0);
+        const isCharging = carCharging;
+        // Leitung immer sichtbar (auch "abwesend"), Punkte nur waehrend des Ladens.
+        const line = buildFlowLineFromPath(buildFlowPath(busX, rowY, consumerAnchorX, rowY), carFlowKw);
         if (line) svg.appendChild(line);
         // Ein Bild pro Zustand (das "verbunden"-Bild zeigt Auto+Wallbox bereits zusammen) statt
         // zweier separater Icons - siehe ev-connected.jpg/ev-away.jpg
@@ -3616,7 +3687,7 @@ function buildEnergyFlowWidget(data) {
         const carTargetW = 130;
         svg.appendChild(buildFlowImage(carImg.href, columnX, rowY, carImg.w, carImg.h, carTargetW));
         const carLines = [];
-        if (data.car.soc !== null) carLines.push(`Ladestand: ${Math.round(data.car.soc)} %` + (data.car.rangeKm !== null ? ` (${data.car.rangeKm} km)` : ''));
+        if (data.car.soc !== null) carLines.push(withStaleness(`Ladestand: ${Math.round(data.car.soc)} %` + (data.car.rangeKm !== null ? ` (${data.car.rangeKm} km)` : ''), data.car.updatedAt, OTHER_STALE_MINUTES));
         if (data.car.state === 'away') carLines.push('abwesend');
         else if (data.car.state === 'charging') carLines.push('lädt');
         else if (data.car.state === 'connected') carLines.push('eingesteckt');
@@ -3625,13 +3696,13 @@ function buildEnergyFlowWidget(data) {
 
     if (data.sonstigerVerbraucher && data.sonstigerVerbraucher.configured) {
         const rowY = rowYOther;
-        const on = !!data.sonstigerVerbraucher.on;
+        const on = sonstigerOn;
         // Groesse des Stecker-Icons (siehe buildPlugIcon) - Leitungsende und Label-Start muessen
         // sich danach richten, sonst laufen beide ins vergroesserte Icon hinein statt daneben.
         const plugScale = 2.4, plugHalfWidth = 11 * plugScale;
         // Leitung immer sichtbar; kein Leistungssensor fuer "Sonstiger Verbraucher" vorgesehen (nur
         // an/aus) - fester Platzhalterwert nur fuer eine plausible Punkte-Geschwindigkeit, wenn an.
-        const line = buildFlowLineFromPath(buildFlowPath(busX, rowY, columnX - plugHalfWidth - 6, rowY), on ? 0.3 : 0);
+        const line = buildFlowLineFromPath(buildFlowPath(busX, rowY, columnX - plugHalfWidth - 6, rowY), sonstigerFlowKw);
         if (line) svg.appendChild(line);
         svg.appendChild(buildPlugIcon(columnX, rowY, on, plugScale));
         svg.appendChild(buildEnergyFlowLabel(columnX + plugHalfWidth + 10, rowY + 4, ['Sonstiges Gerät']));
@@ -3639,11 +3710,17 @@ function buildEnergyFlowWidget(data) {
 
     if (data.household && data.household.configured) {
         const rowY = rowYHousehold;
-        const line = buildFlowLineFromPath(buildFlowPath(busX, rowY, consumerAnchorX, rowY), data.household.residualKw ?? 0.1);
+        const line = buildFlowLineFromPath(buildFlowPath(busX, rowY, consumerAnchorX, rowY), householdFlowKw);
         if (line) svg.appendChild(line);
         svg.appendChild(buildLightningIcon(columnX, rowY));
         svg.appendChild(buildEnergyFlowLabel(columnX + 24, rowY + 4, ['Haushaltsstrom']));
     }
+
+    // Ungenutzten linken Rand wegschneiden, der durch den naeher heranger ueckten Mast frei wurde
+    // (siehe pylonCx oben) - verschiebt nur den viewBox-Ursprung nach rechts, alle Koordinaten
+    // rechts davon (Haus, Bus, Verbraucher-Spalte) bleiben unveraendert gueltig.
+    const viewCropLeft = Math.max(0, (houseX - 135) - 90);
+    svg.setAttribute('viewBox', `${viewCropLeft} 0 ${VIEW_W - viewCropLeft} ${VIEW_H}`);
 
     wrapper.appendChild(svg);
     return wrapper;

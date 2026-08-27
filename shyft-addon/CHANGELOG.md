@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.0.44.15
+
+* Energiefluss-Widget, mehrere Anpassungen:
+  * Strommast steht jetzt so nah am Haus wie der Knotenpunkt (Abstand Mast↔Haus = Abstand Haus↔Knotenpunkt) - die Grafik ist dadurch insgesamt schmaler geworden. Der dadurch frei gewordene linke Rand wird per `viewBox`-Crop entfernt statt als leerer Platz zu bleiben.
+  * Der Haushaltsstrom-Gesamtverbrauch (`household.kw`) fehlte bisher komplett in der Grafik - steht jetzt als eigene Beschriftung auf dem Stromfluss Haus→Knotenpunkt.
+  * Die durchgehende Punkte-Animation vom Haus bis zum jeweiligen Verbraucher war seit der letzten Überarbeitung unterbrochen (der gemeinsame Bus-Abschnitt war rein statisch). Jetzt bekommt der Bus wieder eine eigene, durchgehende Animation - aufgeteilt in 3 Segmente (Haus→Knoten, Knoten→oben für Wärmepumpe/Auto, Knoten→unten für Sonstiges/Haushalt) mit jeweils plausibler eigener Geschwindigkeit, statt einer einzelnen Linie über den ganzen Bus mit uneindeutiger Fließrichtung.
+  * Zeitstempel-Anzeige bei veralteten Sensorwerten: Wechselrichter-Flüsse (Grid/PV/Battery/Household) zeigen den Zeitstempel, sobald der Wert älter als 1 Minute ist; übrige HA-Sensorwerte (Wärmepumpe, Innentemperatur, Auto-Ladestand) ab 10 Minuten. Werte, die nicht direkt aus HA kommen (Strompreis), bleiben unverändert ohne Zeitstempel. Dafür führt `homeassistant_adapter.EntityState` jetzt `last_updated` mit, und `compute_energy_flow_data` liefert es je Feld mit aus.
+  * kW-Wert bei horizontalen Flüssen (Grid, Haus→Knoten) steht jetzt mittig über der Leitung statt daneben; bei vertikalen Flüssen (Batterie) bleibt die Beschriftung wie zuvor neben dem Icon. Strompreis bleibt über dem Mast, Batterie-SOC/-Modus bleiben neben dem Batterie-Icon.
+  * Mobile Lesbarkeit: `.energyFlowLabel`-Schriftgröße wird unter 600px per Media Query von 13px auf 16px angehoben (Zeilenabstand jetzt `em`-basiert statt fest 14px, damit mehrzeilige Labels dabei nicht überlappen); Verbraucher-Spalte etwas nach links gerückt, damit die längeren Statuszeilen (Wärmepumpe/Auto) bei größerer Schrift nicht über den rechten Rand hinauslaufen.
+
 ## 0.0.44.14
 
 * **Kritischer Fix:** `compute_car_presence_forecast(hours=...)` hatte zwei interne Schleifen, die trotz des neuen `hours`-Parameters weiterhin fest auf `48` verdrahtet waren - bei `hours=49` (der übliche Fall, `optimizer_period=48 + 1` Puffer) führte das zu `IndexError: list index out of range` in `build_ev_optimizer_fields`. Dadurch schlug **jeder** `/trigger`-Aufruf (Button "Verbindung testen" wie auch der stündliche Cron-Job) mit HTTP 500 fehl - der stündliche Bubble-Sync lief seit Einführung in 0.0.44.8 nie erfolgreich durch. Live per `ha_get_logs(source=supervisor)` gefunden und verifiziert.
