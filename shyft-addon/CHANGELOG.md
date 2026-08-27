@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.0.44.11
+
+* Energiefluss-Widget, weitere Korrekturen: Haus jetzt wirklich horizontal UND vertikal zentriert (breiterer viewBox, 1100x560 statt 940x560), größerer Abstand Haus↔Sonne/Batterie, Sonne nochmal größer. Sammelbus/Trunk in einen eigenen, statischen (grauen, punktlosen) Pfad ausgelagert - vorher zeichnete jeder Verbraucher seine eigene Kopie des gemeinsamen Leitungsstücks mit, wodurch sich dort mehrere unabhängig schnelle Punktanimationen überlagerten und "ungleichmäßig" wirkten. Trunk auf Rückmeldung hin nochmal deutlich verlängert, Knotenpunkt nach rechts verschoben. Fließgeschwindigkeit insgesamt deutlich gedrosselt (wirkte zu unruhig). "Sonstiges Gerät"-Leitung/Label laufen nicht mehr ins vergrößerte Stecker-Icon hinein. Batterie-Beschriftung jetzt vertikal mittig am Icon (statt festem Offset, unabhängig von 2 oder 3 Textzeilen). Auto-Ladestand-Zeile beginnt jetzt mit "Ladestand: ".
+* Konfigurationsseite: "Optimierungszeitraum" und "Gaspreis" (gehört zu einem noch nicht implementierten "Blockheizkraftwerk"-Gerät) haben vorerst kein Eingabefeld mehr - Optimierungszeitraum bleibt serverseitig beim Default 48h. "Allgemein"-Block heißt jetzt "Strom".
+* Wechselrichter-Sensor-Dropdowns (PV-Powerflow) filtern jetzt nach Einheit (W/kW, plus "nicht erreichbar") statt nach `device_class: power` - Letzteres ließ auch binäre Sensoren mit HAs `binary_sensor`-Device-Class "power" (an/aus "zieht Strom", kein numerischer Wert) fälschlich durch.
+* Neues, kompakteres Icon in der Navigationsleiste (ersetzt das breitere Wortmarken-Logo).
+
 ## 0.0.44.10
 
 * Energiefluss-Widget überarbeitet: Sonne jetzt zentriert über dem Haus (statt fester Position), Batterie senkrecht darunter/darunter der Sonne. Sammelbus zu den Verbrauchern kürzer, individuelle Leitungen zum jeweiligen Gerät länger. Leitungen sind jetzt immer sichtbar (grau/inaktiv statt komplett unsichtbar), auch wenn gerade kein Strom fließt (z.B. Wärmepumpe aus, Auto abwesend) - Netzleitung nutzt dafür eine Bagatellgrenze von 0.1 kW. Neue Animation: statt einer grün gestrichelten Linie wandern kleine leuchtende Punkte auf der (grauen) Leitung entlang, Geschwindigkeit logarithmisch zur Leistung (Bezugspunkt 10 kW, keine harte Obergrenze). "Sonstiges Gerät"-Icon vergrößert, war im Vergleich zu den anderen Geräte-Icons zu klein.
