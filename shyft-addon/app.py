@@ -903,7 +903,7 @@ def sync_all_auto_managed_scripts():
     config = _read_current_config()
     sensor_mappings = config.get("sensorMappings", {})
     for control_key, control in AUTO_MANAGED_CONTROLS.items():
-        if control["type"] != "number":
+        if control["type"] != "number" or control_key in AUTOMATION_ONLY_CONTROL_KEYS:
             continue
         try:
             sync_number_script(control_key, sensor_mappings.get(control["sensor_field"], ""))
@@ -918,7 +918,7 @@ def execute_auto_managed_action(control_key, phase, target_value):
     the config and trigger_ha_automation)."""
     config = _read_current_config()
     control = AUTO_MANAGED_CONTROLS[control_key]
-    variant = config.get("controlVariant", {}).get(control_key, "direct")
+    variant = resolve_control_variant(control_key, config)
 
     if variant == "ha_automation":
         actor_mappings = config.get("actorMappings", {})
@@ -1898,6 +1898,11 @@ def writeConfig():
     for control_key, control in AUTO_MANAGED_CONTROLS.items():
         if control["type"] != "number":
             continue
+        # automationOnly controls (see AUTOMATION_ONLY_CONTROL_KEYS) have no sensor_field/script to
+        # sync - their actorMappings entry holds the user's HA-automation entity id instead, set
+        # directly by the frontend, and must NOT be overwritten with the (empty) script_entity_id here.
+        if control_key in AUTOMATION_ONLY_CONTROL_KEYS:
+            continue
         entity_id = data.get("sensorMappings", {}).get(control["sensor_field"], "")
         try:
             script_entity_id = sync_number_script(control_key, entity_id)
@@ -1949,7 +1954,7 @@ def statusAutoManagedControl(control_key):
         return jsonify({"error": "unbekannte Steuerung"}), 404
 
     config = _read_current_config()
-    variant = config.get("controlVariant", {}).get(control_key, "direct")
+    variant = resolve_control_variant(control_key, config)
 
     if variant == "ha_automation":
         # No sensor/entity to poll a value from - the addon only ever fires the user's
@@ -1997,7 +2002,7 @@ def testAutoManagedControl(control_key):
         return jsonify({"success": False, "message": "unbekannte Steuerung"}), 404
 
     config = _read_current_config()
-    variant = config.get("controlVariant", {}).get(control_key, "direct")
+    variant = resolve_control_variant(control_key, config)
     body = request.get_json(force=True, silent=True) or {}
 
     if variant == "ha_automation":
@@ -2137,6 +2142,20 @@ AUTO_MANAGED_CONTROLS = {
         "actor_keys": ["consumer_on", "consumer_off"],
     },
 }
+
+# These two have no direct-entity-control alternative (mirrors automationOnly in
+# AUTO_MANAGED_CONTROLS in www/app.js, which also removed their sensorField/config UI) - always
+# resolves to "ha_automation" below regardless of what's stored under controlVariant, so a stale
+# "direct" value from before this change (or simply never having been set) can't make
+# execute_auto_managed_action try to use the now-nonexistent sensor_field entity.
+AUTOMATION_ONLY_CONTROL_KEYS = {"pv_feed_in_limit", "consumption_limit_14a"}
+
+
+def resolve_control_variant(control_key, config):
+    "Single place that decides 'direct' vs 'ha_automation' for an AUTO_MANAGED_CONTROLS entry - see AUTOMATION_ONLY_CONTROL_KEYS."
+    if control_key in AUTOMATION_ONLY_CONTROL_KEYS:
+        return "ha_automation"
+    return config.get("controlVariant", {}).get(control_key, "direct")
 
 # Reverse lookup from shyft-power's "Action Name" to the auto-managed control that handles it,
 # derived from ACTION_TYPE_TOGGLE_KEYS so the Action Name string lives in exactly one place.

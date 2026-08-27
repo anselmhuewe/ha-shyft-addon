@@ -93,14 +93,6 @@ const helpinformation = {
         label: 'Wallbox: Auto verbunden?',
         description: 'Ja / Nein, je nachdem ob der Ladestecker deiner Wallbox im Auto eingesteckt ist oder nicht.'
     },
-    'photovoltaic_feed_in_limit_entity': {
-        label: 'PV: Einspeisung begrenzen (aktuell)',
-        description: 'Die Home-Assistant-Entity (number), über die shyft-power die Einspeiseleistung deiner PV-Anlage direkt begrenzt - keine eigene Automation nötig.'
-    },
-    'photovoltaic_consumption_limit_entity': {
-        label: 'Verbrauch begrenzen §14a (aktuell)',
-        description: 'Die Home-Assistant-Entity (number), über die shyft-power deinen Verbrauch im Rahmen von §14a EnWG direkt begrenzt - keine eigene Automation nötig.'
-    },
     'sonstiger_verbraucher_switch_entity': {
         label: 'Sonstiger Verbraucher (aktuell)',
         description: 'Die Home-Assistant-Entity (switch), über die shyft-power den sonstigen Verbraucher direkt ein-/ausschaltet - keine eigene Automation nötig.'
@@ -179,8 +171,6 @@ const SENSOR_ENTITY_FILTERS = {
     'electronicvehicle_state_of_charge': {type: 'device_class', value: 'battery'},
     'wallbox_current_charging_power': {type: 'device_class', value: 'power'},
     'wallbox_plugged': {type: 'exclude_units', values: ['kWh', 'kW', 'W', 'A', 'V', '°C', '%', 'Wh']},
-    'photovoltaic_feed_in_limit_entity': {type: 'none'},
-    'photovoltaic_consumption_limit_entity': {type: 'none'},
     'sonstiger_verbraucher_switch_entity': {type: 'state_on_off'},
 }
 
@@ -188,7 +178,7 @@ const INTEGRATION_SECTIONS = [
     {
         key: 'wechselrichter',
         label: 'Wechselrichter',
-        sensors: ['photovoltaic_powerflow_pv', 'photovoltaic_powerflow_load', 'photovoltaic_powerflow_grid', 'photovoltaic_powerflow_battery', 'photovoltaic_feed_in_limit_entity', 'photovoltaic_consumption_limit_entity'],
+        sensors: ['photovoltaic_powerflow_pv', 'photovoltaic_powerflow_load', 'photovoltaic_powerflow_grid', 'photovoltaic_powerflow_battery'],
         actions: ['pv_feed_in_limit', 'consumption_limit_14a'],
         requiresDeviceClass: 'power'
     },
@@ -288,8 +278,10 @@ const ACTION_TOGGLE_POSTFIX = "_toggle";
 // mirrors the Home Assistant entity domains handled in AUTO_MANAGED_CONTROLS in app.py.
 const AUTO_MANAGED_CONTROLS = [
     {key: 'heating_target_temp', type: 'number', sensorField: 'heatpump_heating_target_temp_normal', actionKeys: ['heating_target_temp'], titleLabel: 'Heizung Soll-Temperatur (aktuell)', unit: '°C', step: 1},
-    {key: 'pv_feed_in_limit', type: 'number', sensorField: 'photovoltaic_feed_in_limit_entity', actionKeys: ['pv_feed_in_limit'], titleLabel: 'PV: Einspeisung begrenzen (aktuell)', unit: '', step: 1, hasAutomationVariant: true},
-    {key: 'consumption_limit_14a', type: 'number', sensorField: 'photovoltaic_consumption_limit_entity', actionKeys: ['consumption_limit_14a'], titleLabel: 'Verbrauch begrenzen §14a (aktuell)', unit: '', step: 1, hasAutomationVariant: true},
+    // Reine Steuerungen ohne Sensor-Gegenstueck (kein sensorField, keine "Direkt steuern"-Option) -
+    // siehe automationOnly in buildAutoManagedNumberControl.
+    {key: 'pv_feed_in_limit', type: 'number', actionKeys: ['pv_feed_in_limit'], titleLabel: 'PV: Einspeisung begrenzen', unit: '', step: 1, automationOnly: true},
+    {key: 'consumption_limit_14a', type: 'number', actionKeys: ['consumption_limit_14a'], titleLabel: 'Verbrauch begrenzen §14a', unit: '', step: 1, automationOnly: true},
     {key: 'consumer_on_off', type: 'switch', sensorField: 'sonstiger_verbraucher_switch_entity', actionKeys: ['consumer_on', 'consumer_off'], titleLabel: 'Sonstiger Verbraucher (aktuell)', hasAutomationVariant: true},
 ];
 const AUTO_MANAGED_ACTION_KEYS = new Set(AUTO_MANAGED_CONTROLS.flatMap(c => c.actionKeys));
@@ -1709,7 +1701,11 @@ function buildAutoManagedNumberControl(control) {
     const {title, checkmark} = buildAutoActionTitle(control, control.actionKeys[0]);
     wrapper.appendChild(title);
 
-    let variant = control.hasAutomationVariant ? ((configData['controlVariant'] || {})[control.key] || 'direct') : 'direct';
+    // automationOnly controls (kein sensorField, keine "Direkt steuern"-Option) sind immer
+    // ha_automation - kein Dropdown noetig, es gibt ja nur die eine Variante.
+    let variant = control.automationOnly ? 'ha_automation'
+        : control.hasAutomationVariant ? ((configData['controlVariant'] || {})[control.key] || 'direct')
+        : 'direct';
 
     let variantSelect = null;
     let automationRow = null;
@@ -1728,7 +1724,8 @@ function buildAutoManagedNumberControl(control) {
         variantTbody.appendChild(variantRow);
         variantTable.appendChild(variantTbody);
         wrapper.appendChild(variantTable);
-
+    }
+    if (control.hasAutomationVariant || control.automationOnly) {
         automationRow = buildAutomationEntityRow('HA-Automation auswählen',
             'Zum Auslösen dieser Aktion kannst du deine selber erstellte Automation hinterlegen. Der Zielwert für die Aktion wird als {{ target }} von Shyft übergeben.',
             control.key + '_ha_automation_entity', (configData['actorMappings'] || {})[control.key], 'z.B. automation.meine_aktion');
@@ -2062,13 +2059,11 @@ function buildBranchedStageFields(idPrefix, stageKey, label, tooltip, candidateS
     const wrapper = document.createElement('div');
     wrapper.className = 'carChargeStage';
 
-    if (showDot) {
-        // marks this step on the continuous vertical line running down .carChargeStages (see CSS)
-        // - positioned relative to this stage's own top so it lines up with "1./2./3. ..."
-        // regardless of how tall the previous stages ended up being. Single-stage recipes (e.g.
-        // "Warmwasserbereitung") aren't wrapped in .carChargeStages and skip this - a lone dot with
-        // no line to sit on would misleadingly suggest a multi-step process.
-        const stageDot = document.createElement('span');
+    // marks this step on the continuous vertical line running down .carChargeStages (see CSS).
+    // Single-stage recipes (e.g. "Warmwasserbereitung") aren't wrapped in .carChargeStages and
+    // skip this - a lone dot with no line to sit on would misleadingly suggest a multi-step process.
+    const stageDot = showDot ? document.createElement('span') : null;
+    if (stageDot) {
         stageDot.className = 'carChargeStageDot';
         wrapper.appendChild(stageDot);
     }
@@ -2104,6 +2099,15 @@ function buildBranchedStageFields(idPrefix, stageKey, label, tooltip, candidateS
     serviceTbody.appendChild(serviceRow);
     serviceTable.appendChild(serviceTbody);
     wrapper.appendChild(serviceTable);
+
+    if (stageDot) {
+        // Exact vertical center of the "1./2./3. ..." label cell, measured after the tree is
+        // actually connected to the document (offsetTop/offsetHeight are 0 otherwise) - replaces a
+        // previous fixed top:0.65em guess that didn't quite line up with the real text baseline.
+        requestAnimationFrame(() => {
+            stageDot.style.top = (serviceLabelCell.offsetTop + serviceLabelCell.offsetHeight / 2) + 'px';
+        });
+    }
 
     const fieldsContainer = document.createElement('div');
     wrapper.appendChild(fieldsContainer);

@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.0.44.13
+
+* "Auto laden"-Stufen (1./2./3.): Der Verbindungspunkt auf der Linie sitzt jetzt exakt vertikal mittig zur Zeile, statt einen festen `top`-Wert zu schätzen, der nicht immer genau passte.
+* "PV: Einspeisung begrenzen" und "Verbrauch begrenzen §14a" sind jetzt reine Steuerungen ohne Sensor-Gegenstück: aus der Sensor-Zuordnungstabelle entfernt, "Direkt steuern" als Variante entfernt (nur noch HA-Automation). Serverseitig über `AUTOMATION_ONLY_CONTROL_KEYS`/`resolve_control_variant` abgesichert, damit ein evtl. gespeicherter "direct"-Wert nicht mehr greift. Dabei einen Bug gefunden und mitbehoben: Der Konfigurations-Speichern-Endpunkt hätte bei *jedem* Speichern die HA-Automation-Zuordnung dieser beiden Steuerungen unbeabsichtigt auf leer zurückgesetzt (Skript-Sync-Schleife lief unconditional für alle number-Steuerungen).
+
 ## 0.0.44.12
 
 * Sensor-Zuordnungsfelder (Konfigurationsseite): eigener, immer sichtbarer Dropdown-Pfeil (ganz rechts) statt des browsereigenen, der bei `list=`-Inputs bisher nur bei Hover deutlich zu sehen war (und in Firefox gar nicht existiert). "×"-Löschen-Button sitzt jetzt links daneben, beide vertikal mittig am Feld ausgerichtet.
