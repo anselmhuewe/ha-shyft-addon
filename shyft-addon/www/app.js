@@ -601,6 +601,7 @@ const loadConfiguration = async (event) => {
             allEntityOptionsElement.appendChild(option);
         }
 
+        renderGeneralConfigSection();
         renderIntegrationSections();
         renderNotificationSection();
         renderConfigWarnings();
@@ -725,6 +726,26 @@ function watchForErrorsToExpand(bodyDiv, onError) {
         }
     });
     observer.observe(bodyDiv, {attributes: true, attributeFilter: ['class'], subtree: true});
+}
+
+// Site-weite staticConfig-Felder, die zu keinem einzelnen Geraet gehoeren (Gaspreis, Stromtarife,
+// Optimierungszeitraum) - eigener Block oberhalb der Geraete-Kacheln statt einer davon.
+function renderGeneralConfigSection() {
+    const container = document.getElementById('config');
+    if (!container) {
+        return;
+    }
+    container.innerHTML = '';
+
+    const heading = document.createElement('h2');
+    heading.textContent = 'Allgemein';
+    container.appendChild(heading);
+
+    container.appendChild(buildOptimizationPeriodsField());
+    container.appendChild(buildCoPriceGasField());
+    container.appendChild(buildElectricityBaseLoadField());
+    container.appendChild(buildElectricityPriceBuyField());
+    container.appendChild(buildElectricityPriceSellField());
 }
 
 function renderIntegrationSections() {
@@ -1046,10 +1067,24 @@ function renderSectionBody(bodyDiv, section, entryIds) {
         }
         if (section.key === 'batterie') {
             bodyDiv.appendChild(buildBatteryFlowSignOverrideField());
+            bodyDiv.appendChild(buildBatteryCapacityField());
+            bodyDiv.appendChild(buildBatterySocMinField());
         }
         if (section.key === 'auto') {
             bodyDiv.appendChild(buildCarBatteryCapacityField());
             bodyDiv.appendChild(buildCarConsumptionField());
+            bodyDiv.appendChild(buildEvSocNormalField());
+        }
+        if (section.key === 'waermepumpe') {
+            bodyDiv.appendChild(buildHpTypeField());
+            bodyDiv.appendChild(buildHpBuildingSizeField());
+            bodyDiv.appendChild(buildHpEnergyEfficiencyField());
+            bodyDiv.appendChild(buildHpDhwTankSizeField());
+            bodyDiv.appendChild(buildHpMaxPowerField());
+            bodyDiv.appendChild(buildHpMaxSupplyTempField());
+            bodyDiv.appendChild(buildHpHeatingBufferField());
+            bodyDiv.appendChild(buildHpHeatingCurveLevelField());
+            bodyDiv.appendChild(buildHpHeatingCurveSlopeField());
         }
     }
 
@@ -1205,6 +1240,268 @@ function buildConfigNumberField({label, tooltip, id, configKey, placeholder, ste
     table.appendChild(tbody);
     wrapper.appendChild(table);
     return wrapper;
+}
+
+// Generic dropdown config field, analogous to buildConfigNumberField - options is a list of
+// [value, label] pairs. value is what gets stored in configData[configKey] (and later sent to
+// shyft-power as-is, since these values are meant to match Bubble Option Set entries exactly).
+function buildConfigSelectField({label, tooltip, id, configKey, options, defaultValue = null}) {
+    const wrapper = document.createElement('div');
+    const table = document.createElement('table');
+    const tbody = document.createElement('tbody');
+    const row = document.createElement('tr');
+    const labelCell = document.createElement('td');
+    labelCell.textContent = label;
+    labelCell.appendChild(buildTooltip(tooltip));
+    const valueCell = document.createElement('td');
+    const select = document.createElement('select');
+    select.id = id;
+    select.className = 'sensorInput';
+    for (const [value, text] of options) {
+        const option = document.createElement('option');
+        option.value = value;
+        option.textContent = text;
+        select.appendChild(option);
+    }
+    select.value = configData[configKey] ?? defaultValue ?? options[0][0];
+    select.addEventListener('change', () => {
+        configData[configKey] = select.value;
+        autoSave();
+    });
+    valueCell.appendChild(select);
+    row.appendChild(labelCell);
+    row.appendChild(valueCell);
+    tbody.appendChild(row);
+    table.appendChild(tbody);
+    wrapper.appendChild(table);
+    return wrapper;
+}
+
+// staticConfig fields shyft-power's optimizer needs but that aren't live sensor readings - asked
+// once here in the addon instead of via a Bubble form. Values match Bubble Option Set entries
+// exactly (see shyft's SiteEntityRepository mapToXyz switch statements) so the Java server can
+// look them up unchanged. See addon_sensor_data_JSON/staticConfig in sync_site_data (app.py).
+
+function buildHpBuildingSizeField() {
+    return buildConfigSelectField({
+        label: 'Wohnfläche',
+        tooltip: 'Beheizte Wohnfläche des Gebäudes - wird für die Heizlastberechnung benötigt.',
+        id: 'hp_building_size',
+        configKey: 'hpBuildingSize',
+        options: ['80 m²', '130 m²', '180 m²', '230 m²', '300 m²', '400 m²'].map(v => [v, v]),
+        defaultValue: '130 m²',
+    });
+}
+
+function buildHpEnergyEfficiencyField() {
+    return buildConfigSelectField({
+        label: 'Energieeffizienz Gebäude',
+        tooltip: 'Grobe Einstufung der Gebäudedämmung (Energiebedarf pro m² und Jahr) - je niedriger, desto besser gedämmt.',
+        id: 'hp_energy_efficiency',
+        configKey: 'hpEnergyEfficiency',
+        options: [
+            'A (40 kWh/a/m²)', 'B (60 kWh/a/m²)', 'C (90 kWh/a/m²)',
+            'D (120 kWh/a/m²)', 'E (160 kWh/a/m²)', 'F (200 kWh/a/m²)',
+        ].map(v => [v, v]),
+        defaultValue: 'C (90 kWh/a/m²)',
+    });
+}
+
+function buildHpDhwTankSizeField() {
+    return buildConfigSelectField({
+        label: 'Warmwasser-Speichergröße',
+        tooltip: 'Größe des Warmwasserspeichers deiner Wärmepumpe.',
+        id: 'hp_dhw_tank_size',
+        configKey: 'hpDhwTankSize',
+        options: [
+            'sehr klein (100 Liter)', 'klein (200 Liter)', 'mittel (300 Liter)',
+            'groß (400 Liter)', 'sehr groß (600 Liter)', 'riesig (1.000 Liter)',
+        ].map(v => [v, v]),
+        defaultValue: 'klein (200 Liter)',
+    });
+}
+
+function buildHpMaxPowerField() {
+    return buildConfigSelectField({
+        label: 'Max. elektrische Leistung',
+        tooltip: 'Maximale elektrische Leistungsaufnahme deiner Wärmepumpe.',
+        id: 'hp_max_power',
+        configKey: 'hpMaxPower',
+        options: ['klein (4 kW)', 'mittel (6 kW)', 'groß (8 kW)', 'sehr groß (12 kW)'].map(v => [v, v]),
+        defaultValue: 'mittel (6 kW)',
+    });
+}
+
+function buildHpTypeField() {
+    return buildConfigSelectField({
+        label: 'Wärmepumpen-Typ',
+        tooltip: 'Bauart deiner Wärmepumpe.',
+        id: 'hp_type',
+        configKey: 'hpType',
+        options: [['Air-Air', 'Luft-Luft'], ['Air-Water', 'Luft-Wasser'], ['Brine-Water', 'Sole-Wasser']],
+        defaultValue: 'Air-Water',
+    });
+}
+
+// Bubble's Option Set entries here encode the numeric buffer factor directly in the value
+// ("name__zahl", e.g. "mittel__0.2") so new options can be added on the Bubble side without a
+// server code change (see HpHeatingBuffer.java's extractValueFromName fallback) - the label shown
+// here is just the "name" part, the "__zahl" suffix is invisible to the user.
+function buildHpHeatingBufferField() {
+    return buildConfigSelectField({
+        label: 'Heizungspuffer',
+        tooltip: 'Wie viel Spielraum die Optimierung beim Vorheizen der Innentemperatur oberhalb der Soll-Temperatur nutzen darf, bevor sie stoppt.',
+        id: 'hp_heating_buffer',
+        configKey: 'hpHeatingBuffer',
+        options: [['gering__0.1', 'gering'], ['mittel__0.2', 'mittel'], ['hoch__0.3', 'hoch']],
+        defaultValue: 'mittel__0.2',
+    });
+}
+
+function buildHpMaxSupplyTempField() {
+    return buildConfigNumberField({
+        label: 'Max. Vorlauftemperatur (°C)',
+        tooltip: 'Höchste Vorlauftemperatur, die deine Wärmepumpe liefern kann.',
+        id: 'hp_max_supply_temp',
+        configKey: 'hpMaxSupplyTempC',
+        placeholder: 'z.B. 55',
+        defaultValue: 55,
+        step: '1',
+    });
+}
+
+function buildHpHeatingCurveLevelField() {
+    return buildConfigNumberField({
+        label: 'Heizkurve, Niveau',
+        tooltip: 'Niveau-Parameter deiner Heizkurve (aus der Wärmepumpen-App/-Anzeige übernehmen).',
+        id: 'hp_heating_curve_level',
+        configKey: 'hpHeatingCurveLevel',
+        placeholder: 'z.B. 0',
+        defaultValue: 0,
+    });
+}
+
+function buildHpHeatingCurveSlopeField() {
+    return buildConfigNumberField({
+        label: 'Heizkurve, Steigung',
+        tooltip: 'Steigungs-Parameter deiner Heizkurve (aus der Wärmepumpen-App/-Anzeige übernehmen).',
+        id: 'hp_heating_curve_slope',
+        configKey: 'hpHeatingCurveSlope',
+        placeholder: 'z.B. 1.2',
+        defaultValue: 1.2,
+    });
+}
+
+function buildBatteryCapacityField() {
+    return buildConfigNumberField({
+        label: 'Kapazität (kWh)',
+        tooltip: 'Gesamtkapazität deines Hausspeichers.',
+        id: 'battery_capacity_kwh',
+        configKey: 'batteryCapacityKwh',
+        placeholder: 'z.B. 10',
+        defaultValue: 10,
+        step: '0.5',
+    });
+}
+
+function buildBatterySocMinField() {
+    return buildConfigNumberField({
+        label: 'Min. Ladestand (%)',
+        tooltip: 'Ladestand, unter den die Optimierung deinen Hausspeicher nicht entladen soll.',
+        id: 'battery_soc_min',
+        configKey: 'batterySocMinPercent',
+        placeholder: 'z.B. 10',
+        defaultValue: 10,
+        step: '1',
+    });
+}
+
+function buildEvSocNormalField() {
+    return buildConfigSelectField({
+        label: 'Ziel-Ladestand (normal)',
+        tooltip: 'Ladestand, den die Optimierung im Normalfall für dein Auto anstrebt.',
+        id: 'ev_soc_normal',
+        configKey: 'evSocNormal',
+        options: ['10 %', '20 %', '30 %', '40 %', '50 %', '60 %', '70 %', '80 %'].map(v => [v, v]),
+        defaultValue: '10 %',
+    });
+}
+
+// Site-weite Felder ohne eigene Geräte-Kachel - siehe buildGeneralConfigSection.
+function buildCoPriceGasField() {
+    return buildConfigNumberField({
+        label: 'Gaspreis (€/kWh)',
+        tooltip: 'Dein aktueller Gaspreis, falls du eine zweite Wärmequelle (z.B. Gas-Zusatzheizung) hast.',
+        id: 'co_price_gas',
+        configKey: 'coPriceGas',
+        placeholder: 'z.B. 0.10',
+        defaultValue: 0.1,
+        step: '0.01',
+    });
+}
+
+function buildOptimizationPeriodsField() {
+    return buildConfigNumberField({
+        label: 'Optimierungszeitraum (Stunden)',
+        tooltip: 'Wie viele Stunden im Voraus die Optimierung plant.',
+        id: 'optimization_periods_site',
+        configKey: 'optimizationPeriodsSite',
+        placeholder: 'z.B. 48',
+        defaultValue: 48,
+        step: '1',
+    });
+}
+
+// Unlike the other option-set fields (which Java matches via plain switch-statements, no Bubble
+// call needed), Electricity Base Load's options live in a dynamic Bubble table
+// (ElectricityBaseLoadValueRepository) - looking it up by label would mean a Bubble call even in
+// the new JSON-based flow. So the value (kWh/year) is embedded directly in "label__value" form
+// instead, same trick as buildHpHeatingBufferField/HpHeatingBuffer.java's extractValueFromName -
+// Java's future JSON parser needs the equivalent fallback for this field.
+function buildElectricityBaseLoadField() {
+    return buildConfigSelectField({
+        label: 'Grundlast Strom (Jahr)',
+        tooltip: 'Dein jährlicher Stromverbrauch ohne Wärmepumpe/EV/Batterie (Haushaltsgeräte, Beleuchtung etc.).',
+        id: 'electricity_base_load',
+        configKey: 'electricityBaseLoad',
+        options: [
+            ['sehr niedrig__1314', 'sehr niedrig'],
+            ['niedrig__2628', 'niedrig'],
+            ['mittel__4380', 'mittel'],
+            ['hoch__6570', 'hoch'],
+            ['noch höher__8760', 'noch höher'],
+            ['sehr hoch__13140', 'sehr hoch'],
+        ],
+        defaultValue: 'niedrig__2628',
+    });
+}
+
+function buildElectricityPriceBuyField() {
+    return buildConfigSelectField({
+        label: 'Strompreis (Einkauf)',
+        tooltip: 'Dein ungefährer Strompreis, falls du keinen dynamischen Tarif hast.',
+        id: 'electricity_price_buy',
+        configKey: 'electricityPriceBuy',
+        options: [
+            'sehr niedrig (20 Cent)', 'niedrig (25 Cent)', 'mittel (30 Cent)',
+            'hoch (35 Cent)', 'sehr hoch (40 Cent)',
+        ].map(v => [v, v]),
+        defaultValue: 'mittel (30 Cent)',
+    });
+}
+
+function buildElectricityPriceSellField() {
+    return buildConfigSelectField({
+        label: 'Einspeisevergütung',
+        tooltip: 'Deine ungefähre Einspeisevergütung für PV-Überschuss.',
+        id: 'electricity_price_sell',
+        configKey: 'electricityPriceSell',
+        options: [
+            'sehr niedrig (6 Cent)', 'niedrig (8 Cent)', 'mittel (10 Cent)',
+            'hoch (15 Cent)', 'sehr hoch (20 Cent)',
+        ].map(v => [v, v]),
+        defaultValue: 'mittel (10 Cent)',
+    });
 }
 
 function buildCarBatteryCapacityField() {

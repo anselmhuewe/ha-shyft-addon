@@ -68,6 +68,17 @@ def convert_to_expected_unit(key, state, unit):
     except (TypeError, ValueError):
         return state, unit
 
+# Bubble's EvBatterySize Option Set only has these discrete steps (see EvBatterySize.java in the
+# shyft repo) - carBatteryCapacityKwh is a free-form number, so it gets snapped to the nearest one.
+EV_BATTERY_SIZE_OPTIONS_KWH = [10, 15, 20, 30, 40, 50, 60, 70, 80, 90, 100]
+
+
+def snap_to_nearest_ev_battery_option(capacity_kwh):
+    "Rounds a raw EV battery capacity (kWh) to the nearest Bubble EvBatterySize option text (e.g. 62 -> '60 kWh')."
+    nearest = min(EV_BATTERY_SIZE_OPTIONS_KWH, key=lambda v: abs(v - float(capacity_kwh)))
+    return f"{nearest} kWh"
+
+
 # does the mapping between homeassistant and shyft/ bubble
 class SyncService:
 
@@ -88,6 +99,43 @@ class SyncService:
 
         pv_history = self.homeassistant_adapter.load_entity_history(pv_entity_id, start_timestamp, end_timestamp)
         return self.shyft_adapter.send_pv_history(pv_history)
+
+    def collect_static_config(self):
+        "Builds {Bubble field name: value} from the addon's own config fields (see www/app.js's buildHpXyzField/buildBatteryXyz/buildElectricityXyz/... for where each is entered) - the staticConfig half of the addon_sensor_data_JSON payload."
+        data = self._load_config()
+        static_config = {}
+
+        def add(bubble_name, config_key):
+            value = data.get(config_key)
+            if value is not None and value != "":
+                static_config[bubble_name] = value
+
+        add("HP - Type", "hpType")
+        add("HP - Building Size", "hpBuildingSize")
+        add("HP - Energy Efficiency Building", "hpEnergyEfficiency")
+        add("HP - DHW Tank Size", "hpDhwTankSize")
+        add("HP - Max. Power", "hpMaxPower")
+        add("HP - Max Supply Temp", "hpMaxSupplyTempC")
+        add("HP - Heating Buffer", "hpHeatingBuffer")
+        add("HP - Heating Curve, level", "hpHeatingCurveLevel")
+        add("HP - Heating Curve, slope", "hpHeatingCurveSlope")
+        add("B - Capacity", "batteryCapacityKwh")
+        add("B - SOC min", "batterySocMinPercent")
+        add("EV - SOC Normal", "evSocNormal")
+        add("CO - Price Gas", "coPriceGas")
+        add("Optimization Periods Site", "optimizationPeriodsSite")
+        add("Electricity Base Load (kWh, year)", "electricityBaseLoad")
+        add("Electricity Price Buy", "electricityPriceBuy")
+        add("Electricity Price Sell", "electricityPriceSell")
+
+        # EV - Battery Size (kWh) is asked as a plain number (carBatteryCapacityKwh, also used
+        # locally for the range display) rather than a second redundant dropdown - snapped here to
+        # the nearest Bubble EvBatterySize option text.
+        ev_capacity = data.get("carBatteryCapacityKwh")
+        if ev_capacity:
+            static_config["EV - Battery Size (kWh)"] = snap_to_nearest_ev_battery_option(ev_capacity)
+
+        return static_config
 
     def collect_live_values(self):
         "Builds {Bubble field name: value} for every sensor with a currently readable value - the liveValues half of the addon_sensor_data_JSON payload sent via update_site_addon (replaces the old sync_all_sensors/addon_sensor_data sensor_list workflow)."

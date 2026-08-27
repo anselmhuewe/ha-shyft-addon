@@ -134,15 +134,17 @@ def triggerEndpoint():
     return sync_site_data()
 
 def sync_site_data():
-    "Hourly addon->Bubble sync (also the manual 'Verbindung testen' trigger): builds the consolidated liveValues+EV-forecast JSON and sends it via update_site_addon - replaces the old per-sensor addon_sensor_data workflow."
+    "Hourly addon->Bubble sync (also the manual 'Verbindung testen' trigger): builds the consolidated staticConfig+liveValues+EV-forecast JSON and sends it via update_site_addon - replaces the old per-sensor addon_sensor_data workflow."
     config = _read_current_config()
+    optimizer_period = int(config.get("optimizationPeriodsSite") or 48)
+    static_config = sync_service.collect_static_config()
     live_values = sync_service.collect_live_values()
-    ev_fields = build_ev_optimizer_fields(config, optimizer_period=48)
+    ev_fields = build_ev_optimizer_fields(config, optimizer_period=optimizer_period)
     if ev_fields:
         live_values["ev_usage_h"] = ev_fields["ev_usage_h"]
         live_values["d_ev_kwh"] = ev_fields["d_ev_kwh"]
         live_values["baseTime"] = ev_fields["baseTime"]
-    payload = json.dumps({"liveValues": live_values})
+    payload = json.dumps({"staticConfig": static_config, "liveValues": live_values})
     return shyft_adapter.send_site_data(payload)
 
 def sync_pv_history():

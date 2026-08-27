@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.0.44.9
+
+* Neue Konfigurationsfelder für die `staticConfig`-Hälfte von `addon_sensor_data_JSON`: Wärmepumpe (Typ, Wohnfläche, Energieeffizienz, Warmwasser-Speichergröße, max. Leistung, max. Vorlauftemperatur, Heizkurve Niveau/Steigung, Heizungspuffer), Batterie (Kapazität, min. Ladestand), Auto (Ziel-Ladestand normal - Batteriegröße nutzt weiterhin das bestehende Zahlenfeld, wird beim Senden auf die nächstgelegene Bubble-Option gerundet) sowie ein neuer "Allgemein"-Block oberhalb der Geräte-Kacheln (Optimierungszeitraum, Gaspreis, Stromgrundlast, Strompreis Ein-/Verkauf). `Electricity Base Load` bettet den kWh-Wert direkt im gesendeten Text ein (`label__wert`, wie bei `Heating Buffer`), damit Java dafür keinen zusätzlichen Bubble-Aufruf braucht.
+* Behebt nebenbei einen nicht geschlossenen `<div id="config"/>` in `index.html`, der `deviceSections`/`notificationSection`/den Aktions-Bereich unbeabsichtigt als Kinder verschachtelt hätte, sobald dieser Block erstmals befüllt wird.
+
 ## 0.0.44.8
 
 * Ersetzt den alten stündlichen `addon_sensor_data`-Sensor-Sync (`sync_all_sensors`/`send_sensor_values`) durch `update_site_addon`: `sync_site_data()` baut jetzt `liveValues` (aus den bestehenden Sensor-Mappings, `SyncService.collect_live_values()`) plus die EV-Prognosefelder (`build_ev_optimizer_fields`, siehe 0.0.44.7) zu einem `addon_sensor_data_JSON` zusammen und schickt das als Ganzes. Betrifft sowohl den stündlichen Cron-Job als auch den "Verbindung testen"-Button (`/trigger`). `staticConfig` fehlt hier noch (keine Konfigurationsseite dafür), `update_location_addon` (Latitude/Longitude) ist ebenfalls noch nicht angebunden.
