@@ -2665,6 +2665,14 @@ function buildMappingRow(key, value, helpInfo, valuePostfix, datalistId, showLiv
     });
     inputWrapper.appendChild(clearButton);
 
+    // Eigener, immer sichtbarer Pfeil ganz rechts (siehe .inputDropdownArrow) - rein dekorativ,
+    // pointer-events:none reicht Klicks ans Input darunter durch.
+    const dropdownArrow = document.createElement('span');
+    dropdownArrow.className = 'inputDropdownArrow';
+    dropdownArrow.textContent = '▾';
+    dropdownArrow.setAttribute('aria-hidden', 'true');
+    inputWrapper.appendChild(dropdownArrow);
+
     const valueCell = document.createElement('td');
     valueCell.appendChild(inputWrapper);
 

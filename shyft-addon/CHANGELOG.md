@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.0.44.12
+
+* Sensor-Zuordnungsfelder (Konfigurationsseite): eigener, immer sichtbarer Dropdown-Pfeil (ganz rechts) statt des browsereigenen, der bei `list=`-Inputs bisher nur bei Hover deutlich zu sehen war (und in Firefox gar nicht existiert). "×"-Löschen-Button sitzt jetzt links daneben, beide vertikal mittig am Feld ausgerichtet.
+
 ## 0.0.44.11
 
 * Energiefluss-Widget, weitere Korrekturen: Haus jetzt wirklich horizontal UND vertikal zentriert (breiterer viewBox, 1100x560 statt 940x560), größerer Abstand Haus↔Sonne/Batterie, Sonne nochmal größer. Sammelbus/Trunk in einen eigenen, statischen (grauen, punktlosen) Pfad ausgelagert - vorher zeichnete jeder Verbraucher seine eigene Kopie des gemeinsamen Leitungsstücks mit, wodurch sich dort mehrere unabhängig schnelle Punktanimationen überlagerten und "ungleichmäßig" wirkten. Trunk auf Rückmeldung hin nochmal deutlich verlängert, Knotenpunkt nach rechts verschoben. Fließgeschwindigkeit insgesamt deutlich gedrosselt (wirkte zu unruhig). "Sonstiges Gerät"-Leitung/Label laufen nicht mehr ins vergrößerte Stecker-Icon hinein. Batterie-Beschriftung jetzt vertikal mittig am Icon (statt festem Offset, unabhängig von 2 oder 3 Textzeilen). Auto-Ladestand-Zeile beginnt jetzt mit "Ladestand: ".

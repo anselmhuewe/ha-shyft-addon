@@ -89,11 +89,28 @@
             position: relative;
         }
         .clearableInput .sensorInput {
-            padding-right: 2em;
+            padding-right: 3.4em;
+        }
+        /* Eigener, immer sichtbarer Pfeil statt des browsereigenen (Chrome zeigt seinen fuer
+           list=-Inputs standardmaessig nur bei Hover deutlich an, Firefox hat gar keinen) - ganz
+           rechts, klickbar nur durchgereicht ans darunterliegende Input (pointer-events: none),
+           das oeffnet die Vorschlagsliste beim Fokussieren ohnehin von selbst. */
+        .clearableInput .sensorInput::-webkit-calendar-picker-indicator {
+            display: none;
+        }
+        .inputDropdownArrow {
+            position: absolute;
+            right: 0.5em;
+            top: 50%;
+            transform: translateY(-50%);
+            color: var(--color-text-secondary);
+            font-size: 0.75em;
+            line-height: 1;
+            pointer-events: none;
         }
         .clearInputButton {
             position: absolute;
-            right: 0.4em;
+            right: 1.7em;
             top: 50%;
             transform: translateY(-50%);
             background: none;
