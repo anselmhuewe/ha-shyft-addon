@@ -1,4 +1,4 @@
-from sync_service import SyncService, convert_to_expected_unit
+from sync_service import SyncService, convert_to_expected_unit, compute_wallbox_max_kw
 from homeassistant_adapter import HomeAssistantAdapter
 from shyft_adapter import ShyftAdapter
 from live_entity_watcher import LiveEntityWatcher
@@ -144,6 +144,9 @@ def sync_site_data():
         live_values["ev_usage_h"] = ev_fields["ev_usage_h"]
         live_values["d_ev_kwh"] = ev_fields["d_ev_kwh"]
         live_values["baseTime"] = ev_fields["baseTime"]
+    wb_p_min = compute_wb_p_min()
+    if wb_p_min is not None:
+        live_values["WB - p_min"] = wb_p_min
     payload = json.dumps({"staticConfig": static_config, "liveValues": live_values})
     try:
         _update_input_csv_health(config, live_values)
@@ -1251,21 +1254,10 @@ def execute_car_charge_stop(target_kw=None):
 # ob shyft-power selbst gerade eine "Auto laden"-Aktion laufen hat (siehe run_pv_surplus_charging_tick).
 PV_SURPLUS_MIN_KW = CHARGING_MIN_AMPS * CHARGING_PHASE_VOLTAGE / 1000  # 6A/1-phasig als Untergrenze
 
-WALLBOX_MAX_PHASES_DEFAULT = 3
-WALLBOX_MAX_CURRENT_AMPS_DEFAULT = 16
-
-
-def compute_wallbox_max_kw(config):
-    """Obergrenze fuer jeden an die Wallbox gesendeten Ziel-kW-Wert, aus den vom Nutzer
-    hinterlegten Wallbox-Eckdaten ("Max. Anzahl an Phasen", "Max. Stromstärke (pro Phase)") - ohne
-    dieses Cap kann die additive PV-Ueberschussladen-Rueckfalllogik (siehe
-    _run_pv_surplus_charging_tick_impl) unbegrenzt weiter aufaddieren, solange eingespeist wird,
-    und Werte weit jenseits dessen anfordern, was die Wallbox ueberhaupt zulaesst (beobachtet: ein
-    Regelkreis, der bis 180A/41kW hochlief und von Easee durchgehend mit 400 Bad Request abgelehnt
-    wurde, da das Stromkreislimit dort bei 40A lag)."""
-    phases = config.get("wallboxMaxPhases") or WALLBOX_MAX_PHASES_DEFAULT
-    amps = config.get("wallboxMaxCurrentAmps") or WALLBOX_MAX_CURRENT_AMPS_DEFAULT
-    return phases * amps * CHARGING_PHASE_VOLTAGE / 1000
+# compute_wallbox_max_kw lebt jetzt in sync_service.py (siehe Import oben) - collect_static_config
+# braucht dieselbe Berechnung fuers addon_sensor_data_JSON ("WB - Max Charging Power"), ohne dass
+# sync_service.py dafuer aus app.py importieren muesste (Zirkelimport, app.py importiert bereits
+# aus sync_service.py).
 
 
 def read_grid_power_kw(config):
@@ -1482,6 +1474,46 @@ def _read_current_price_info():
     else:
         level = "mittel"
     return {"cent": price_cent, "level": level}
+
+
+# Sicherheitsmarge auf den guenstigsten noch bevorstehenden Strompreis - siehe compute_wb_p_min.
+WB_P_MIN_MARGIN_EUR = 0.02
+
+
+def compute_wb_p_min():
+    """WB - p_min (EUR/kWh): der niedrigste ab jetzt (inklusive der aktuellen Stunde) noch
+    bevorstehende Strompreis (p_buy, aus demselben gecachten input.csv wie
+    _read_current_price_info) plus WB_P_MIN_MARGIN_EUR Sicherheitsmarge. Vergangene Stunden werden
+    bewusst ausgeschlossen - der Optimierer soll die Wallbox nie unterhalb dessen laden lassen, was
+    ohnehin der guenstigste noch kommende Preis waere. None, wenn noch kein Cache vorhanden oder
+    keine bevorstehende Stunde darin abgedeckt ist."""
+    try:
+        with open(DASHBOARD_CACHE_PATH, "r") as f:
+            cache = json.load(f)
+    except Exception:
+        return None
+    input_csv = cache.get("input_csv")
+    creation_date_ms = cache.get("creation_date")
+    if not input_csv or creation_date_ms is None:
+        return None
+    start = datetime.fromtimestamp(creation_date_ms / 1000, tz=timezone.utc).replace(minute=0, second=0, microsecond=0)
+    now_hour = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
+    current_index = int((now_hour - start).total_seconds() // 3600)
+    try:
+        rows = list(csv.DictReader(io.StringIO(input_csv), delimiter=";"))
+    except Exception:
+        return None
+    upcoming_prices = []
+    for i, row in enumerate(rows):
+        if i < current_index:
+            continue  # Stunden vor "jetzt" ausschliessen
+        try:
+            upcoming_prices.append(float(row.get("p_buy") or 0))
+        except (TypeError, ValueError):
+            continue
+    if not upcoming_prices:
+        return None
+    return round(min(upcoming_prices) + WB_P_MIN_MARGIN_EUR, 4)
 
 
 def compute_energy_flow_data():

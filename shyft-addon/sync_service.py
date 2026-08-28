@@ -79,6 +79,31 @@ def snap_to_nearest_ev_battery_option(capacity_kwh):
     return f"{nearest} kWh"
 
 
+# Lebt hier (statt in app.py, wo es urspruenglich stand) statt umgekehrt zu importieren, damit
+# collect_static_config es fuers addon_sensor_data_JSON ("WB - Max Charging Power") mitschicken
+# kann, ohne einen Zirkelimport zu app.py zu erzeugen (app.py importiert bereits aus sync_service.py,
+# nicht umgekehrt) - app.py importiert diese Funktion jetzt von hier fuer die
+# PV-Ueberschussladen-Rueckfalllogik (siehe compute_wallbox_max_kw-Aufrufe dort).
+CHARGING_PHASE_VOLTAGE = 230
+WALLBOX_MAX_PHASES_DEFAULT = 3
+WALLBOX_MAX_CURRENT_AMPS_DEFAULT = 16
+
+
+def compute_wallbox_max_kw(config):
+    """Maximale Ladeleistung der Wallbox (kW), aus den vom Nutzer hinterlegten Wallbox-Eckdaten
+    ("Max. Anzahl an Phasen", "Max. Stromstärke (pro Phase)"). Doppelt verwendet: (1) als Obergrenze
+    fuer jeden an die Wallbox gesendeten Ziel-kW-Wert in der PV-Ueberschussladen-Rueckfalllogik
+    (siehe _run_pv_surplus_charging_tick_impl in app.py) - ohne dieses Cap kann die additive Logik
+    dort unbegrenzt weiter aufaddieren und Werte weit jenseits dessen anfordern, was die Wallbox
+    ueberhaupt zulaesst (beobachtet: ein Regelkreis, der bis 180A/41kW hochlief und von Easee
+    durchgehend mit 400 Bad Request abgelehnt wurde, da das Stromkreislimit dort bei 40A lag); (2)
+    als "WB - Max Charging Power" im addon_sensor_data_JSON (siehe collect_static_config), das
+    shyft-power serverseitig als ev_charge_rate fuer die Optimierung verwendet."""
+    phases = config.get("wallboxMaxPhases") or WALLBOX_MAX_PHASES_DEFAULT
+    amps = config.get("wallboxMaxCurrentAmps") or WALLBOX_MAX_CURRENT_AMPS_DEFAULT
+    return phases * amps * CHARGING_PHASE_VOLTAGE / 1000
+
+
 # does the mapping between homeassistant and shyft/ bubble
 class SyncService:
 
@@ -134,6 +159,11 @@ class SyncService:
         ev_capacity = data.get("carBatteryCapacityKwh")
         if ev_capacity:
             static_config["EV - Battery Size (kWh)"] = snap_to_nearest_ev_battery_option(ev_capacity)
+
+        # Nur wenn ueberhaupt eine Wallbox ausgewaehlt ist - wallboxMaxPhases/wallboxMaxCurrentAmps
+        # haben sonst trotzdem einen (dann bedeutungslosen) Default-Wert.
+        if data.get("integrationMappings", {}).get("wallbox"):
+            static_config["WB - Max Charging Power"] = round(compute_wallbox_max_kw(data), 3)
 
         return static_config
 

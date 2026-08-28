@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.0.44.20
+
+* Zwei neue berechnete Werte im addon_sensor_data_JSON, für die `shyft`-Server (Java) jetzt `ev_charge_rate`/`p_min` bezieht statt sie selbst per Sensor abzufragen:
+  * `WB - Max Charging Power` (staticConfig, nur wenn eine Wallbox konfiguriert ist): aus den bereits vorhandenen Feldern "Max. Anzahl an Phasen" × "Max. Stromstärke (pro Phase)" × 230V - `compute_wallbox_max_kw` ist dafür von `app.py` nach `sync_service.py` gewandert (wird dort jetzt auch für `collect_static_config` gebraucht), `app.py` importiert sie von dort für die PV-Überschussladen-Rückfalllogik weiter wie bisher.
+  * `WB - p_min` (liveValues, neu `compute_wb_p_min`): der niedrigste ab der aktuellen Stunde (inklusive, Vergangenheit ausgeschlossen) noch bevorstehende Strompreis aus dem gecachten `input.csv` (dieselbe Quelle wie der Strompreis-Chart), plus 0,02 € Sicherheitsmarge - kein neues Konfigurationsfeld, komplett serverseitig berechnet.
+
 ## 0.0.44.19
 
 * Fix: Die "Aktualisierungszeiten" im Energiefluss-Widget (Staleness-Anzeige) lasen bisher `last_updated`, das nur bei einer Werte- oder Attributänderung fortschreibt - meldet ein Sensor wiederholt denselben Wert (z.B. Autobatterie-SOC über längere Standzeit), wirkte er dadurch älter als er war, obwohl Home Assistant ihn längst neu abgerufen hatte. Jetzt wird `last_reported` gelesen (fällt auf `last_updated` zurück, falls eine ältere Home-Assistant-Version das Feld noch nicht liefert) - das ist der tatsächliche Zeitpunkt der letzten Aktualisierung, unabhängig davon, ob sich der Wert geändert hat.
