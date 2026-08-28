@@ -2,6 +2,7 @@ from sync_service import SyncService, convert_to_expected_unit, compute_wallbox_
 from homeassistant_adapter import HomeAssistantAdapter
 from shyft_adapter import ShyftAdapter
 from live_entity_watcher import LiveEntityWatcher
+from constants import DEMO_SHYFT_ACCESS_KEY
 import problem_registry
 
 import os
@@ -139,6 +140,72 @@ def index():
 @app.route("/trigger", methods=["POST"])
 def triggerEndpoint():
     return sync_site_data()
+
+
+@app.route("/account-status", methods=["GET"])
+def accountStatusEndpoint():
+    "Tells the frontend whether the currently configured shyft_access_key is still the shared demo account (see DEMO_SHYFT_ACCESS_KEY) - drives the Demo-Popup in www/index.html. Compares the raw configured key (before any test_ prefix stripping, see ShyftAdapter.set_access_key) against the raw demo key."
+    return jsonify({"isDemo": SHYFT_ACCESS_KEY == DEMO_SHYFT_ACCESS_KEY})
+
+
+def _persist_shyft_access_key(new_access_key):
+    """Writes shyft_access_key into this addon's own Supervisor-managed options
+    (POST /addons/self/options) so it survives restarts and shows correctly in HA's Configuration
+    tab for this addon - the addon can't just write /data/options.json itself and expect it to
+    stick, Supervisor owns that file and would overwrite it again from its own state. Also updates
+    the in-memory value right away (SHYFT_ACCESS_KEY, shyft_adapter.set_access_key) so a restart
+    isn't needed before the new key takes effect."""
+    global SHYFT_ACCESS_KEY
+    homeassistant_adapter.post_to_supervisor("/addons/self/options", {"options": {"shyft_access_key": new_access_key}})
+    SHYFT_ACCESS_KEY = new_access_key
+    shyft_adapter.set_access_key(new_access_key)
+
+
+@app.route("/set-access-key", methods=["POST"])
+def setAccessKeyEndpoint():
+    "Manually hinterlegt einen bestehenden shyft_access_key (siehe 'Shyft-Zugangstoken ändern' in www/index.html) - fuer Nutzer, die schon einen Account haben, oder um das Konto zu wechseln."
+    body = request.get_json(silent=True) or {}
+    access_key = (body.get("access_key") or "").strip()
+    if not access_key:
+        return jsonify({"status": "error", "message": "Zugangstoken darf nicht leer sein."})
+    try:
+        _persist_shyft_access_key(access_key)
+    except Exception as e:
+        print("[Shyft] Zugangstoken konnte nicht gespeichert werden:", repr(e))
+        return jsonify({"status": "error", "message": "Zugangstoken konnte nicht gespeichert werden."})
+    return jsonify({"status": "success"})
+
+
+@app.route("/create-account", methods=["POST"])
+def createAccountEndpoint():
+    """Signs a new shyft-power account up for a demo-mode addon user (siehe Demo-Popup in
+    www/index.html) - ruft create_user_addon auf und hinterlegt den zurueckgegebenen access_key bei
+    Erfolg direkt selbst (siehe _persist_shyft_access_key). 'has an account' == 'yes' in der Antwort
+    wird als Fehler gedeutet (Bubbles 'Sign the user up' meldet damit, dass die E-Mail-Adresse
+    bereits einen Account hat) - dann wird NICHTS gespeichert."""
+    body = request.get_json(silent=True) or {}
+    email = (body.get("email") or "").strip()
+    password = body.get("password") or ""
+    if not email or not password:
+        return jsonify({"status": "error", "message": "E-Mail-Adresse und Passwort werden benötigt."})
+    try:
+        result = shyft_adapter.create_user(email, password)
+    except Exception as e:
+        print("[Shyft] Konto-Erstellung fehlgeschlagen:", repr(e))
+        return jsonify({"status": "error", "message": "Der Account konnte nicht angelegt werden. Bitte versuche es später erneut."})
+    has_account_raw = str(result.get("has an account", "")).strip().lower()
+    if has_account_raw in ("yes", "true", "1"):
+        return jsonify({"status": "error", "message": "Für diese E-Mail-Adresse existiert bereits ein Account. Nutze stattdessen \"Shyft-Zugangstoken ändern\", um dich mit deinem bestehenden Zugangstoken anzumelden."})
+    new_access_key = result.get("access_key")
+    if not new_access_key:
+        print("[Shyft] create_user_addon lieferte keinen access_key:", result)
+        return jsonify({"status": "error", "message": "Der Account konnte nicht angelegt werden (kein Zugangstoken erhalten)."})
+    try:
+        _persist_shyft_access_key(new_access_key)
+    except Exception as e:
+        print("[Shyft] Zugangstoken nach Konto-Erstellung konnte nicht gespeichert werden:", repr(e))
+        return jsonify({"status": "error", "message": "Der Account wurde angelegt, aber der Zugangstoken konnte nicht gespeichert werden. Bitte trage ihn manuell über \"Shyft-Zugangstoken ändern\" ein."})
+    return jsonify({"status": "success"})
 
 def sync_site_data():
     "Hourly addon->Bubble sync (also the manual 'Verbindung testen' trigger): builds the consolidated staticConfig+liveValues+EV-forecast JSON and sends it via update_site_addon - replaces the old per-sensor addon_sensor_data workflow."

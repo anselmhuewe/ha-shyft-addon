@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.0.44.24
+
+* Demo-Modus-Popup + eigenes Zugangstoken-Management auf der Konfigurationsseite, für neue Nutzer, die nur mit dem Addon (nicht mit Bubble direkt) arbeiten sollen:
+  * Solange der hinterlegte `shyft_access_key` exakt dem gemeinsamen Demo-Konto entspricht (`DEMO_SHYFT_ACCESS_KEY` in `constants.py` - **Platzhalterwert, noch mit dem echten Demo-Key zu befüllen**), zeigt die Konfigurationsseite automatisch (aber wegklickbar) ein Popup: "Du befindest dich noch im Demomodus...". Neuer Endpunkt `GET /account-status`.
+  * Formular für E-Mail + Passwort ruft `POST /create-account` auf, das den neuen Bubble-Workflow `create_user_addon` aufruft (aktuell fest gegen die shyft-power-Testumgebung verdrahtet, siehe `ShyftAdapter.create_user` - der Workflow existiert bislang nur dort). `"has an account": "yes"` in der Antwort wird als Fehler gedeutet (E-Mail bereits vergeben) und nichts gespeichert; sonst wird der zurückgegebene `access_key` direkt übernommen.
+  * Der Zugangstoken wird jetzt erstmals im Addon-eigenen Frontend änderbar gemacht (bisher nur über HAs generisches Add-on-Konfigurationsformular möglich) - standardmäßig ausgeblendet, Button "Shyft-Zugangstoken ändern" blendet ein leeres Eingabefeld ein (der echte aktuelle Wert wird nie ans Frontend zurückgegeben). Neuer Endpunkt `POST /set-access-key`, für bestehende Accounts oder einen Kontowechsel.
+  * Serverseitig neu: `_persist_shyft_access_key` (app.py) schreibt einen neuen Token über die Supervisor-API (`POST /addons/self/options`, neue `HomeAssistantAdapter.post_to_supervisor`) - direktes Schreiben von `/data/options.json` funktioniert nicht, das verwaltet Supervisor selbst. Aktualisiert zusätzlich sofort den laufenden Prozess (`shyft_adapter.set_access_key`), kein Neustart nötig.
+
 ## 0.0.44.23
 
 * PV-Leistung: Prognose vs. Ist - Farben konsistent zu den übrigen Charts: Prognose grün (--color-accent), Ist-Werte in Textfarbe (--color-text, theme-aware statt hartem Schwarz)

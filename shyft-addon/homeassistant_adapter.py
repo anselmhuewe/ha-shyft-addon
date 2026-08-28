@@ -237,6 +237,26 @@ class HomeAssistantAdapter:
         except ValueError:
             return {}
 
+    # Supervisor's OWN API (addon lifecycle/self-management, e.g. /addons/self/options) lives at a
+    # different base path than homeassistant_uri (http://supervisor/core, HA Core's API) - separate
+    # constant rather than reusing homeassistant_uri, though both use the same supervisor_token.
+    SUPERVISOR_API_URI = "http://supervisor"
+
+    def post_to_supervisor(self, path, json_body=None):
+        "Like post_to_homeassistant, but against the Supervisor API itself (http://supervisor/...) rather than HA Core's API - e.g. /addons/self/options to persist this addon's own Supervisor-managed config options (see _persist_shyft_access_key in app.py)."
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {self.supervisor_token}"
+        }
+        completeUri = self.SUPERVISOR_API_URI + path
+        response = requests.post(completeUri, headers=headers, json=json_body if json_body is not None else {})
+        if not response.ok:
+            raise Exception(f"POST {path} failed: {response.status_code} {response.text}")
+        try:
+            return response.json()
+        except ValueError:
+            return {}
+
     def delete_from_homeassistant(self, path):
         headers = {"Authorization": f"Bearer {self.supervisor_token}"}
         completeUri = self.homeassistant_uri + path

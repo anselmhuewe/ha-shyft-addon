@@ -64,6 +64,24 @@ class ShyftAdapter:
         except Exception as e:
             return {"status": "error", "message": str(e)}
 
+    # Bewusst fest verdrahtet auf die Testumgebung (nicht ueber _create_complete_uri/development_mode
+    # geroutet) - der Workflow existiert bislang nur dort, unabhaengig davon, gegen welche Umgebung
+    # der aktuell hinterlegte (Demo-)Token sonst laeuft. Wenn der Workflow live geht, hier auf
+    # _create_complete_uri("create_user_addon") umstellen.
+    CREATE_USER_URI = "https://shyft-power.com/version-test/api/1.1/wf/create_user_addon"
+
+    def create_user(self, email: str, password: str):
+        "Signs a new shyft-power account up (create_user_addon workflow) for a demo-mode addon user (see the Demo-Popup in www/index.html) - returns the parsed response dict, expected to contain 'access_key' and a 'has an account' yes/no flag (see createAccountEndpoint in app.py for how that's interpreted). Raises on a network/HTTP failure, unlike _call_workflow."
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {self.bubble_token}"
+        }
+        payload = json.dumps({"email": email, "password": password})
+        self._log_info(f"create_user uri={self.CREATE_USER_URI}")
+        response = requests.post(self.CREATE_USER_URI, headers=headers, data=payload)
+        response.raise_for_status()
+        return response.json()
+
     def get_input_output_csv(self, user_id: str):
         "Pulls the optimizer's latest input/output CSV data (used to build the addon's Dashboard-tab charts) for user_id from shyft-power. Like get_actions, returns the actual response body rather than a status string."
         try:

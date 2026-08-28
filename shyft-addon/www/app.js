@@ -4108,17 +4108,110 @@ function setupTabs() {
     }
 }
 
+// ============================================================================
+// Demo-Modus / Zugangstoken: das Popup ("Du befindest dich noch im Demomodus...")
+// erscheint, wenn der aktuell hinterlegte shyft_access_key mit dem bekannten
+// Demo-Konto uebereinstimmt (siehe DEMO_SHYFT_ACCESS_KEY + GET /account-status in
+// app.py) - anders als ein reines Ersteinrichtungs-Popup ist es jederzeit
+// wegklickbar, das Demo-Konto bleibt ja nutzbar. "Zugangstoken ändern" daneben
+// erlaubt jederzeit, einen bestehenden Account zu hinterlegen bzw. das Konto zu
+// wechseln - der echte aktuelle Token wird dafuer nie ans Frontend zurueckgegeben,
+// nur neu gesetzt.
+// ============================================================================
+
+async function checkShyftAccountStatus() {
+    try {
+        const status = await getJson(insideHomeAssistant + '/account-status');
+        if (status && status.isDemo) {
+            const dialog = document.getElementById('demoAccountDialog');
+            if (dialog && !dialog.open) dialog.showModal();
+        }
+    } catch (err) {
+        console.log(err);
+    }
+}
+
+function closeDemoAccountDialog() {
+    document.getElementById('demoAccountDialog')?.close();
+}
+
+function showShyftAccountTokenField() {
+    document.getElementById('shyftAccountTokenDisplay').style.display = 'none';
+    document.getElementById('shyftAccountTokenEdit').style.display = 'flex';
+    document.getElementById('shyftAccountTokenInput').focus();
+}
+
+function setShyftAccountStatus(message, isError) {
+    const el = document.getElementById('shyftAccountStatus');
+    if (!el) return;
+    el.textContent = message || '';
+    el.className = 'shyftAccountStatus' + (message ? (isError ? ' status-error' : ' status-ok') : '');
+}
+
+async function saveShyftAccountToken() {
+    const input = document.getElementById('shyftAccountTokenInput');
+    const accessKey = (input.value || '').trim();
+    if (!accessKey) {
+        setShyftAccountStatus('Bitte einen Zugangstoken eingeben.', true);
+        return;
+    }
+    setShyftAccountStatus('Speichere…', false);
+    try {
+        const result = await postJson(insideHomeAssistant + '/set-access-key', {access_key: accessKey});
+        if (result.status === 'success') {
+            setShyftAccountStatus('Zugangstoken gespeichert.', false);
+            input.value = '';
+            document.getElementById('shyftAccountTokenEdit').style.display = 'none';
+            document.getElementById('shyftAccountTokenDisplay').style.display = 'block';
+        } else {
+            setShyftAccountStatus(result.message || 'Zugangstoken konnte nicht gespeichert werden.', true);
+        }
+    } catch (err) {
+        console.log(err);
+        setShyftAccountStatus('Zugangstoken konnte nicht gespeichert werden.', true);
+    }
+}
+
+document.getElementById('demoAccountForm')?.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const email = document.getElementById('demoAccountEmail').value.trim();
+    const password = document.getElementById('demoAccountPassword').value;
+    const errorEl = document.getElementById('demoAccountError');
+    const submitButton = document.getElementById('demoAccountSubmit');
+    errorEl.textContent = '';
+    submitButton.disabled = true;
+    submitButton.textContent = 'Wird angelegt…';
+    try {
+        const result = await postJson(insideHomeAssistant + '/create-account', {email, password});
+        if (result.status === 'success') {
+            closeDemoAccountDialog();
+            document.getElementById('demoAccountEmail').value = '';
+            document.getElementById('demoAccountPassword').value = '';
+        } else {
+            errorEl.textContent = result.message || 'Der Account konnte nicht angelegt werden.';
+        }
+    } catch (err) {
+        console.log(err);
+        errorEl.textContent = 'Der Account konnte nicht angelegt werden. Bitte versuche es später erneut.';
+    } finally {
+        submitButton.disabled = false;
+        submitButton.textContent = 'Account anlegen';
+    }
+});
+
 // loadShyftActions waits for loadConfiguration so the action cards' brand icons (getActionIconUrl)
 // have integrationsData/currentIntegrationSelections available on the very first render
 if (document.readyState === 'complete') {
     loadConfiguration().then(loadShyftActions);
     loadDashboard();
     setupTabs();
+    checkShyftAccountStatus();
 } else {
     window.addEventListener('load', () => {
         loadConfiguration().then(loadShyftActions);
         loadDashboard();
         setupTabs();
+        checkShyftAccountStatus();
     });
 }
 
