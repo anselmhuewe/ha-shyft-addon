@@ -3892,6 +3892,32 @@ async function loadDashboard() {
     }
 }
 
+// Haelt das Energiefluss-Widget aktuell, ohne den restlichen Dashboard-Tab (Liniencharts,
+// Anwesenheitsprognose) mit neu aufzubauen - die Charts aendern sich ohnehin nur stuendlich, taeglich
+// neu zu laden waere unnoetiger Aufwand und wuerde bei jedem Tick kurz aufblitzen/den Scroll
+// zuruecksetzen. Ersetzt nur den bestehenden .energyFlowWidget-Knoten durch einen frisch gebauten.
+const ENERGY_FLOW_REFRESH_INTERVAL_MS = 30000;
+
+async function refreshEnergyFlowWidget() {
+    if (document.visibilityState !== 'visible') return;
+    const dashboardTab = document.getElementById('tab-dashboard');
+    if (!dashboardTab || !dashboardTab.classList.contains('active')) return;
+    const container = document.getElementById('dashboardBody');
+    const existing = container ? container.querySelector('.energyFlowWidget') : null;
+    // kein bestehendes Widget (z.B. Dashboard noch nicht/fehlgeschlagen geladen) - nichts zu ersetzen,
+    // der naechste volle loadDashboard() (Seitenaufruf) kuemmert sich darum
+    if (!existing) return;
+    try {
+        const flowData = await getJson(insideHomeAssistant + '/dashboard/energy-flow');
+        existing.replaceWith(buildEnergyFlowWidget(flowData));
+    } catch (err) {
+        // best-effort: das zuletzt erfolgreich gerenderte Widget bleibt einfach stehen
+        console.log(err);
+    }
+}
+
+setInterval(refreshEnergyFlowWidget, ENERGY_FLOW_REFRESH_INTERVAL_MS);
+
 function setupTabs() {
     const buttons = document.querySelectorAll('.tabButton');
     for (const button of buttons) {

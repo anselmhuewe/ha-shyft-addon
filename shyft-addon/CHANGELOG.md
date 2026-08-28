@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.0.44.21
+
+* Energiefluss-Widget aktualisiert sich jetzt alle 30s selbstständig (nur solange der Dashboard-Tab sichtbar/aktiv ist) - vorher blieb es auf dem Stand des Seitenaufrufs stehen, bis man manuell neu geladen hat. Ersetzt gezielt nur das Widget, nicht den ganzen Dashboard-Tab (Liniencharts bleiben unberührt, kein Aufblitzen/Scroll-Reset)
+
 ## 0.0.44.20
 
 * Zwei neue berechnete Werte im addon_sensor_data_JSON, für die `shyft`-Server (Java) jetzt `ev_charge_rate`/`p_min` bezieht statt sie selbst per Sensor abzufragen:
