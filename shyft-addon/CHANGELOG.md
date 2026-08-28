@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.0.44.23
+
+* PV-Leistung: Prognose vs. Ist - Farben konsistent zu den übrigen Charts: Prognose grün (--color-accent), Ist-Werte in Textfarbe (--color-text, theme-aware statt hartem Schwarz)
+
 ## 0.0.44.22
 
 * PV-Leistung-Chart zeigt jetzt Prognose gegen Ist-Werte: neue tägliche, eingefrorene Prognose-Momentaufnahme (einmal pro Kalendertag, damit spätere Vergleiche nicht die im Tagesverlauf laufend korrigierte Prognose zeigen) plus stundenweise gemittelte tatsächliche PV-Leistung, beide auf einer gemeinsamen Zeitachse ab 0 Uhr (lokal) bis in die Zukunft. Neuer Endpunkt `GET /dashboard/pv-forecast-vs-actual`, neue Persistenz `/data/pv_forecast_snapshot.json`

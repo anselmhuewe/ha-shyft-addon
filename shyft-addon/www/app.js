@@ -3291,7 +3291,7 @@ function buildPvForecastActualChart(labels, forecast, actual) {
 
     const legend = document.createElement('div');
     legend.className = 'dashboardChartLegend';
-    for (const [color, label] of [['var(--color-text-secondary)', 'Prognose'], ['var(--color-accent)', 'Ist-Werte']]) {
+    for (const [color, label] of [['var(--color-accent)', 'Prognose'], ['var(--color-text)', 'Ist-Werte']]) {
         const item = document.createElement('span');
         item.className = 'dashboardChartLegendItem';
         const dot = document.createElement('span');
@@ -3343,8 +3343,8 @@ function buildPvForecastActualChart(labels, forecast, actual) {
         return `<path d="${parts.join(' ')}" fill="none" stroke="${color}" stroke-width="2" ${dashed ? 'stroke-dasharray="5,4"' : ''} />`;
     }
 
-    const forecastPath = buildSeriesPath(forecast, 'var(--color-text-secondary)', true);
-    const actualPath = buildSeriesPath(actual, 'var(--color-accent)', false);
+    const forecastPath = buildSeriesPath(forecast, 'var(--color-accent)', true);
+    const actualPath = buildSeriesPath(actual, 'var(--color-text)', false);
 
     const tickCount = Math.min(6, labels.length);
     const tickIndices = [...new Set(Array.from({length: tickCount}, (_, i) => Math.round(i * lastIndex / (tickCount - 1 || 1))))];
@@ -3366,7 +3366,7 @@ function buildPvForecastActualChart(labels, forecast, actual) {
     const lastActualIndex = actual.reduce((last, v, i) => (v !== null && v !== undefined ? i : last), -1);
     if (lastActualIndex >= 0 && lastActualIndex < labels.length - 1) {
         const x = xFor(lastActualIndex).toFixed(1);
-        nowMarkup = `<line x1="${x}" y1="${paddingTop}" x2="${x}" y2="${baseline.toFixed(1)}" stroke="var(--color-accent)" stroke-width="1" stroke-dasharray="2,3" opacity="0.6" />`;
+        nowMarkup = `<line x1="${x}" y1="${paddingTop}" x2="${x}" y2="${baseline.toFixed(1)}" stroke="var(--color-text)" stroke-width="1" stroke-dasharray="2,3" opacity="0.6" />`;
     }
 
     let dayBoundaryMarkup = '';
