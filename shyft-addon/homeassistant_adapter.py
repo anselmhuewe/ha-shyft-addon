@@ -62,7 +62,15 @@ class HomeAssistantAdapter:
         response = self.get_from_homeassistant(query)
         unit = response.get("attributes", {}).get("unit_of_measurement", "")
         self._log_info("load_entity_state result " + str(response))
-        last_updated_raw = response.get("last_updated")
+        # "last_reported" (not "last_updated"!) is what actually answers "wann hat der Sensor
+        # zuletzt aktualisiert" - last_updated only bumps when state OR attributes change, and
+        # last_changed only when the state value itself changes; a sensor that keeps reporting the
+        # exact same value (e.g. Autobatterie-SOC waehrend laengerer Standzeit) would then show as
+        # staler than it really is. last_reported ticks on every single report, identical or not -
+        # exactly the "Zeitpunkt der letzten Aktualisierung" the Staleness-Anzeige braucht. Falls
+        # eine aeltere Home-Assistant-Version das Feld (noch) nicht liefert, faellt es auf
+        # last_updated zurueck statt ganz zu fehlen.
+        last_updated_raw = response.get("last_reported") or response.get("last_updated")
         last_updated = None
         if last_updated_raw:
             try:

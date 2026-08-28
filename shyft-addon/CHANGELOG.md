@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.0.44.19
+
+* Fix: Die "Aktualisierungszeiten" im Energiefluss-Widget (Staleness-Anzeige) lasen bisher `last_updated`, das nur bei einer Werte- oder Attributänderung fortschreibt - meldet ein Sensor wiederholt denselben Wert (z.B. Autobatterie-SOC über längere Standzeit), wirkte er dadurch älter als er war, obwohl Home Assistant ihn längst neu abgerufen hatte. Jetzt wird `last_reported` gelesen (fällt auf `last_updated` zurück, falls eine ältere Home-Assistant-Version das Feld noch nicht liefert) - das ist der tatsächliche Zeitpunkt der letzten Aktualisierung, unabhängig davon, ob sich der Wert geändert hat.
+
 ## 0.0.44.18
 
 * **Verhaltensänderung:** Die `development_mode`-Konfigurationsoption (Umschalter Prod/Test-Umgebung, für jeden Nutzer in der Addon-Konfiguration sichtbar) ist entfernt. Stattdessen entscheidet jetzt der `shyft_access_key` selbst: ein Key mit `test_`-Präfix routet an die shyft-power-Testumgebung (Präfix wird vor dem eigentlichen Request abgeschnitten), alles andere an Prod - analog zu z.B. Stripes `sk_test_...`/`sk_live_...`-Schlüsseln. Kein normaler Nutzer bekommt einen Key mit diesem Präfix, kann also nicht mehr versehentlich (oder absichtlich) seine eigenen Daten in die Testumgebung umleiten. `ShyftAdapter.set_access_key(raw_key)` kapselt das Parsen; `bubble_token`/`development_mode` werden nie mehr einzeln gesetzt. **Wer bisher `development_mode: true` genutzt hat** (z.B. für eigene Tests), muss dem eigenen `shyft_access_key` in der Addon-Konfiguration manuell `test_` voranstellen, sonst läuft der Key ab diesem Update gegen Prod.
