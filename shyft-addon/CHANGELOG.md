@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.0.44.22
+
+* PV-Leistung-Chart zeigt jetzt Prognose gegen Ist-Werte: neue tägliche, eingefrorene Prognose-Momentaufnahme (einmal pro Kalendertag, damit spätere Vergleiche nicht die im Tagesverlauf laufend korrigierte Prognose zeigen) plus stundenweise gemittelte tatsächliche PV-Leistung, beide auf einer gemeinsamen Zeitachse ab 0 Uhr (lokal) bis in die Zukunft. Neuer Endpunkt `GET /dashboard/pv-forecast-vs-actual`, neue Persistenz `/data/pv_forecast_snapshot.json`
+
 ## 0.0.44.21
 
 * Energiefluss-Widget aktualisiert sich jetzt alle 30s selbstständig (nur solange der Dashboard-Tab sichtbar/aktiv ist) - vorher blieb es auf dem Stand des Seitenaufrufs stehen, bis man manuell neu geladen hat. Ersetzt gezielt nur das Widget, nicht den ganzen Dashboard-Tab (Liniencharts bleiben unberührt, kein Aufblitzen/Scroll-Reset)

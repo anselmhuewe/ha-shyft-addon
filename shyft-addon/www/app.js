@@ -3270,6 +3270,164 @@ function buildLineChart(title, unit, labels, values, options = {}) {
     return wrapper;
 }
 
+// Vergleicht die heute frueh eingefrorene PV-Prognose mit den tatsaechlichen Messwerten (siehe
+// /dashboard/pv-forecast-vs-actual) - eigene, schlankere Chart-Funktion statt buildLineChart zu
+// erweitern: die war bisher nie fuer zwei Reihen auf gemeinsamer Zeitachse mit Luecken (null-Werte,
+// wo eine Reihe fuer diese Stunde keine Daten hat) gebaut, und alle anderen Charts sollen davon
+// unberuehrt bleiben. labels/forecast/actual sind bereits synchron (eine Stunde pro Index, ab 0 Uhr
+// lokal) - siehe readPvForecastVsActual in app.py.
+function buildPvForecastActualChart(labels, forecast, actual) {
+    const width = 600, height = 220;
+    const paddingLeft = 45, paddingRight = 15, paddingTop = 15, paddingBottom = 26;
+    const plotWidth = width - paddingLeft - paddingRight;
+    const plotHeight = height - paddingTop - paddingBottom;
+
+    const wrapper = document.createElement('div');
+    wrapper.className = 'dashboardChart';
+    const titleEl = document.createElement('div');
+    titleEl.className = 'dashboardChartTitle';
+    titleEl.textContent = 'PV-Leistung: Prognose vs. Ist (kW)';
+    wrapper.appendChild(titleEl);
+
+    const legend = document.createElement('div');
+    legend.className = 'dashboardChartLegend';
+    for (const [color, label] of [['var(--color-text-secondary)', 'Prognose'], ['var(--color-accent)', 'Ist-Werte']]) {
+        const item = document.createElement('span');
+        item.className = 'dashboardChartLegendItem';
+        const dot = document.createElement('span');
+        dot.className = 'dashboardChartLegendDot';
+        dot.style.background = color;
+        item.appendChild(dot);
+        item.appendChild(document.createTextNode(label));
+        legend.appendChild(item);
+    }
+    wrapper.appendChild(legend);
+
+    const definedValues = [...forecast, ...actual].filter(v => v !== null && v !== undefined);
+    if (labels.length === 0 || definedValues.length === 0) {
+        const empty = document.createElement('p');
+        empty.className = 'shyftActionsEmpty';
+        empty.textContent = 'Keine Daten verfügbar.';
+        wrapper.appendChild(empty);
+        return wrapper;
+    }
+
+    const rawMin = Math.min(...definedValues, 0);
+    const rawMax = Math.max(...definedValues);
+    const valueRange = (rawMax - rawMin) || 1;
+    const yMin = rawMin - valueRange * 0.1;
+    const yMax = rawMax + valueRange * 0.1;
+    const yRange = (yMax - yMin) || 1;
+    const lastIndex = labels.length - 1 || 1;
+
+    const xFor = i => paddingLeft + (i / lastIndex) * plotWidth;
+    const yFor = v => paddingTop + plotHeight - ((v - yMin) / yRange) * plotHeight;
+    const baseline = paddingTop + plotHeight;
+
+    // Baut den Linienpfad einer Reihe, die Luecken (null, z.B. Ist-Werte in der Zukunft) enthalten
+    // kann - an jeder Luecke beginnt ein neuer Teilpfad (SVG erlaubt mehrere "M" in einem Pfad),
+    // statt ueber sie hinweg zu verbinden.
+    function buildSeriesPath(values, color, dashed) {
+        const parts = [];
+        let inSegment = false;
+        for (let i = 0; i < values.length; i++) {
+            const v = values[i];
+            if (v === null || v === undefined) {
+                inSegment = false;
+                continue;
+            }
+            parts.push(`${inSegment ? 'L' : 'M'}${xFor(i).toFixed(1)},${yFor(v).toFixed(1)}`);
+            inSegment = true;
+        }
+        if (parts.length < 2) return '';
+        return `<path d="${parts.join(' ')}" fill="none" stroke="${color}" stroke-width="2" ${dashed ? 'stroke-dasharray="5,4"' : ''} />`;
+    }
+
+    const forecastPath = buildSeriesPath(forecast, 'var(--color-text-secondary)', true);
+    const actualPath = buildSeriesPath(actual, 'var(--color-accent)', false);
+
+    const tickCount = Math.min(6, labels.length);
+    const tickIndices = [...new Set(Array.from({length: tickCount}, (_, i) => Math.round(i * lastIndex / (tickCount - 1 || 1))))];
+    const xLabels = tickIndices.map(i => {
+        const x = xFor(i).toFixed(1);
+        const text = new Date(labels[i]).toLocaleString('de-DE', {weekday: 'short', hour: '2-digit'}).replace('.', '');
+        return `<text x="${x}" y="${height - 6}" fill="var(--color-text-secondary)" text-anchor="middle">${text}</text>`;
+    }).join('');
+
+    const yTicks = [yMax, (yMin + yMax) / 2, yMin];
+    const yLabels = yTicks.map(v => {
+        const y = yFor(v).toFixed(1);
+        return `<text x="${paddingLeft - 8}" y="${(parseFloat(y) + 3).toFixed(1)}" fill="var(--color-text-secondary)" text-anchor="end">${v.toFixed(1)}</text>`;
+    }).join('');
+
+    // "Jetzt"-Markierung: Trennlinie zwischen den bereits vergangenen Stunden (mit Ist-Werten) und
+    // der Zukunft (nur noch Prognose) - der letzte Index, an dem ein Ist-Wert vorliegt.
+    let nowMarkup = '';
+    const lastActualIndex = actual.reduce((last, v, i) => (v !== null && v !== undefined ? i : last), -1);
+    if (lastActualIndex >= 0 && lastActualIndex < labels.length - 1) {
+        const x = xFor(lastActualIndex).toFixed(1);
+        nowMarkup = `<line x1="${x}" y1="${paddingTop}" x2="${x}" y2="${baseline.toFixed(1)}" stroke="var(--color-accent)" stroke-width="1" stroke-dasharray="2,3" opacity="0.6" />`;
+    }
+
+    let dayBoundaryMarkup = '';
+    for (let i = 1; i < labels.length; i++) {
+        const prevDate = new Date(labels[i - 1]);
+        const curDate = new Date(labels[i]);
+        if (curDate.getDate() !== prevDate.getDate()) {
+            const x = xFor(i).toFixed(1);
+            const dateText = curDate.toLocaleDateString('de-DE', {day: '2-digit', month: '2-digit'});
+            dayBoundaryMarkup += `<line x1="${x}" y1="${paddingTop}" x2="${x}" y2="${baseline.toFixed(1)}" stroke="var(--color-text-secondary)" stroke-width="1.5" stroke-dasharray="4,3" />`;
+            dayBoundaryMarkup += `<text x="${x}" y="${paddingTop - 4}" fill="var(--color-text)" font-weight="700" text-anchor="middle">${dateText}</text>`;
+        }
+    }
+
+    const chartContainer = document.createElement('div');
+    chartContainer.className = 'dashboardChartContainer';
+    chartContainer.innerHTML = `
+        <svg viewBox="0 0 ${width} ${height}" class="dashboardChartSvg">
+            <line x1="${paddingLeft}" y1="${paddingTop}" x2="${paddingLeft}" y2="${baseline.toFixed(1)}" stroke="var(--color-border)" />
+            <line x1="${paddingLeft}" y1="${baseline.toFixed(1)}" x2="${width - paddingRight}" y2="${baseline.toFixed(1)}" stroke="var(--color-border)" />
+            ${nowMarkup}
+            ${forecastPath}
+            ${actualPath}
+            ${dayBoundaryMarkup}
+            ${yLabels}
+            ${xLabels}
+        </svg>`;
+    wrapper.appendChild(chartContainer);
+
+    const tooltip = document.createElement('div');
+    tooltip.className = 'dashboardChartTooltip';
+    tooltip.hidden = true;
+    chartContainer.appendChild(tooltip);
+
+    const svgEl = chartContainer.querySelector('svg');
+
+    function showTooltip(clientX) {
+        const rect = svgEl.getBoundingClientRect();
+        if (rect.width === 0) return;
+        const scale = rect.width / width;
+        const svgX = (clientX - rect.left) / scale;
+        const idx = Math.max(0, Math.min(lastIndex, Math.round((svgX - paddingLeft) / plotWidth * lastIndex)));
+        const d = new Date(labels[idx]);
+        const dateText = d.toLocaleString('de-DE', {weekday: 'short', hour: '2-digit', minute: '2-digit'}).replace('.', '');
+        const parts = [];
+        if (forecast[idx] !== null && forecast[idx] !== undefined) parts.push(`Prognose ${forecast[idx].toFixed(1)} kW`);
+        if (actual[idx] !== null && actual[idx] !== undefined) parts.push(`Ist ${actual[idx].toFixed(1)} kW`);
+        tooltip.textContent = `${dateText}: ${parts.join(' / ') || '–'}`;
+        tooltip.style.left = xFor(idx).toFixed(1) * scale + 'px';
+        tooltip.style.top = yFor(forecast[idx] ?? actual[idx] ?? yMin).toFixed(1) * scale + 'px';
+        tooltip.hidden = false;
+    }
+
+    svgEl.addEventListener('mousemove', e => showTooltip(e.clientX));
+    svgEl.addEventListener('mouseleave', () => { tooltip.hidden = true; });
+    svgEl.addEventListener('touchstart', e => { if (e.touches[0]) showTooltip(e.touches[0].clientX); }, {passive: true});
+    svgEl.addEventListener('touchmove', e => { if (e.touches[0]) showTooltip(e.touches[0].clientX); }, {passive: true});
+
+    return wrapper;
+}
+
 // Einfacher, aufklappbarer Zahlenvektor der für die nächsten 48h prognostizierten Verbräuche
 // (kWh) - erstmal ohne eigenes Diagramm, bis die input.csv-Erzeugung selbst ins Addon wandert.
 function buildCarConsumptionForecastDetails(labels, consumptionKwh, lowDataBasis) {
@@ -3828,7 +3986,23 @@ async function loadDashboard() {
             colorBands: {highThreshold: 35, highColor: 'var(--color-error)', lowThreshold: 25, lowColor: 'var(--color-accent)', midColor: 'var(--color-text-secondary)'},
         }));
         container.appendChild(buildLineChart('Außentemperatur', '°C', data.labels, data.temperature));
-        container.appendChild(buildLineChart('PV-Leistung', 'kW', data.labels, data.pv_generation, {minY: 0}));
+        // Ersetzt die reine Prognose-Ansicht: gemeinsame Stundenachse ab 0 Uhr heute, Prognose
+        // (heute eingefroren + ab morgen live) gegen tatsaechliche Ist-Werte (siehe
+        // readPvForecastVsActual) - best-effort, faellt auf den einfachen Prognose-Chart zurueck,
+        // falls der neue Endpunkt (noch) nichts liefert (z.B. frische Installation ohne Snapshot).
+        let pvChartRendered = false;
+        try {
+            const pvComparison = await getJson(insideHomeAssistant + '/dashboard/pv-forecast-vs-actual');
+            if (pvComparison.status === 'success' && pvComparison.labels.length > 0) {
+                container.appendChild(buildPvForecastActualChart(pvComparison.labels, pvComparison.forecast, pvComparison.actual));
+                pvChartRendered = true;
+            }
+        } catch (err) {
+            console.log(err);
+        }
+        if (!pvChartRendered) {
+            container.appendChild(buildLineChart('PV-Leistung', 'kW', data.labels, data.pv_generation, {minY: 0}));
+        }
         const pvEnergySummaryText = formatPvEnergySummary(data.labels, data.pv_generation);
         if (pvEnergySummaryText) {
             const pvEnergySummary = document.createElement('div');

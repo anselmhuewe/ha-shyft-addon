@@ -14,7 +14,7 @@ import time
 import csv
 import io
 import threading
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone, timedelta, date
 from apscheduler.schedulers.background import BackgroundScheduler
 import logging
 import sys
@@ -41,6 +41,13 @@ DETAILED_LOGGING = False
 OPTIONS_PATH = "/data/options.json"
 CONFIG_PATH = "/data/config.json"
 DASHBOARD_CACHE_PATH = "/data/dashboard_cache.json"
+# Anders als DASHBOARD_CACHE_PATH (stuendlich ueberschrieben) wird dieser Snapshot nur EINMAL pro
+# Kalendertag geschrieben - die zu Tagesbeginn bekannte PV-Prognose, eingefroren, damit sie sich
+# spaeter gegen die tatsaechlich eingetretenen Werte vergleichen laesst (siehe
+# _maybe_freeze_pv_forecast_snapshot / /dashboard/pv-forecast-vs-actual). Ohne dieses Einfrieren
+# wuerde ein Abgleich am Nachmittag die laengst korrigierte (nicht die urspruengliche) Prognose fuer
+# den Vormittag zeigen.
+PV_FORECAST_SNAPSHOT_PATH = "/data/pv_forecast_snapshot.json"
 CAR_PRESENCE_LOG_PATH = "/data/car_presence_log.json"
 CAR_PRESENCE_LOG_MAX_DAYS = 180
 CAR_PRESENCE_MIN_SAMPLES = 3
@@ -268,6 +275,94 @@ def readDashboardChartData():
         "soc_b": soc_b,
         "soc_ev": soc_ev,
     })
+
+
+def _hour_floor(dt):
+    return dt.replace(minute=0, second=0, microsecond=0)
+
+
+def _read_future_pv_forecast_by_hour():
+    "Die normale, stuendlich ueberschriebene Prognose (siehe DASHBOARD_CACHE_PATH) als {Stunde (lokal): kW} - liefert i.d.R. ab 'jetzt' vorwaerts."
+    try:
+        with open(DASHBOARD_CACHE_PATH, "r") as f:
+            cache = json.load(f)
+    except Exception:
+        return {}
+    input_csv = cache.get("input_csv")
+    creation_date_ms = cache.get("creation_date")
+    if not input_csv or creation_date_ms is None:
+        return {}
+    start_utc = datetime.fromtimestamp(creation_date_ms / 1000, tz=timezone.utc).replace(minute=0, second=0, microsecond=0)
+    try:
+        rows = list(csv.DictReader(io.StringIO(input_csv), delimiter=";"))
+    except Exception:
+        return {}
+    result = {}
+    for i, row in enumerate(rows):
+        hour_local = _hour_floor((start_utc + timedelta(hours=i)).astimezone())
+        result[hour_local] = float(row.get("PV_generation") or 0)
+    return result
+
+
+@app.route("/dashboard/pv-forecast-vs-actual", methods=["GET"])
+def readPvForecastVsActual():
+    """Eine gemeinsame stundenweise Zeitachse ab 0 Uhr (lokale Zeit) fuer den Prognose-vs-Ist-
+    Vergleich im PV-Leistung-Chart: 'forecast' kombiniert die heute frueh eingefrorene Tages-
+    Prognose (siehe _maybe_freeze_pv_forecast_snapshot - fuer die bereits vergangenen wie auch noch
+    kommenden Stunden HEUTE) mit der normalen, laufend aktualisierten Prognose (fuer alles ab
+    morgen); 'actual' sind die stundenweise gemittelten tatsaechlichen Messwerte von 0 Uhr bis
+    jetzt, nur fuer heute (keine Ist-Werte fuer die Zukunft). Fehlende Werte je Stunde sind null,
+    nicht ausgelassen - hält beide Reihen synchron zur selben labels-Achse, wie es das Frontend zum
+    Zeichnen zweier Linien braucht."""
+    config = _read_current_config()
+    entity_id = config.get("sensorMappings", {}).get("photovoltaic_powerflow_pv", "")
+
+    today_local = date.today().isoformat()
+    snapshot = _read_pv_forecast_snapshot()
+    today_forecast_by_hour = {}
+    if snapshot and snapshot.get("date") == today_local:
+        for label, value in zip(snapshot.get("labels", []), snapshot.get("pv_generation", [])):
+            try:
+                today_forecast_by_hour[_hour_floor(datetime.fromisoformat(label).astimezone())] = value
+            except ValueError:
+                continue
+
+    future_forecast_by_hour = _read_future_pv_forecast_by_hour()
+
+    actual_by_hour = {}
+    if entity_id:
+        now_local = datetime.now().astimezone()
+        midnight_local = _hour_floor(now_local.replace(hour=0))
+        try:
+            events = homeassistant_adapter.load_entity_history(entity_id, midnight_local, now_local)
+            sums, counts = {}, {}
+            for event in events:
+                try:
+                    value = float(event.state)
+                except (ValueError, TypeError):
+                    continue  # z.B. "unknown"/"unavailable" - diesen Messpunkt auslassen
+                hour_local = _hour_floor(event.last_changed.astimezone())
+                sums[hour_local] = sums.get(hour_local, 0) + value
+                counts[hour_local] = counts.get(hour_local, 0) + 1
+            actual_by_hour = {hour: sums[hour] / counts[hour] for hour in sums}
+        except Exception as e:
+            print("[Shyft] PV-Ist-Werte konnten nicht geladen werden:", repr(e))
+
+    midnight_local = _hour_floor(datetime.now().astimezone().replace(hour=0))
+    candidate_hours = set(today_forecast_by_hour) | set(future_forecast_by_hour) | set(actual_by_hour)
+    all_hours = {h for h in candidate_hours if h >= midnight_local}
+    if not all_hours:
+        return jsonify({"status": "success", "labels": [], "forecast": [], "actual": []})
+
+    hour_count = int((max(all_hours) - midnight_local).total_seconds() // 3600) + 1
+    labels, forecast, actual = [], [], []
+    for i in range(hour_count):
+        hour = midnight_local + timedelta(hours=i)
+        labels.append(hour.isoformat())
+        forecast.append(today_forecast_by_hour.get(hour, future_forecast_by_hour.get(hour)))
+        actual.append(actual_by_hour.get(hour))
+
+    return jsonify({"status": "success", "labels": labels, "forecast": forecast, "actual": actual})
 
 
 def get_wallbox_connection_status_options():
@@ -2606,6 +2701,53 @@ def apply_action_type_toggle_changes(old_map, new_map, config):
     config["endedShyftActionIds"] = sorted(ended_ids)
 
 
+def _read_pv_forecast_snapshot():
+    try:
+        with open(PV_FORECAST_SNAPSHOT_PATH, "r") as f:
+            return json.load(f)
+    except Exception:
+        return None
+
+
+def _maybe_freeze_pv_forecast_snapshot(input_csv, creation_date_ms):
+    """Schreibt PV_FORECAST_SNAPSHOT_PATH nur, wenn dort noch keine Prognose fuer den heutigen
+    (lokalen) Kalendertag liegt - danach bleibt der Snapshot fuer den Rest des Tages unangetastet,
+    auch wenn sync_dashboard_chart_data() stuendlich weiter neue Prognosen holt. Nimmt aus dem
+    JUST gefetchten input_csv nur die Zeilen, die tatsaechlich auf "heute" fallen - deckt die
+    Prognose den bisherigen Tagesverlauf (noch) nicht ab (z.B. weil creation_date schon nach 0 Uhr
+    liegt), bleiben diese fruehen Stunden im Snapshot einfach leer statt geraten.
+
+    Nutzt die Systemzeitzone des Containers fuer den Tagesbezug (bei einer normalen Home-Assistant-
+    OS/Supervised-Installation identisch zur in HA konfigurierten Zeitzone)."""
+    today_local = date.today().isoformat()
+    existing = _read_pv_forecast_snapshot()
+    if existing and existing.get("date") == today_local:
+        return
+
+    start_utc = datetime.fromtimestamp(creation_date_ms / 1000, tz=timezone.utc).replace(minute=0, second=0, microsecond=0)
+    try:
+        rows = list(csv.DictReader(io.StringIO(input_csv), delimiter=";"))
+    except Exception as e:
+        print("[Shyft] PV-Prognose-Snapshot: input_csv konnte nicht gelesen werden:", repr(e))
+        return
+
+    labels, pv_generation = [], []
+    for i, row in enumerate(rows):
+        row_dt_utc = start_utc + timedelta(hours=i)
+        if row_dt_utc.astimezone().date().isoformat() != today_local:
+            continue
+        labels.append(row_dt_utc.isoformat())
+        pv_generation.append(float(row.get("PV_generation") or 0))
+    if not labels:
+        return  # Prognose deckt "heute" (noch) gar nicht ab - naechster Sync versucht es erneut
+
+    try:
+        with open(PV_FORECAST_SNAPSHOT_PATH, "w") as f:
+            json.dump({"date": today_local, "labels": labels, "pv_generation": pv_generation}, f)
+    except Exception as e:
+        print("[Shyft] PV-Prognose-Snapshot konnte nicht gespeichert werden:", repr(e))
+
+
 def sync_dashboard_chart_data():
     "Refreshes the cached optimizer input_csv/output_csv/creation_date (see DASHBOARD_CACHE_PATH) from shyft-power - runs hourly (see scheduler), alongside the action queue poll, since the underlying data itself only changes about that often."
     user_id = extract_shyft_user_id(shyft_adapter.bubble_token)
@@ -2624,6 +2766,7 @@ def sync_dashboard_chart_data():
             json.dump({"input_csv": input_csv, "output_csv": output_csv, "creation_date": creation_date_ms}, f)
     except Exception as e:
         print("[Shyft] Dashboard-Chart-Daten konnten nicht zwischengespeichert werden:", repr(e))
+    _maybe_freeze_pv_forecast_snapshot(input_csv, creation_date_ms)
 
 
 def sync_sensors_periodically():
