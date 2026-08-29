@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.0.44.29
+
+* Präzise Optimizer-Timeout-Erkennung (statt der bisherigen "output_csv leer"-Heuristik aus 0.0.44.28): `_check_optimizer_result` prüft jetzt gezielt das `Infos`-Feld des `optimizer_run`-Objekts auf `"Timeout during optimizer call happened. Optimizing took more than 600 seconds."` (`_optimizer_run_indicates_timeout`, `OPTIMIZER_TIMEOUT_DETAIL_MARKER`) - funktioniert unabhängig davon, ob Bubble `Infos` als verschachteltes Objekt oder als roher JSON-String liefert. Die leere-`output_csv`-Prüfung bleibt als Fallback zusätzlich bestehen.
+
 ## 0.0.44.28
 
 * Nach dem Absenden der Site-Daten (`sync_site_data`, sowohl der stündliche Sync als auch der manuelle `/trigger`) wartet das Addon jetzt aktiv auf ein frisches Optimierungsergebnis, statt nur auf den nächsten stündlichen `sync_dashboard_chart_data`-Lauf zu hoffen:

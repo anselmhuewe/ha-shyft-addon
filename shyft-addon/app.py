@@ -3021,16 +3021,33 @@ def _check_optimizer_result(submitted_at, optimizer_period, attempt, is_last, si
     input_csv = optimizer_run.get("input_csv")
     creation_date_ms = optimizer_run.get("creation_date")
 
-    if not output_csv or not str(output_csv).strip():
-        # Optimizer ist in seinen eigenen 600s-Timeout gelaufen - output_csv bleibt dann leer,
-        # obwohl optimizer_run selbst vorhanden ist. TODO: sobald die genaue Fehlermeldung dafuer
-        # bekannt ist, hier gezielter darauf pruefen statt nur auf "output_csv leer".
+    output_empty = not output_csv or not str(output_csv).strip()
+    if _optimizer_run_indicates_timeout(optimizer_run) or output_empty:
+        # Optimizer ist in seinen eigenen 600s-Timeout gelaufen - erkennbar am "Infos"-Feld
+        # (details enthaelt OPTIMIZER_TIMEOUT_DETAIL_MARKER); output_csv bleibt dann ausserdem
+        # leer, obwohl optimizer_run selbst schon vorhanden ist. Die leere-output_csv-Pruefung
+        # bleibt als Fallback, falls "Infos" mal nicht gesetzt ist.
         _handle_optimizer_timeout(submitted_at, optimizer_period, attempt)
         return
 
     if not input_csv or creation_date_ms is None:
         return
     _write_dashboard_cache(input_csv, output_csv, creation_date_ms)
+
+
+# Bubble schreibt diesen Text ins "Infos"-Feld des Optimizer Run, wenn der Optimizer nach 600s in
+# seinen eigenen Timeout laeuft (siehe Nutzer-Beispiel: {"details": "Timeout during optimizer call
+# happened. Optimizing took more than 600 seconds."}). "Infos" kann je nach Bubble-Serialisierung
+# als dict oder als roher JSON-String ankommen - deshalb wird hier einfach nach dem Marker-Text
+# innerhalb der Stringdarstellung gesucht, statt das Feld strikt zu parsen.
+OPTIMIZER_TIMEOUT_DETAIL_MARKER = "Timeout during optimizer call happened. Optimizing took more than 600 seconds."
+
+
+def _optimizer_run_indicates_timeout(optimizer_run):
+    infos = optimizer_run.get("Infos")
+    if not infos:
+        return False
+    return OPTIMIZER_TIMEOUT_DETAIL_MARKER in str(infos)
 
 
 def _handle_optimizer_timeout(submitted_at, optimizer_period, attempt):
