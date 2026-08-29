@@ -14,9 +14,3 @@ DEV_ACCESS_KEY_PREFIX = "test_"
 
 HOMEASSISTANT_URI="http://homeassistant.local:8123"
 CONFIG_PATH = "/data/config.json"
-
-# shyft_access_key des gemeinsamen Demo-Kontos, mit dem das Addon vor der Ersteinrichtung
-# ausgeliefert wird - solange der aktuell hinterlegte Key exakt diesem entspricht, zeigt die
-# Konfigurationsseite das Demo-Popup ("Du befindest dich noch im Demomodus...", siehe
-# GET /account-status in app.py). TODO: echten Wert des Demo-Kontos eintragen.
-DEMO_SHYFT_ACCESS_KEY = "TODO_DEMO_ACCESS_KEY_NOT_SET"

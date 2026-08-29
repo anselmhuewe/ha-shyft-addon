@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.0.44.26
+
+* Demo-Modus braucht keinen (Fake-)Bubble-Account mehr - `is_demo_mode()` (app.py) prüft stattdessen einfach, ob überhaupt ein echter `shyft_access_key` hinterlegt ist (config.yaml's eigener Default `"notset"`, kein separater Demo-Key/-Vergleich mehr nötig). Solange das so ist, ruft das Addon **niemals** Bubble auf:
+  * `sync_site_data`/`sync_pv_history` überspringen den Bubble-Call ganz (statt es zu versuchen und am ungültigen Token zu scheitern).
+  * `sync_dashboard_chart_data` lädt für die Dashboard-Charts stattdessen zwei statische, mit dem Addon ausgelieferte Dateien (`demo_data/demo_input.csv`/`demo_output.csv`, noch nachzuliefern - siehe `demo_data/README.md`) - `creation_date` wird dabei automatisch auf die aktuelle volle Stunde gesetzt, damit die Beispieldaten immer aktuell wirken.
+  * Aktions-Abruf (`/shyft/actions`, `process_shyft_actions`, Fehlerreports) war über die bestehende `user_id`-Extraktion aus dem Token bereits automatisch demo-sicher (kein echter Token → keine gültige `user_id` → kein Call).
+
 ## 0.0.44.25
 
 * **Kompletter Umbau der Onboarding-Logik** (ersetzt das Demo-Popup aus 0.0.44.24 - wieder entfernt, kein E-Mail/Passwort mehr vom Nutzer):

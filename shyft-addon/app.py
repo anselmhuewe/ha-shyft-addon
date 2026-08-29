@@ -2,7 +2,6 @@ from sync_service import SyncService, convert_to_expected_unit, compute_wallbox_
 from homeassistant_adapter import HomeAssistantAdapter, EntityState
 from shyft_adapter import ShyftAdapter
 from live_entity_watcher import LiveEntityWatcher
-from constants import DEMO_SHYFT_ACCESS_KEY
 import problem_registry
 
 import os
@@ -142,10 +141,24 @@ def triggerEndpoint():
     return sync_site_data()
 
 
+# "notset" ist config.yaml's eigener Default fuer shyft_access_key (siehe options:) - kein
+# gesonderter Demo-Account/-Key noetig, "kein echter Key hinterlegt" IST der Demo-Zustand.
+UNSET_SHYFT_ACCESS_KEY = "notset"
+
+
+def is_demo_mode():
+    """True, solange kein echter shyft_access_key hinterlegt ist - das Addon ruft in diesem Zustand
+    niemals Bubble auf (weder Sync, Fehlerreports noch Aktionen/Dashboard-Daten), siehe
+    sync_site_data/sync_pv_history/sync_dashboard_chart_data. Die "echten" Sensorwerte fuer ein
+    einzelnes Demo-Geraet (siehe DEMO_CAPABLE_SECTIONS) sind davon unabhaengig - die laufen ueber
+    is_demo_sensor/get_demo_value in sync_service.py, auch nachdem ein echter Account existiert."""
+    return not SHYFT_ACCESS_KEY or SHYFT_ACCESS_KEY == UNSET_SHYFT_ACCESS_KEY
+
+
 @app.route("/account-status", methods=["GET"])
 def accountStatusEndpoint():
-    "Tells the frontend whether the currently configured shyft_access_key is still the shared demo account (see DEMO_SHYFT_ACCESS_KEY) - drives the Demo-Popup in www/index.html. Compares the raw configured key (before any test_ prefix stripping, see ShyftAdapter.set_access_key) against the raw demo key."
-    return jsonify({"isDemo": SHYFT_ACCESS_KEY == DEMO_SHYFT_ACCESS_KEY})
+    "Tells the frontend whether the addon is still in demo mode (no real shyft_access_key hinterlegt, siehe is_demo_mode)."
+    return jsonify({"isDemo": is_demo_mode()})
 
 
 def _persist_shyft_access_key(new_access_key):
@@ -191,12 +204,13 @@ def _is_real_device(mapping):
 
 def maybe_create_real_account(old_integration_mappings, new_integration_mappings):
     """Legt im Hintergrund einen echten shyft-power-Account an (create_user_addon), sobald ein
-    Demo-Modus-Nutzer erstmals ein echtes Geraet fuer irgendeine DEMO_CAPABLE_SECTIONS hinterlegt
-    (also von "Demo" auf eine echte HA-Integration wechselt) - kein Popup, keine E-Mail/Passwort-
-    Abfrage, Bubble erzeugt beides selbst (siehe ShyftAdapter.create_user). No-op, wenn aktuell kein
-    Demo-Key hinterlegt ist, oder wenn sich fuer keine Section tatsaechlich etwas von Demo auf echt
-    geaendert hat. Wird von writeConfig nach jedem Config-Speichern aufgerufen."""
-    if SHYFT_ACCESS_KEY != DEMO_SHYFT_ACCESS_KEY:
+    Demo-Modus-Nutzer (siehe is_demo_mode) erstmals ein echtes Geraet fuer irgendeine
+    DEMO_CAPABLE_SECTIONS hinterlegt (also von "Demo" auf eine echte HA-Integration wechselt) - kein
+    Popup, keine E-Mail/Passwort-Abfrage, Bubble erzeugt beides selbst (siehe
+    ShyftAdapter.create_user). No-op, wenn schon ein echter Account existiert, oder wenn sich fuer
+    keine Section tatsaechlich etwas von Demo auf echt geaendert hat. Wird von writeConfig nach
+    jedem Config-Speichern aufgerufen."""
+    if not is_demo_mode():
         return
     became_real = any(
         not _is_real_device(old_integration_mappings.get(section, []))
@@ -228,6 +242,10 @@ def maybe_create_real_account(old_integration_mappings, new_integration_mappings
 
 def sync_site_data():
     "Hourly addon->Bubble sync (also the manual 'Verbindung testen' trigger): builds the consolidated staticConfig+liveValues+EV-forecast JSON and sends it via update_site_addon - replaces the old per-sensor addon_sensor_data workflow."
+    if is_demo_mode():
+        # Kein echter Account -> gar nicht erst versuchen, Bubble zu erreichen (waere ohnehin nur
+        # ein 401/Fehler mit dem "notset"-Platzhalter-Token).
+        return json.dumps({"status": "skipped", "message": "Demo-Modus - noch kein echter shyft-power-Account hinterlegt."})
     config = _read_current_config()
     optimizer_period = int(config.get("optimizationPeriodsSite") or 48)
     static_config = sync_service.collect_static_config()
@@ -249,6 +267,8 @@ def sync_site_data():
 
 def sync_pv_history():
     "Step01 pv history addon"
+    if is_demo_mode():
+        return
     return sync_service.sync_pv_history()
 
 @app.route("/config", methods=["GET"])
@@ -2850,8 +2870,43 @@ def _maybe_freeze_pv_forecast_snapshot(input_csv, creation_date_ms):
         print("[Shyft] PV-Prognose-Snapshot konnte nicht gespeichert werden:", repr(e))
 
 
+# Statische, mit dem Addon ausgelieferte Beispieldaten fuers Dashboard im Demo-Modus (siehe
+# _load_demo_dashboard_data) - kein Bubble-Call noetig, solange kein echter Account existiert.
+DEMO_INPUT_CSV_PATH = "demo_data/demo_input.csv"
+DEMO_OUTPUT_CSV_PATH = "demo_data/demo_output.csv"
+
+
+def _load_demo_dashboard_data():
+    """Demo-Pendant zu einer echten shyft-power-Antwort (input_csv/output_csv/creation_date) - aus
+    zwei statischen CSV-Dateien (DEMO_INPUT_CSV_PATH/DEMO_OUTPUT_CSV_PATH), damit Dashboard-Charts
+    auch im Demo-Modus etwas zeigen. creation_date wird bei jedem Aufruf auf die aktuelle volle
+    Stunde gesetzt, damit die (immer gleichen) Beispieldaten stets "aktuell" wirken, statt nach ein
+    paar Stunden aus dem abgedeckten Zeitraum zu laufen. None, wenn die Demo-Dateien (noch) nicht
+    vorhanden sind."""
+    try:
+        with open(DEMO_INPUT_CSV_PATH, "r", encoding="utf-8") as f:
+            input_csv = f.read()
+        with open(DEMO_OUTPUT_CSV_PATH, "r", encoding="utf-8") as f:
+            output_csv = f.read()
+    except FileNotFoundError:
+        return None
+    now_hour = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
+    return {"input_csv": input_csv, "output_csv": output_csv, "creation_date": int(now_hour.timestamp() * 1000)}
+
+
 def sync_dashboard_chart_data():
     "Refreshes the cached optimizer input_csv/output_csv/creation_date (see DASHBOARD_CACHE_PATH) from shyft-power - runs hourly (see scheduler), alongside the action queue poll, since the underlying data itself only changes about that often."
+    if is_demo_mode():
+        demo_data = _load_demo_dashboard_data()
+        if demo_data is None:
+            return
+        try:
+            with open(DASHBOARD_CACHE_PATH, "w") as f:
+                json.dump(demo_data, f)
+        except Exception as e:
+            print("[Shyft] Demo-Dashboard-Chart-Daten konnten nicht zwischengespeichert werden:", repr(e))
+        _maybe_freeze_pv_forecast_snapshot(demo_data["input_csv"], demo_data["creation_date"])
+        return
     user_id = extract_shyft_user_id(shyft_adapter.bubble_token)
     if not user_id:
         return
