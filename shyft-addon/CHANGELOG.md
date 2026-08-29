@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.0.44.30
+
+* `icon.png`/`logo.png` (Home Assistant Supervisor: Add-on-Liste/Navigation bzw. Info-Header) waren bislang ein auf 67×46px seitlich beschnittener Ausschnitt des Logos, wodurch links und rechts Teile fehlten. Neu erzeugt aus den unbeschnittenen Quellbildern (`www/assets/shyft-icon.png`/`shyft-logo.png`): `icon.png` als quadratisches 128×128-Sonnensymbol (dieser Slot wird von HA fest quadratisch dargestellt), `logo.png` als 250×61 breites "SHYFT"-Wortmarken-Logo (dieser Slot erlaubt nicht-quadratisch, HA schneidet dort nichts ab).
+
 ## 0.0.44.29
 
 * Präzise Optimizer-Timeout-Erkennung (statt der bisherigen "output_csv leer"-Heuristik aus 0.0.44.28): `_check_optimizer_result` prüft jetzt gezielt das `Infos`-Feld des `optimizer_run`-Objekts auf `"Timeout during optimizer call happened. Optimizing took more than 600 seconds."` (`_optimizer_run_indicates_timeout`, `OPTIMIZER_TIMEOUT_DETAIL_MARKER`) - funktioniert unabhängig davon, ob Bubble `Infos` als verschachteltes Objekt oder als roher JSON-String liefert. Die leere-`output_csv`-Prüfung bleibt als Fallback zusätzlich bestehen.
