@@ -18,11 +18,11 @@
     "device_status_deviation": true
   },
   "integrationMappings": {
-    "wechselrichter": [],
-    "batterie": [],
-    "waermepumpe": [],
-    "auto": [],
-    "wallbox": [],
+    "wechselrichter": ["demo"],
+    "batterie": ["demo"],
+    "waermepumpe": ["demo"],
+    "auto": ["demo"],
+    "wallbox": ["demo"],
     "raumtemperatur": [],
     "sonstiger_verbraucher": []
   },

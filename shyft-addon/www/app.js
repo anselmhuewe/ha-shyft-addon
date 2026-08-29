@@ -175,39 +175,51 @@ const SENSOR_ENTITY_FILTERS = {
     'sonstiger_verbraucher_switch_entity': {type: 'state_on_off'},
 }
 
+// Synthetischer integrationMappings-Eintrag (["demo"]) statt einer echten HA-Integration - siehe
+// DEMO_CAPABLE_SECTIONS/DEMO_INTEGRATION_ID in app.py, DEMO_SECTION_SENSORS in sync_service.py.
+// Zeigt plausible Beispieldaten, bis der Nutzer ein echtes Geraet hinterlegt - dieser Moment loest
+// dann serverseitig automatisch die Anlage eines echten shyft-power-Accounts aus (siehe
+// maybe_create_real_account in app.py), ganz ohne Popup/E-Mail-Abfrage.
+const DEMO_INTEGRATION_ID = 'demo';
+
 const INTEGRATION_SECTIONS = [
     {
         key: 'wechselrichter',
         label: 'Wechselrichter',
         sensors: ['photovoltaic_powerflow_pv', 'photovoltaic_powerflow_load', 'photovoltaic_powerflow_grid', 'photovoltaic_powerflow_battery'],
         actions: ['pv_feed_in_limit', 'consumption_limit_14a'],
-        requiresDeviceClass: 'power'
+        requiresDeviceClass: 'power',
+        hasDemo: true
     },
     {
         key: 'batterie',
         label: 'Batterie',
         sensors: ['battery_storage_command_mode', 'battery_state_of_charge', 'battery_charge_limit_current', 'battery_discharge_limit_current'],
         actions: ['battery_charge_shift_pv_surplus', 'battery_discharge_shift', 'battery_grid_charge', 'battery_action_stop'],
-        requiresDeviceClass: 'power'
+        requiresDeviceClass: 'power',
+        hasDemo: true
     },
     {
         key: 'waermepumpe',
         label: 'Wärmepumpe',
         sensors: ['heatpump_dhw_tank_temp', 'heatpump_dhw_activated', 'heatpump_dhw_on_off', 'heatpump_heating_target_temp_normal', 'heatpump_heating_activated', 'heatpump_current_power_elect', 'heatpump_on_off', 'heatpump_supply_temp_hp'],
         actions: ['hot_water', 'heating_target_temp'],
-        requiresDeviceClass: 'temperature'
+        requiresDeviceClass: 'temperature',
+        hasDemo: true
     },
     {
         key: 'auto',
         label: 'Auto',
         sensors: ['electronicvehicle_state_of_charge'],
-        actions: []
+        actions: [],
+        hasDemo: true
     },
     {
         key: 'wallbox',
         label: 'Wallbox',
         sensors: ['wallbox_current_charging_power', 'wallbox_plugged'],
-        actions: ['car_charge_start', 'car_charge_stop']
+        actions: ['car_charge_start', 'car_charge_stop'],
+        hasDemo: true
     },
     {
         key: 'raumtemperatur',
@@ -715,6 +727,9 @@ document.addEventListener('mousedown', (event) => {
 // integration selected at all has nothing to show either way, so it's not forced open.
 function isSectionComplete(section, currentIds) {
     if (currentIds.length === 0) return true;
+    // Demo-Geraet braucht keine Sensor-/Actor-Zuordnung - zeigt Beispieldaten (siehe get_demo_value
+    // in sync_service.py), gilt also immer als vollstaendig konfiguriert.
+    if (currentIds.length === 1 && currentIds[0] === DEMO_INTEGRATION_ID) return true;
 
     const sensorMappings = configData['sensorMappings'] || {};
     const actorMappings = configData['actorMappings'] || {};
@@ -859,11 +874,16 @@ function renderIntegrationSections() {
         });
 
         const picker = buildIntegrationPicker(section, currentIds, (selectedIds) => {
-            const wasEmpty = currentIntegrationSelections[section.key].length === 0;
+            const previousIds = currentIntegrationSelections[section.key];
+            const wasEmpty = previousIds.length === 0;
+            // Demo->echtes Geraet zaehlt wie "vorher leer" - der Nutzer muss die neuen Sensorfelder
+            // ja jetzt erst ausfuellen, genau wie bei einer erstmaligen Auswahl.
+            const wasDemo = previousIds.length === 1 && previousIds[0] === DEMO_INTEGRATION_ID;
+            const becameReal = !(selectedIds.length === 1 && selectedIds[0] === DEMO_INTEGRATION_ID);
             currentIntegrationSelections[section.key] = selectedIds;
             if (selectedIds.length > 0) {
                 renderSectionBody(bodyDiv, section, selectedIds);
-                if (wasEmpty) expanded = true;
+                if (wasEmpty || (wasDemo && becameReal)) expanded = true;
             } else {
                 bodyDiv.innerHTML = '';
             }
@@ -999,12 +1019,17 @@ function buildIntegrationPicker(section, currentIds, onChange) {
     const options = integrationsData.integrations.filter(integration =>
         !section.requiresDeviceClass || integrationHasDeviceClass(integration.id, section.requiresDeviceClass)
     );
+    // Demo-Geraet als eigene, synthetische Option ganz oben - kein integrationsData-Eintrag, wird
+    // separat behandelt (siehe DEMO_INTEGRATION_ID).
+    const demoOption = section.hasDemo ? {id: DEMO_INTEGRATION_ID, name: 'Demo-Gerät'} : null;
 
     let selectedIds = [...currentIds];
 
     function updateButtonText() {
         if (selectedIds.length === 0) {
             buttonText.textContent = 'nicht vorhanden';
+        } else if (demoOption && selectedIds.length === 1 && selectedIds[0] === DEMO_INTEGRATION_ID) {
+            buttonText.textContent = demoOption.name;
         } else {
             buttonText.textContent = selectedIds
                 .map(id => (integrationsData.integrations.find(integration => integration.id === id) || {}).name || id)
@@ -1016,8 +1041,11 @@ function buildIntegrationPicker(section, currentIds, onChange) {
         list.innerHTML = '';
         const normalizedFilter = (filterText || '').trim().toLowerCase();
         const filtered = options.filter(integration => integration.name.toLowerCase().includes(normalizedFilter));
+        // Demo-Geraet nur anzeigen, solange danach gesucht wird bzw. das Suchfeld leer ist - sonst
+        // taucht "Demo-Gerät" bei jeder Sensor-Suche mit auf.
+        const showDemoOption = demoOption && demoOption.name.toLowerCase().includes(normalizedFilter);
 
-        if (filtered.length === 0) {
+        if (filtered.length === 0 && !showDemoOption) {
             const empty = document.createElement('div');
             empty.className = 'integrationPickerEmpty';
             empty.textContent = 'Keine Treffer';
@@ -1025,32 +1053,40 @@ function buildIntegrationPicker(section, currentIds, onChange) {
             return;
         }
 
-        for (const integration of filtered) {
+        function buildCheckbox(id, name, {isDemo = false} = {}) {
             const optionLabel = document.createElement('label');
             optionLabel.className = 'integrationPickerOption';
 
             const checkbox = document.createElement('input');
             checkbox.type = 'checkbox';
-            checkbox.value = integration.id;
-            checkbox.checked = selectedIds.includes(integration.id);
+            checkbox.value = id;
+            checkbox.checked = selectedIds.includes(id);
             checkbox.addEventListener('change', () => {
                 if (checkbox.checked) {
-                    if (!selectedIds.includes(integration.id)) {
-                        selectedIds.push(integration.id);
-                    }
+                    // Demo-Geraet und echte Integrationen schliessen sich gegenseitig aus - entweder
+                    // Beispieldaten oder ein echtes Geraet, nie beides gleichzeitig.
+                    selectedIds = isDemo ? [id] : [...selectedIds.filter(existing => existing !== DEMO_INTEGRATION_ID), id];
                 } else {
-                    selectedIds = selectedIds.filter(id => id !== integration.id);
+                    selectedIds = selectedIds.filter(existing => existing !== id);
                 }
                 updateButtonText();
+                renderList(search.value);
                 onChange([...selectedIds]);
             });
 
             const text = document.createElement('span');
-            text.textContent = integration.name;
+            text.textContent = name;
 
             optionLabel.appendChild(checkbox);
             optionLabel.appendChild(text);
-            list.appendChild(optionLabel);
+            return optionLabel;
+        }
+
+        if (showDemoOption) {
+            list.appendChild(buildCheckbox(demoOption.id, demoOption.name, {isDemo: true}));
+        }
+        for (const integration of filtered) {
+            list.appendChild(buildCheckbox(integration.id, integration.name));
         }
     }
 
@@ -1077,6 +1113,17 @@ function buildIntegrationPicker(section, currentIds, onChange) {
 
 function renderSectionBody(bodyDiv, section, entryIds) {
     bodyDiv.innerHTML = '';
+
+    // Demo-Geraet: keine echten Entities zum Mappen, keine echte Steuerung - kurzer Hinweis statt
+    // der ganzen Sensor-/Steuerungs-UI. Sensorwerte kommen stattdessen aus get_demo_value
+    // (sync_service.py), automatisch verwendet sobald integrationMappings[section.key] == ["demo"].
+    if (entryIds.length === 1 && entryIds[0] === DEMO_INTEGRATION_ID) {
+        const note = document.createElement('div');
+        note.className = 'intro';
+        note.textContent = 'Demo-Gerät aktiv – zeigt Beispieldaten. Wähle oben ein echtes Gerät aus deiner Home-Assistant-Umgebung, sobald du eines hinterlegen willst.';
+        bodyDiv.appendChild(note);
+        return;
+    }
 
     const integrationEntityIds = new Set();
     for (const entryId of entryIds) {
@@ -4109,31 +4156,13 @@ function setupTabs() {
 }
 
 // ============================================================================
-// Demo-Modus / Zugangstoken: das Popup ("Du befindest dich noch im Demomodus...")
-// erscheint, wenn der aktuell hinterlegte shyft_access_key mit dem bekannten
-// Demo-Konto uebereinstimmt (siehe DEMO_SHYFT_ACCESS_KEY + GET /account-status in
-// app.py) - anders als ein reines Ersteinrichtungs-Popup ist es jederzeit
-// wegklickbar, das Demo-Konto bleibt ja nutzbar. "Zugangstoken ändern" daneben
-// erlaubt jederzeit, einen bestehenden Account zu hinterlegen bzw. das Konto zu
-// wechseln - der echte aktuelle Token wird dafuer nie ans Frontend zurueckgegeben,
-// nur neu gesetzt.
+// Zugangstoken-Wechsel: der eigentliche Account wird jetzt automatisch im Hintergrund
+// angelegt, sobald ein erstes echtes Geraet (statt eines Demo-Geraets, siehe
+// INTEGRATION_SECTIONS/buildIntegrationPicker) hinterlegt wird - kein Popup mehr noetig.
+// "Zugangstoken ändern" bleibt als manuelle Option, um einen bestehenden Account zu
+// hinterlegen bzw. das Konto zu wechseln - der echte aktuelle Token wird dafuer nie ans
+// Frontend zurueckgegeben, nur neu gesetzt.
 // ============================================================================
-
-async function checkShyftAccountStatus() {
-    try {
-        const status = await getJson(insideHomeAssistant + '/account-status');
-        if (status && status.isDemo) {
-            const dialog = document.getElementById('demoAccountDialog');
-            if (dialog && !dialog.open) dialog.showModal();
-        }
-    } catch (err) {
-        console.log(err);
-    }
-}
-
-function closeDemoAccountDialog() {
-    document.getElementById('demoAccountDialog')?.close();
-}
 
 function showShyftAccountTokenField() {
     document.getElementById('shyftAccountTokenDisplay').style.display = 'none';
@@ -4172,46 +4201,17 @@ async function saveShyftAccountToken() {
     }
 }
 
-document.getElementById('demoAccountForm')?.addEventListener('submit', async (event) => {
-    event.preventDefault();
-    const email = document.getElementById('demoAccountEmail').value.trim();
-    const password = document.getElementById('demoAccountPassword').value;
-    const errorEl = document.getElementById('demoAccountError');
-    const submitButton = document.getElementById('demoAccountSubmit');
-    errorEl.textContent = '';
-    submitButton.disabled = true;
-    submitButton.textContent = 'Wird angelegt…';
-    try {
-        const result = await postJson(insideHomeAssistant + '/create-account', {email, password});
-        if (result.status === 'success') {
-            closeDemoAccountDialog();
-            document.getElementById('demoAccountEmail').value = '';
-            document.getElementById('demoAccountPassword').value = '';
-        } else {
-            errorEl.textContent = result.message || 'Der Account konnte nicht angelegt werden.';
-        }
-    } catch (err) {
-        console.log(err);
-        errorEl.textContent = 'Der Account konnte nicht angelegt werden. Bitte versuche es später erneut.';
-    } finally {
-        submitButton.disabled = false;
-        submitButton.textContent = 'Account anlegen';
-    }
-});
-
 // loadShyftActions waits for loadConfiguration so the action cards' brand icons (getActionIconUrl)
 // have integrationsData/currentIntegrationSelections available on the very first render
 if (document.readyState === 'complete') {
     loadConfiguration().then(loadShyftActions);
     loadDashboard();
     setupTabs();
-    checkShyftAccountStatus();
 } else {
     window.addEventListener('load', () => {
         loadConfiguration().then(loadShyftActions);
         loadDashboard();
         setupTabs();
-        checkShyftAccountStatus();
     });
 }
 

@@ -1,5 +1,5 @@
-from sync_service import SyncService, convert_to_expected_unit, compute_wallbox_max_kw
-from homeassistant_adapter import HomeAssistantAdapter
+from sync_service import SyncService, convert_to_expected_unit, compute_wallbox_max_kw, is_demo_sensor, get_demo_value
+from homeassistant_adapter import HomeAssistantAdapter, EntityState
 from shyft_adapter import ShyftAdapter
 from live_entity_watcher import LiveEntityWatcher
 from constants import DEMO_SHYFT_ACCESS_KEY
@@ -176,36 +176,55 @@ def setAccessKeyEndpoint():
     return jsonify({"status": "success"})
 
 
-@app.route("/create-account", methods=["POST"])
-def createAccountEndpoint():
-    """Signs a new shyft-power account up for a demo-mode addon user (siehe Demo-Popup in
-    www/index.html) - ruft create_user_addon auf und hinterlegt den zurueckgegebenen access_key bei
-    Erfolg direkt selbst (siehe _persist_shyft_access_key). 'has an account' == 'yes' in der Antwort
-    wird als Fehler gedeutet (Bubbles 'Sign the user up' meldet damit, dass die E-Mail-Adresse
-    bereits einen Account hat) - dann wird NICHTS gespeichert."""
-    body = request.get_json(silent=True) or {}
-    email = (body.get("email") or "").strip()
-    password = body.get("password") or ""
-    if not email or not password:
-        return jsonify({"status": "error", "message": "E-Mail-Adresse und Passwort werden benötigt."})
+# Sections, die (statt einer echten HA-Integration) ein synthetisches "Demo"-Geraet anbieten - siehe
+# DEMO_INTEGRATION_ID, buildIntegrationPicker/INTEGRATION_SECTIONS in www/app.js, DEMO_SECTION_SENSORS
+# in sync_service.py. "Sonstiger Verbraucher" und "Raumtemperatur" bewusst nicht dabei (Letztere hat
+# schon ihren eigenen Auto-Simulations-Fallback ohne Sensor).
+DEMO_CAPABLE_SECTIONS = ["wechselrichter", "batterie", "waermepumpe", "auto", "wallbox"]
+DEMO_INTEGRATION_ID = "demo"
+
+
+def _is_real_device(mapping):
+    "True wenn mapping (ein integrationMappings[section]-Wert) auf eine echte HA-Integration zeigt - also nicht leer und nicht nur der synthetische Demo-Eintrag."
+    return bool(mapping) and mapping != [DEMO_INTEGRATION_ID]
+
+
+def maybe_create_real_account(old_integration_mappings, new_integration_mappings):
+    """Legt im Hintergrund einen echten shyft-power-Account an (create_user_addon), sobald ein
+    Demo-Modus-Nutzer erstmals ein echtes Geraet fuer irgendeine DEMO_CAPABLE_SECTIONS hinterlegt
+    (also von "Demo" auf eine echte HA-Integration wechselt) - kein Popup, keine E-Mail/Passwort-
+    Abfrage, Bubble erzeugt beides selbst (siehe ShyftAdapter.create_user). No-op, wenn aktuell kein
+    Demo-Key hinterlegt ist, oder wenn sich fuer keine Section tatsaechlich etwas von Demo auf echt
+    geaendert hat. Wird von writeConfig nach jedem Config-Speichern aufgerufen."""
+    if SHYFT_ACCESS_KEY != DEMO_SHYFT_ACCESS_KEY:
+        return
+    became_real = any(
+        not _is_real_device(old_integration_mappings.get(section, []))
+        and _is_real_device(new_integration_mappings.get(section, []))
+        for section in DEMO_CAPABLE_SECTIONS
+    )
+    if not became_real:
+        return
     try:
-        result = shyft_adapter.create_user(email, password)
+        result = shyft_adapter.create_user()
     except Exception as e:
-        print("[Shyft] Konto-Erstellung fehlgeschlagen:", repr(e))
-        return jsonify({"status": "error", "message": "Der Account konnte nicht angelegt werden. Bitte versuche es später erneut."})
+        print("[Shyft] Automatische Konto-Erstellung fehlgeschlagen:", repr(e))
+        return
     has_account_raw = str(result.get("has an account", "")).strip().lower()
     if has_account_raw in ("yes", "true", "1"):
-        return jsonify({"status": "error", "message": "Für diese E-Mail-Adresse existiert bereits ein Account. Nutze stattdessen \"Shyft-Zugangstoken ändern\", um dich mit deinem bestehenden Zugangstoken anzumelden."})
+        # Sollte im automatischen Ablauf eigentlich nicht vorkommen (Bubble erzeugt ja jedes Mal eine
+        # neue E-Mail-Adresse) - lieber nichts uebernehmen als versehentlich falsch ueberschreiben.
+        print("[Shyft] create_user_addon meldet 'has an account: yes' - unerwartet, kein Zugangstoken uebernommen.")
+        return
     new_access_key = result.get("access_key")
     if not new_access_key:
         print("[Shyft] create_user_addon lieferte keinen access_key:", result)
-        return jsonify({"status": "error", "message": "Der Account konnte nicht angelegt werden (kein Zugangstoken erhalten)."})
+        return
     try:
         _persist_shyft_access_key(new_access_key)
+        print("[Shyft] Echter Account automatisch angelegt, Zugangstoken uebernommen.")
     except Exception as e:
-        print("[Shyft] Zugangstoken nach Konto-Erstellung konnte nicht gespeichert werden:", repr(e))
-        return jsonify({"status": "error", "message": "Der Account wurde angelegt, aber der Zugangstoken konnte nicht gespeichert werden. Bitte trage ihn manuell über \"Shyft-Zugangstoken ändern\" ein."})
-    return jsonify({"status": "success"})
+        print("[Shyft] Zugangstoken nach automatischer Konto-Erstellung konnte nicht gespeichert werden:", repr(e))
 
 def sync_site_data():
     "Hourly addon->Bubble sync (also the manual 'Verbindung testen' trigger): builds the consolidated staticConfig+liveValues+EV-forecast JSON and sends it via update_site_addon - replaces the old per-sensor addon_sensor_data workflow."
@@ -1463,7 +1482,17 @@ def is_car_ready_to_charge(config):
 
 
 def _read_mapped_entity_state(config, sensor_key):
-    "Shared Lookup: rohes EntityState (state/unit/last_updated) fuer einen sensorMappings-Eintrag - None, wenn nicht zugeordnet/unavailable/nicht lesbar. Basis fuer _read_mapped_numeric/_read_mapped_raw_state und (fuers Energiefluss-Widget) die *_ts-Varianten, die zusaetzlich den Zeitstempel brauchen."
+    """Shared Lookup: rohes EntityState (state/unit/last_updated) fuer einen sensorMappings-Eintrag
+    - None, wenn nicht zugeordnet/unavailable/nicht lesbar. Basis fuer _read_mapped_numeric/
+    _read_mapped_raw_state und (fuers Energiefluss-Widget) die *_ts-Varianten, die zusaetzlich den
+    Zeitstempel brauchen. Ist die zugehoerige Section gerade im Demo-Modus (siehe is_demo_sensor in
+    sync_service.py), wird HA gar nicht erst gefragt - stattdessen ein synthetisches EntityState aus
+    get_demo_value gebaut (last_updated = jetzt, damit es nie als "veraltet" markiert wird)."""
+    if is_demo_sensor(config, sensor_key):
+        state, unit = get_demo_value(sensor_key)
+        if state is None:
+            return None
+        return EntityState(state, unit or "", datetime.now(timezone.utc))
     entity_id = config.get("sensorMappings", {}).get(sensor_key, "")
     if not entity_id:
         return None
@@ -2206,6 +2235,7 @@ def writeConfig():
         data.get("sensorMappings", {}).get("battery_state_of_charge"),
         data.get("sensorMappings", {}).get("photovoltaic_powerflow_battery"),
     )
+    old_integration_mappings = data.get("integrationMappings", {})
     data.update(incoming)
 
     script_sync_errors = {}
@@ -2263,6 +2293,11 @@ def writeConfig():
             maybe_detect_battery_flow_sign_convention()
         except Exception as e:
             print("[Shyft] Batterie-Vorzeichen-Erkennung fehlgeschlagen:", repr(e))
+
+    try:
+        maybe_create_real_account(old_integration_mappings, data.get("integrationMappings", {}))
+    except Exception as e:
+        print("[Shyft] Automatische Konto-Erstellung fehlgeschlagen:", repr(e))
 
     response_data = dict(data)
     response_data["scriptSyncErrors"] = script_sync_errors

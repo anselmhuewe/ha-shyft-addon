@@ -268,53 +268,6 @@
             color: var(--color-accent);
         }
 
-        dialog.shyftDialog {
-            border: none;
-            border-radius: 10px;
-            padding: 1.5em;
-            max-width: 26em;
-            width: 90%;
-            color: var(--color-text);
-            background: var(--color-bg-card);
-            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.25);
-        }
-        dialog.shyftDialog::backdrop {
-            background: rgba(0, 0, 0, 0.5);
-        }
-        .shyftDialogText {
-            margin: 0 0 1.2em;
-            line-height: 1.5;
-        }
-        .shyftDialogField {
-            margin-bottom: 0.9em;
-        }
-        .shyftDialogField label {
-            display: block;
-            margin-bottom: 0.3em;
-            font-size: 0.9em;
-            color: var(--color-text-secondary);
-        }
-        .shyftDialogActions {
-            display: flex;
-            align-items: center;
-            gap: 1em;
-            margin-top: 1.2em;
-        }
-        .shyftDialogClose {
-            position: absolute;
-            top: 0.8em;
-            right: 0.9em;
-            background: none;
-            border: none;
-            font-size: 1.3em;
-            line-height: 1;
-            cursor: pointer;
-            color: var(--color-text-secondary);
-        }
-        dialog.shyftDialog {
-            position: relative;
-        }
-
         .autoActionControl {
             margin-top: 1.5em;
             padding-top: 1em;
@@ -1054,29 +1007,6 @@
         <span id="saveStatus"></span>
     </div>
 </div>
-
-<dialog id="demoAccountDialog" class="shyftDialog">
-    <button type="button" class="shyftDialogClose" onclick="closeDemoAccountDialog()" aria-label="Schließen">×</button>
-    <p class="shyftDialogText">
-        Du befindest dich noch im Demomodus. Klicke hier, um dir einen eigenen Account anzulegen.
-        Damit wir Optimierungen für dich berechnen können, musst du einen Account bei shyft-power.com anlegen.
-        Das Anlegen des Accounts ist kostenlos.
-    </p>
-    <form id="demoAccountForm">
-        <div class="shyftDialogField">
-            <label for="demoAccountEmail">E-Mail-Adresse</label>
-            <input type="email" id="demoAccountEmail" class="sensorInput" required autocomplete="email">
-        </div>
-        <div class="shyftDialogField">
-            <label for="demoAccountPassword">Passwort</label>
-            <input type="password" id="demoAccountPassword" class="sensorInput" required autocomplete="new-password">
-        </div>
-        <div id="demoAccountError" class="shyftAccountStatus status-error"></div>
-        <div class="shyftDialogActions">
-            <button type="submit" id="demoAccountSubmit">Account anlegen</button>
-        </div>
-    </form>
-</dialog>
 
 <script>
     function trigger() {

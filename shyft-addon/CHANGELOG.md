@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.0.44.25
+
+* **Kompletter Umbau der Onboarding-Logik** (ersetzt das Demo-Popup aus 0.0.44.24 - wieder entfernt, kein E-Mail/Passwort mehr vom Nutzer):
+  * Neuinstallationen starten jetzt mit einem synthetischen "Demo-Gerät" für Wechselrichter, Batterie, Wärmepumpe, Auto und Wallbox (auswählbar/änderbar im selben Dropdown wie echte HA-Integrationen, schließt sich gegenseitig mit einer echten Auswahl aus). Demo und echtes Gerät zeigen sich gegenseitig exklusiv im Dropdown (Auswahl des einen deselektiert das andere).
+  * Solange ein Demo-Gerät aktiv ist, liefern Dashboard, Energiefluss-Widget und die an shyft-power gesendeten Live-Werte plausible Beispieldaten (`get_demo_value`/`DEMO_SECTION_SENSORS` in `sync_service.py`, zentral eingehängt in `_read_mapped_entity_state` in `app.py` - PV folgt grob einer Tageslichtkurve, der Rest sind plausible statische Werte) statt leer zu bleiben. Kein Sensor-Mapping nötig, `isSectionComplete` behandelt ein Demo-Gerät immer als vollständig konfiguriert.
+  * Sobald erstmals ein echtes Gerät für eine dieser fünf Kategorien hinterlegt wird (und der Zugangstoken noch der gemeinsame Demo-Key ist), legt `maybe_create_real_account` (app.py, aufgerufen aus `writeConfig`) automatisch im Hintergrund einen echten shyft-power-Account an (`create_user_addon`, jetzt ohne Parameter - Bubble erzeugt E-Mail/Username/Passwort selbst) und übernimmt den zurückgegebenen Zugangstoken sofort. Kein Popup, keine Nutzerinteraktion nötig.
+  * "Shyft-Zugangstoken ändern" (aus 0.0.44.24) bleibt für den manuellen Fall (bestehenden Account hinterlegen, Konto wechseln).
+
 ## 0.0.44.24
 
 * Demo-Modus-Popup + eigenes Zugangstoken-Management auf der Konfigurationsseite, für neue Nutzer, die nur mit dem Addon (nicht mit Bubble direkt) arbeiten sollen:

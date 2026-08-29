@@ -70,15 +70,19 @@ class ShyftAdapter:
     # _create_complete_uri("create_user_addon") umstellen.
     CREATE_USER_URI = "https://shyft-power.com/version-test/api/1.1/wf/create_user_addon"
 
-    def create_user(self, email: str, password: str):
-        "Signs a new shyft-power account up (create_user_addon workflow) for a demo-mode addon user (see the Demo-Popup in www/index.html) - returns the parsed response dict, expected to contain 'access_key' and a 'has an account' yes/no flag (see createAccountEndpoint in app.py for how that's interpreted). Raises on a network/HTTP failure, unlike _call_workflow."
+    def create_user(self):
+        """Signs a new shyft-power account up (create_user_addon workflow) in the background, the
+        first time a demo-mode addon user configures a real device (see maybe_create_real_account in
+        app.py) - no parameters: Bubble generates its own email/username/password server-side (the
+        addon never asks the user for these). Returns the parsed response dict, expected to contain
+        'access_key' and a 'has an account' yes/no flag (see maybe_create_real_account for how
+        that's interpreted). Raises on a network/HTTP failure, unlike _call_workflow."""
         headers = {
             "Content-Type": "application/json",
             "Authorization": f"Bearer {self.bubble_token}"
         }
-        payload = json.dumps({"email": email, "password": password})
         self._log_info(f"create_user uri={self.CREATE_USER_URI}")
-        response = requests.post(self.CREATE_USER_URI, headers=headers, data=payload)
+        response = requests.post(self.CREATE_USER_URI, headers=headers, data=json.dumps({}))
         response.raise_for_status()
         return response.json()
 

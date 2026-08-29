@@ -3,6 +3,7 @@ from shyft_adapter import ShyftAdapter
 from constants import CONFIG_PATH
 
 import json
+import math
 from datetime import datetime, timedelta
 
 LIST_OF_SENSORS = {
@@ -67,6 +68,100 @@ def convert_to_expected_unit(key, state, unit):
         return convert(float(state)), expected_unit
     except (TypeError, ValueError):
         return state, unit
+
+# ============================================================================
+# Demo-Geraete: synthetische Sensorwerte fuer die Sections, die auf der Konfigurationsseite ein
+# Demo-Geraet anbieten (integrationMappings[section] == ["demo"], siehe DEMO_INTEGRATION_ID/
+# DEMO_CAPABLE_SECTIONS in app.py, buildIntegrationPicker in www/app.js) - damit Dashboard,
+# Energiefluss-Widget und die an shyft-power gesendeten Live-Werte schon vor der ersten echten
+# Geraete-Konfiguration etwas Plausibles zeigen, statt leer zu bleiben. "Sonstiger Verbraucher" und
+# "Raumtemperatur" haben bewusst kein Demo-Geraet (Letztere hat schon einen eigenen
+# Auto-Simulations-Fallback ohne Sensor).
+# ============================================================================
+
+DEMO_SECTION_SENSORS = {
+    "wechselrichter": ["photovoltaic_powerflow_pv", "photovoltaic_powerflow_load", "photovoltaic_powerflow_grid", "photovoltaic_powerflow_battery"],
+    "batterie": ["battery_storage_command_mode", "battery_state_of_charge", "battery_charge_limit_current", "battery_discharge_limit_current"],
+    "waermepumpe": ["heatpump_dhw_tank_temp", "heatpump_dhw_activated", "heatpump_dhw_on_off", "heatpump_heating_target_temp_normal", "heatpump_heating_activated", "heatpump_current_power_elect", "heatpump_on_off", "heatpump_supply_temp_hp"],
+    "auto": ["electronicvehicle_state_of_charge"],
+    "wallbox": ["wallbox_current_charging_power", "wallbox_plugged"],
+}
+
+SENSOR_KEY_TO_DEMO_SECTION = {
+    sensor_key: section_key
+    for section_key, sensor_keys in DEMO_SECTION_SENSORS.items()
+    for sensor_key in sensor_keys
+}
+
+
+def is_demo_section(config, section_key):
+    'True, wenn integrationMappings[section_key] auf das synthetische Demo-Geraet zeigt (["demo"], siehe DEMO_INTEGRATION_ID in app.py).'
+    return config.get("integrationMappings", {}).get(section_key) == ["demo"]
+
+
+def is_demo_sensor(config, sensor_key):
+    "True, wenn sensor_key zu einer Section gehoert, die gerade im Demo-Modus ist."
+    section_key = SENSOR_KEY_TO_DEMO_SECTION.get(sensor_key)
+    return section_key is not None and is_demo_section(config, section_key)
+
+
+def _demo_pv_kw(hour_of_day):
+    "Grobe Tageslichtkurve statt eines fixen Werts, damit die PV-Leistung im Demo-Modus wenigstens ansatzweise plausibel wirkt: 0 vor 6/nach 20 Uhr, Sinus-Buckel mit Spitze ~3.5 kW um die Mittagszeit."
+    if hour_of_day < 6 or hour_of_day > 20:
+        return 0.0
+    return max(0.0, 3.5 * math.sin((hour_of_day - 6) / 14 * math.pi))
+
+
+def get_demo_value(sensor_key):
+    """Liefert (state, unit) fuer einen Demo-Sensorwert, im selben Format wie ein echter HA-Sensor
+    (state als String) - PV/Netz folgen grob der Tageszeit, der Rest sind plausible, weitgehend
+    statische Werte. Unit None fuer Werte ohne numerische Einheit (Modi, on/off)."""
+    now = datetime.now()
+    hour_of_day = now.hour + now.minute / 60
+    pv_kw = _demo_pv_kw(hour_of_day)
+    demo_household_load_kw = 0.6
+
+    if sensor_key == "photovoltaic_powerflow_pv":
+        return f"{pv_kw:.2f}", "kW"
+    if sensor_key == "photovoltaic_powerflow_load":
+        return f"{demo_household_load_kw:.2f}", "kW"
+    if sensor_key == "photovoltaic_powerflow_grid":
+        # negativ = Einspeisung (PV-Ueberschuss), positiv = Bezug - wie bei einem echten Netz-Sensor
+        return f"{demo_household_load_kw - pv_kw:.2f}", "kW"
+    if sensor_key == "photovoltaic_powerflow_battery":
+        return "0.00", "kW"
+    if sensor_key == "battery_storage_command_mode":
+        return "Maximize Self Consumption", None
+    if sensor_key == "battery_state_of_charge":
+        return "65", "%"
+    if sensor_key == "battery_charge_limit_current":
+        return "5.0", "kW"
+    if sensor_key == "battery_discharge_limit_current":
+        return "5.0", "kW"
+    if sensor_key == "heatpump_dhw_tank_temp":
+        return "52.0", "°C"
+    if sensor_key == "heatpump_dhw_activated":
+        return "on", None
+    if sensor_key == "heatpump_dhw_on_off":
+        return "off", None
+    if sensor_key == "heatpump_heating_target_temp_normal":
+        return "21", "°C"
+    if sensor_key == "heatpump_heating_activated":
+        return "on", None
+    if sensor_key == "heatpump_current_power_elect":
+        return "0.9", "kW"
+    if sensor_key == "heatpump_on_off":
+        return "on", None
+    if sensor_key == "heatpump_supply_temp_hp":
+        return "35.0", "°C"
+    if sensor_key == "electronicvehicle_state_of_charge":
+        return "60", "%"
+    if sensor_key == "wallbox_current_charging_power":
+        return "0.0", "kW"
+    if sensor_key == "wallbox_plugged":
+        return "disconnected", None
+    return None, None
+
 
 # Bubble's EvBatterySize Option Set only has these discrete steps (see EvBatterySize.java in the
 # shyft repo) - carBatteryCapacityKwh is a free-form number, so it gets snapped to the nearest one.
@@ -178,6 +273,16 @@ class SyncService:
         return live_values
 
     def _load_sensor_value(self, key, bubbleSensorIdentifier, data):
+        if is_demo_sensor(data, key):
+            state, unit = get_demo_value(key)
+            if state is None:
+                return ""
+            return {
+                "entity_id": None,
+                "state": state,
+                "unit": unit,
+                "sensor": bubbleSensorIdentifier
+            }
         sensorId = data["sensorMappings"][key]
         try:
             sensorValue = self.homeassistant_adapter.load_entity_state(sensorId)
