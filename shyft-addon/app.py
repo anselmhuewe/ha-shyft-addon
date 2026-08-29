@@ -240,15 +240,19 @@ def maybe_create_real_account(old_integration_mappings, new_integration_mappings
     except Exception as e:
         print("[Shyft] Zugangstoken nach automatischer Konto-Erstellung konnte nicht gespeichert werden:", repr(e))
 
-def sync_site_data():
-    "Hourly addon->Bubble sync (also the manual 'Verbindung testen' trigger): builds the consolidated staticConfig+liveValues+EV-forecast JSON and sends it via update_site_addon - replaces the old per-sensor addon_sensor_data workflow."
+def sync_site_data(optimizer_period_override=None, _wait_attempt=1):
+    """Hourly addon->Bubble sync (also the manual 'Verbindung testen' trigger): builds the
+    consolidated staticConfig+liveValues+EV-forecast JSON and sends it via update_site_addon -
+    replaces the old per-sensor addon_sensor_data workflow. optimizer_period_override/_wait_attempt
+    are only used internally, for the reduced-period retry after an optimizer timeout (see
+    _handle_optimizer_timeout) - a normal caller never passes these."""
     if is_demo_mode():
         # Kein echter Account -> gar nicht erst versuchen, Bubble zu erreichen (waere ohnehin nur
         # ein 401/Fehler mit dem "notset"-Platzhalter-Token).
         return json.dumps({"status": "skipped", "message": "Demo-Modus - noch kein echter shyft-power-Account hinterlegt."})
     config = _read_current_config()
-    optimizer_period = int(config.get("optimizationPeriodsSite") or 48)
-    static_config = sync_service.collect_static_config()
+    optimizer_period = optimizer_period_override if optimizer_period_override is not None else int(config.get("optimizationPeriodsSite") or 48)
+    static_config = sync_service.collect_static_config(optimizer_periods_override=optimizer_period_override)
     live_values = sync_service.collect_live_values()
     ev_fields = build_ev_optimizer_fields(config, optimizer_period=optimizer_period)
     if ev_fields:
@@ -263,7 +267,13 @@ def sync_site_data():
         _update_input_csv_health(config, live_values)
     except Exception as e:
         print("[Shyft] Problem-Registry-Abgleich (input.csv) fehlgeschlagen:", repr(e))
-    return shyft_adapter.send_site_data(payload)
+    submitted_at = datetime.now(timezone.utc)
+    result = shyft_adapter.send_site_data(payload)
+    try:
+        schedule_optimizer_result_wait(submitted_at, optimizer_period, attempt=_wait_attempt)
+    except Exception as e:
+        print("[Shyft] Warten auf Optimierungsergebnis konnte nicht eingeplant werden:", repr(e))
+    return result
 
 def sync_pv_history():
     "Step01 pv history addon"
@@ -2894,18 +2904,23 @@ def _load_demo_dashboard_data():
     return {"input_csv": input_csv, "output_csv": output_csv, "creation_date": int(now_hour.timestamp() * 1000)}
 
 
+def _write_dashboard_cache(input_csv, output_csv, creation_date_ms):
+    "Shared cache-write (DASHBOARD_CACHE_PATH) - used by sync_dashboard_chart_data's hourly refresh and by _check_optimizer_result's post-/trigger wait, so both end up feeding the Dashboard-tab charts the same way."
+    try:
+        with open(DASHBOARD_CACHE_PATH, "w") as f:
+            json.dump({"input_csv": input_csv, "output_csv": output_csv, "creation_date": creation_date_ms}, f)
+    except Exception as e:
+        print("[Shyft] Dashboard-Chart-Daten konnten nicht zwischengespeichert werden:", repr(e))
+    _maybe_freeze_pv_forecast_snapshot(input_csv, creation_date_ms)
+
+
 def sync_dashboard_chart_data():
     "Refreshes the cached optimizer input_csv/output_csv/creation_date (see DASHBOARD_CACHE_PATH) from shyft-power - runs hourly (see scheduler), alongside the action queue poll, since the underlying data itself only changes about that often."
     if is_demo_mode():
         demo_data = _load_demo_dashboard_data()
         if demo_data is None:
             return
-        try:
-            with open(DASHBOARD_CACHE_PATH, "w") as f:
-                json.dump(demo_data, f)
-        except Exception as e:
-            print("[Shyft] Demo-Dashboard-Chart-Daten konnten nicht zwischengespeichert werden:", repr(e))
-        _maybe_freeze_pv_forecast_snapshot(demo_data["input_csv"], demo_data["creation_date"])
+        _write_dashboard_cache(demo_data["input_csv"], demo_data["output_csv"], demo_data["creation_date"])
         return
     user_id = extract_shyft_user_id(shyft_adapter.bubble_token)
     if not user_id:
@@ -2921,12 +2936,124 @@ def sync_dashboard_chart_data():
     if not input_csv or creation_date_ms is None:
         print("[Shyft] Dashboard-Chart-Daten: input_csv oder creation_date fehlt in der Antwort von shyft-power.")
         return
+    _write_dashboard_cache(input_csv, output_csv, creation_date_ms)
+
+
+# ============================================================================
+# Warten auf ein frisches Optimierungsergebnis nach /trigger bzw. dem stuendlichen Sync (siehe
+# sync_site_data): der Timer startet, sobald die JSON an die Site geschickt wurde, und fragt
+# provide_input_output_csv (mit since=Absendezeitpunkt) zu festen Zeitpunkten danach nach - nicht
+# blind auf gut Glueck, sondern bis Bubble ein Ergebnis liefert, das neuer als der eigene
+# Absendezeitpunkt ist (see_input_output_csv gibt sonst einen leeren "optimizer_run" zurueck).
+# ============================================================================
+
+OPTIMIZER_WAIT_POLL_DELAYS_MINUTES = [1, 2, 4.5, 7, 10]
+# Wie oft mit reduzierter Periode neu getriggert wird, wenn der Optimizer selbst in seinen eigenen
+# 600s-Timeout laeuft (output_csv dann leer, siehe _handle_optimizer_timeout) - danach wird
+# aufgegeben und ein Fehler gemeldet, statt endlos weiter zu versuchen.
+MAX_OPTIMIZER_TIMEOUT_RETRIES = 2
+OPTIMIZER_PERIOD_REDUCTION_ON_TIMEOUT = 2
+
+
+def schedule_optimizer_result_wait(submitted_at, optimizer_period, attempt=1):
+    """Plant die Nachfragen zu den OPTIMIZER_WAIT_POLL_DELAYS_MINUTES-Zeitpunkten nach dem bei
+    submitted_at (UTC) abgesendeten Optimierungslauf. Der erste nicht-leere Treffer gewinnt und
+    bricht die uebrigen fuer DIESEN Versuch noch ausstehenden Nachfragen ab (siehe
+    _check_optimizer_result). Kommt output_csv leer zurueck (Optimizer-Timeout), wird bis zu
+    MAX_OPTIMIZER_TIMEOUT_RETRIES mal mit reduzierter Optimizer-Periode neu getriggert (siehe
+    _handle_optimizer_timeout); bleibt nach der letzten Nachfrage des letzten Versuchs alles leer,
+    meldet _handle_optimizer_wait_exhausted einen Fehler an shyft-power."""
+    sibling_job_ids = []
+    for index, delay_minutes in enumerate(OPTIMIZER_WAIT_POLL_DELAYS_MINUTES):
+        is_last = index == len(OPTIMIZER_WAIT_POLL_DELAYS_MINUTES) - 1
+        job_id = f"optimizer_wait_{submitted_at.timestamp()}_{attempt}_{index}"
+        sibling_job_ids.append(job_id)
+        scheduler.add_job(
+            _check_optimizer_result_job,
+            "date",
+            run_date=submitted_at + timedelta(minutes=delay_minutes),
+            id=job_id,
+            args=[submitted_at, optimizer_period, attempt, is_last, sibling_job_ids],
+            misfire_grace_time=120,
+            replace_existing=True,
+        )
+
+
+def _check_optimizer_result_job(submitted_at, optimizer_period, attempt, is_last, sibling_job_ids):
+    with app.app_context():
+        _check_optimizer_result(submitted_at, optimizer_period, attempt, is_last, sibling_job_ids)
+
+
+def _cancel_remaining_optimizer_wait_jobs(job_ids):
+    for job_id in job_ids:
+        try:
+            scheduler.remove_job(job_id)
+        except Exception:
+            pass  # schon gefeuert oder schon entfernt - egal
+
+
+def _check_optimizer_result(submitted_at, optimizer_period, attempt, is_last, sibling_job_ids):
+    "Eine einzelne geplante Nachfrage (siehe schedule_optimizer_result_wait)."
+    if is_demo_mode():
+        return
+    user_id = extract_shyft_user_id(shyft_adapter.bubble_token)
+    if not user_id:
+        return
     try:
-        with open(DASHBOARD_CACHE_PATH, "w") as f:
-            json.dump({"input_csv": input_csv, "output_csv": output_csv, "creation_date": creation_date_ms}, f)
+        result = shyft_adapter.get_input_output_csv(user_id, since=submitted_at)
     except Exception as e:
-        print("[Shyft] Dashboard-Chart-Daten konnten nicht zwischengespeichert werden:", repr(e))
-    _maybe_freeze_pv_forecast_snapshot(input_csv, creation_date_ms)
+        print("[Shyft] Nachfrage nach Optimierungsergebnis fehlgeschlagen:", repr(e))
+        if is_last:
+            _handle_optimizer_wait_exhausted(submitted_at, optimizer_period, attempt)
+        return
+
+    response_data = (result or {}).get("response") or {}
+    optimizer_run = response_data.get("optimizer_run") or {}
+    if not optimizer_run:
+        if is_last:
+            _handle_optimizer_wait_exhausted(submitted_at, optimizer_period, attempt)
+        return  # noch nicht fertig - naechste geplante Nachfrage abwarten
+
+    # Ergebnis da - die uebrigen fuer DIESEN Versuch noch ausstehenden Nachfragen sind ueberfluessig
+    _cancel_remaining_optimizer_wait_jobs(sibling_job_ids)
+
+    output_csv = optimizer_run.get("output_csv")
+    input_csv = optimizer_run.get("input_csv")
+    creation_date_ms = optimizer_run.get("creation_date")
+
+    if not output_csv or not str(output_csv).strip():
+        # Optimizer ist in seinen eigenen 600s-Timeout gelaufen - output_csv bleibt dann leer,
+        # obwohl optimizer_run selbst vorhanden ist. TODO: sobald die genaue Fehlermeldung dafuer
+        # bekannt ist, hier gezielter darauf pruefen statt nur auf "output_csv leer".
+        _handle_optimizer_timeout(submitted_at, optimizer_period, attempt)
+        return
+
+    if not input_csv or creation_date_ms is None:
+        return
+    _write_dashboard_cache(input_csv, output_csv, creation_date_ms)
+
+
+def _handle_optimizer_timeout(submitted_at, optimizer_period, attempt):
+    "Optimizer-Timeout (output_csv leer) - triggert mit reduzierter Periode neu, bis zu MAX_OPTIMIZER_TIMEOUT_RETRIES mal, danach Fehlermeldung statt endlos weiterzuversuchen."
+    if attempt > MAX_OPTIMIZER_TIMEOUT_RETRIES:
+        log_error_to_shyft(
+            "optimizer_wait",
+            "optimizer_timeout_exhausted",
+            f"Optimizer lief auch nach {attempt} Versuchen (zuletzt mit optimizer_period={optimizer_period}) in den eigenen Timeout, output_csv blieb leer.",
+        )
+        return
+    new_period = max(1, optimizer_period - OPTIMIZER_PERIOD_REDUCTION_ON_TIMEOUT)
+    print(f"[Shyft] Optimizer-Timeout (Versuch {attempt}) - neuer Versuch mit optimizer_period={new_period}.")
+    sync_site_data(optimizer_period_override=new_period, _wait_attempt=attempt + 1)
+
+
+def _handle_optimizer_wait_exhausted(submitted_at, optimizer_period, attempt):
+    "Nach der letzten geplanten Nachfrage (siehe OPTIMIZER_WAIT_POLL_DELAYS_MINUTES) kam kein Ergebnis - Fehler an shyft-power melden."
+    log_error_to_shyft(
+        "optimizer_wait",
+        "optimizer_no_result",
+        f"Nach {OPTIMIZER_WAIT_POLL_DELAYS_MINUTES[-1]} Minuten kein Optimierungsergebnis erhalten (Versuch {attempt}, optimizer_period={optimizer_period}).",
+    )
 
 
 def sync_sensors_periodically():

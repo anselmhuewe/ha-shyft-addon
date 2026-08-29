@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.0.44.28
+
+* Nach dem Absenden der Site-Daten (`sync_site_data`, sowohl der stündliche Sync als auch der manuelle `/trigger`) wartet das Addon jetzt aktiv auf ein frisches Optimierungsergebnis, statt nur auf den nächsten stündlichen `sync_dashboard_chart_data`-Lauf zu hoffen:
+  * Nachfrage bei `provide_input_output_csv` (mit `since` = Absendezeitpunkt) nach 1, 2, 4:30, 7 und 10 Minuten (`OPTIMIZER_WAIT_POLL_DELAYS_MINUTES`, `schedule_optimizer_result_wait`) - der erste Treffer mit gefülltem `optimizer_run` gewinnt und bricht die noch ausstehenden Nachfragen für diesen Versuch ab (`_check_optimizer_result`/`_cancel_remaining_optimizer_wait_jobs`).
+  * Kommt `optimizer_run` mit leerem `output_csv` zurück (Optimizer im eigenen 600s-Timeout), wird bis zu `MAX_OPTIMIZER_TIMEOUT_RETRIES` (2) mal automatisch mit um `OPTIMIZER_PERIOD_REDUCTION_ON_TIMEOUT` (2) reduzierter Optimizer-Periode neu getriggert (`_handle_optimizer_timeout` → erneuter `sync_site_data`-Aufruf mit `optimizer_period_override`).
+  * Kommt nach der letzten Nachfrage (10 Minuten) weiterhin kein Ergebnis, oder sind die Timeout-Neuversuche aufgebraucht, wird ein Fehler über den bestehenden `log_error_to_shyft`/`ha_addon_error_logging`-Weg an shyft-power gemeldet (`_handle_optimizer_wait_exhausted`).
+  * `sync_service.collect_static_config` unterstützt jetzt `optimizer_periods_override`, um für so einen Retry nur den gesendeten Wert zu verringern, ohne die gespeicherte Konfiguration zu verändern.
+  * Der Cache-Schreibvorgang für die Dashboard-Charts (`DASHBOARD_CACHE_PATH` + PV-Prognose-Snapshot) ist jetzt in `_write_dashboard_cache` zusammengefasst und wird sowohl vom stündlichen `sync_dashboard_chart_data` als auch vom erfolgreichen Warte-Ergebnis genutzt.
+
 ## 0.0.44.27
 
 * Zwei Anpassungen an `provide_input_output_csv`, nachdem sich das Bubble-seitige Antwortformat geändert hat:

@@ -220,8 +220,13 @@ class SyncService:
         pv_history = self.homeassistant_adapter.load_entity_history(pv_entity_id, start_timestamp, end_timestamp)
         return self.shyft_adapter.send_pv_history(pv_history)
 
-    def collect_static_config(self):
-        "Builds {Bubble field name: value} from the addon's own config fields (see www/app.js's buildHpXyzField/buildBatteryXyz/buildElectricityXyz/... for where each is entered) - the staticConfig half of the addon_sensor_data_JSON payload."
+    def collect_static_config(self, optimizer_periods_override=None):
+        """Builds {Bubble field name: value} from the addon's own config fields (see www/app.js's
+        buildHpXyzField/buildBatteryXyz/buildElectricityXyz/... for where each is entered) - the
+        staticConfig half of the addon_sensor_data_JSON payload. optimizer_periods_override
+        overrides the persisted "Optimization Periods Site" value (without touching the config file
+        itself) - used for the reduced-period retry after an optimizer timeout, see
+        _handle_optimizer_timeout in app.py."""
         data = self._load_config()
         static_config = {}
 
@@ -243,7 +248,10 @@ class SyncService:
         add("B - SOC min", "batterySocMinPercent")
         add("EV - SOC Normal", "evSocNormal")
         add("CO - Price Gas", "coPriceGas")
-        add("Optimization Periods Site", "optimizationPeriodsSite")
+        if optimizer_periods_override is not None:
+            static_config["Optimization Periods Site"] = optimizer_periods_override
+        else:
+            add("Optimization Periods Site", "optimizationPeriodsSite")
         add("Electricity Base Load (kWh, year)", "electricityBaseLoad")
         add("Electricity Price Buy", "electricityPriceBuy")
         add("Electricity Price Sell", "electricityPriceSell")
