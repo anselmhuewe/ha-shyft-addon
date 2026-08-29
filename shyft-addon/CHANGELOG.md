@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.0.44.27
+
+* Zwei Anpassungen an `provide_input_output_csv`, nachdem sich das Bubble-seitige Antwortformat geändert hat:
+  * `input_csv`/`output_csv`/`creation_date` stecken jetzt eine Ebene tiefer, im verschachtelten `optimizer_run`-Objekt statt direkt in `response` (`sync_dashboard_chart_data` liest jetzt `response.optimizer_run.*`).
+  * `creation_date` ist jetzt Pflichtparameter (Bubble "Date"-Feld, UTC) - `ShyftAdapter.get_input_output_csv` sendet ihn jetzt immer mit; ohne explizite Angabe standardmäßig "vor 5 Stunden" (`DEFAULT_SINCE_LOOKBACK_HOURS`, vorläufiger Wert, solange die "nur neuer als X"-Logik bubble-seitig noch nicht fertig ist).
+
 ## 0.0.44.26
 
 * Demo-Modus braucht keinen (Fake-)Bubble-Account mehr - `is_demo_mode()` (app.py) prüft stattdessen einfach, ob überhaupt ein echter `shyft_access_key` hinterlegt ist (config.yaml's eigener Default `"notset"`, kein separater Demo-Key/-Vergleich mehr nötig). Solange das so ist, ruft das Addon **niemals** Bubble auf:

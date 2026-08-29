@@ -2912,9 +2912,12 @@ def sync_dashboard_chart_data():
         return
     result = shyft_adapter.get_input_output_csv(user_id)
     response_data = (result or {}).get("response") or {}
-    input_csv = response_data.get("input_csv")
-    output_csv = response_data.get("output_csv")
-    creation_date_ms = response_data.get("creation_date")
+    # response_data enthaelt jetzt das ganze "Optimizer Run"-Bubble-Objekt unter "optimizer_run"
+    # statt input_csv/output_csv/creation_date direkt auf oberster Ebene.
+    optimizer_run = response_data.get("optimizer_run") or {}
+    input_csv = optimizer_run.get("input_csv")
+    output_csv = optimizer_run.get("output_csv")
+    creation_date_ms = optimizer_run.get("creation_date")
     if not input_csv or creation_date_ms is None:
         print("[Shyft] Dashboard-Chart-Daten: input_csv oder creation_date fehlt in der Antwort von shyft-power.")
         return

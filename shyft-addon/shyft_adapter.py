@@ -1,4 +1,5 @@
 import json
+from datetime import datetime, timezone, timedelta
 
 from constants import BUBBLE_URI_TEST, BUBBLE_URI_PRD,  BUBBLE_TOKEN, DEV_ACCESS_KEY_PREFIX
 from homeassistant_adapter import PeriodElement
@@ -86,15 +87,28 @@ class ShyftAdapter:
         response.raise_for_status()
         return response.json()
 
-    def get_input_output_csv(self, user_id: str):
-        "Pulls the optimizer's latest input/output CSV data (used to build the addon's Dashboard-tab charts) for user_id from shyft-power. Like get_actions, returns the actual response body rather than a status string."
+    # provide_input_output_csv braucht seit Kurzem zwingend einen creation_date-Parameter (Bubble
+    # "Date"-Feld, erwartet UTC) - ohne "since" (siehe get_input_output_csv) wird dieser Default
+    # gesendet. 5 Stunden auf Wunsch des Nutzers, solange die eigentliche "nur neuer als X"-Logik
+    # noch nicht bubble-seitig fertig gebaut ist - einfach nur ein Wert, der zuverlaessig ein
+    # Ergebnis liefert. TODO: sobald das fertig ist, ggf. wieder anpassen (siehe Konversation).
+    DEFAULT_SINCE_LOOKBACK_HOURS = 5
+
+    def get_input_output_csv(self, user_id: str, since: datetime = None):
+        """Pulls the optimizer's latest input/output CSV data (used to build the addon's
+        Dashboard-tab charts) for user_id from shyft-power. Like get_actions, returns the actual
+        response body rather than a status string. 'since' (UTC) ist jetzt Pflichtparameter auf
+        Bubble-Seite (creation_date) - ohne Angabe wird ein Default gesendet (siehe
+        DEFAULT_SINCE_LOOKBACK_HOURS); ein echter Zeitpunkt ist fuers Warten auf ein frisches, nach
+        einem bestimmten Trigger entstandenes Ergebnis gedacht."""
+        since = since or (datetime.now(timezone.utc) - timedelta(hours=self.DEFAULT_SINCE_LOOKBACK_HOURS))
         try:
             headers = {
                 "Content-Type": "application/json",
                 "Authorization": f"Bearer {self.bubble_token}"
             }
             complete_uri = self._create_complete_uri("provide_input_output_csv")
-            payload = json.dumps({"user": user_id})
+            payload = json.dumps({"user": user_id, "creation_date": since.isoformat()})
             self._log_info(f"get_input_output_csv uri={complete_uri}")
             response = requests.post(complete_uri, headers=headers, data=payload)
             response.raise_for_status()
