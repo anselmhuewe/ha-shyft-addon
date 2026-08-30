@@ -2599,23 +2599,31 @@ function buildHotWaterControl() {
     wrapper.appendChild(title);
 
     const recipe = configData['hotWaterRecipe'] || {};
-    let variant = recipe.type === 'ha_automation' ? 'ha_automation' : 'direct';
+    // Drei echte Zustaende statt nur zwei: '' (noch nichts gewaehlt - weder "Befehl" noch die
+    // Automations-Zeile werden angezeigt), 'direct' ("HA-Aktion"), 'ha_automation'. Vorher fiel
+    // alles, was nicht explizit "ha_automation" war, automatisch auf "direct" zurueck, wodurch das
+    // "Befehl"-Feld schon vor jeder Auswahl sichtbar war.
+    let variant = recipe.type === 'ha_automation' ? 'ha_automation' : (recipe.type === 'direct' ? 'direct' : '');
     checkmark.hidden = variant === 'ha_automation' ? !recipe.haAutomationEntityId : !recipe.service;
 
-    const candidateServices = allServiceOptions.filter(s => getIntegrationServiceDomains('waermepumpe').has(s.service.split('.')[0]));
-    const stageWrapper = buildBranchedStageFields('hot_water_', 'hotWater', 'Befehl',
-        'Befehl, mit dem die (einmalige) Warmwasserbereitung an deiner Wärmepumpe aktiviert wird.',
-        candidateServices, recipe, [], [], 'z.B. activate_onetimecharge', undefined, false);
-    stageWrapper.style.display = variant === 'direct' ? '' : 'none';
-    wrapper.appendChild(stageWrapper);
-
-    const variantSelect = buildVariantSelect('hot_water_variant', variant, 'Befehl auswählen');
+    // "Varianten" zuerst (siehe Reihenfolge weiter unten) - erst nach einer Auswahl blendet sich
+    // das passende Eingabefeld darunter ein, statt beide gleichzeitig zu zeigen.
+    const variantSelect = document.createElement('select');
+    variantSelect.id = 'hot_water_variant';
+    variantSelect.className = 'sensorInput';
+    for (const [value, text] of [['', 'Befehl auswählen'], ['direct', 'HA-Aktion'], ['ha_automation', 'HA-Automation']]) {
+        const option = document.createElement('option');
+        option.value = value;
+        option.textContent = text;
+        variantSelect.appendChild(option);
+    }
+    variantSelect.value = variant;
     const variantTable = document.createElement('table');
     const variantTbody = document.createElement('tbody');
     const variantRow = document.createElement('tr');
     const variantLabelCell = document.createElement('td');
     variantLabelCell.textContent = 'Varianten';
-    variantLabelCell.appendChild(buildTooltip('Wie das Addon die Warmwasserbereitung auslöst: entweder direkt über einen Wärmepumpen-Befehl, oder indem es eine selbst erstellte Automation triggert.'));
+    variantLabelCell.appendChild(buildTooltip('Wie das Addon die Warmwasserbereitung auslöst: entweder direkt über einen Wärmepumpen-Befehl (HA-Aktion), oder indem es eine selbst erstellte Automation triggert (HA-Automation).'));
     const variantValueCell = document.createElement('td');
     variantValueCell.appendChild(variantSelect);
     variantRow.appendChild(variantLabelCell);
@@ -2623,6 +2631,13 @@ function buildHotWaterControl() {
     variantTbody.appendChild(variantRow);
     variantTable.appendChild(variantTbody);
     wrapper.appendChild(variantTable);
+
+    const candidateServices = allServiceOptions.filter(s => getIntegrationServiceDomains('waermepumpe').has(s.service.split('.')[0]));
+    const stageWrapper = buildBranchedStageFields('hot_water_', 'hotWater', 'Befehl',
+        'Befehl, mit dem die (einmalige) Warmwasserbereitung an deiner Wärmepumpe aktiviert wird.',
+        candidateServices, recipe, [], [], 'z.B. activate_onetimecharge', undefined, false);
+    stageWrapper.style.display = variant === 'direct' ? '' : 'none';
+    wrapper.appendChild(stageWrapper);
 
     const automationRow = buildAutomationEntityRow('HA-Automation auswählen',
         'Zum Auslösen der Warmwasserbereitung kannst du deine selber erstellte Automation hinterlegen.',
@@ -2634,9 +2649,11 @@ function buildHotWaterControl() {
     function refreshCheckmark() {
         if (variant === 'ha_automation') {
             checkmark.hidden = !automationInput.value;
-        } else {
+        } else if (variant === 'direct') {
             const serviceInput = document.getElementById('hot_water_hotWater_service');
             checkmark.hidden = !(serviceInput && serviceInput.value);
+        } else {
+            checkmark.hidden = true;
         }
     }
     automationInput.addEventListener('change', refreshCheckmark);

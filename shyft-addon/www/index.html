@@ -180,12 +180,14 @@
             user-select: none;
         }
 
-        /* Tooltip text bubble */
+        /* Tooltip text bubble - links (nicht zentriert) am Icon ausgerichtet, damit die Blase bei
+           einem Icon nahe am linken Rand (z.B. die erste Tabellenspalte) nicht ueber den Viewport-
+           Rand hinaus nach links laeuft und dadurch abgeschnitten wirkt (siehe .tooltip-text::after
+           fuer die entsprechend verschobene Pfeilspitze, die weiterhin aufs Icon zeigt). */
         .tooltip-text {
             position: absolute;
             bottom: 150%;
-            left: 50%;
-            transform: translateX(-50%);
+            left: 0;
             padding: 6px 10px;
             background: var(--color-tooltip-bg);
             color: var(--color-tooltip-text);
@@ -193,7 +195,7 @@
             border-radius: 4px;
             white-space: pre-line;
             width: max-content;
-            max-width: 260px;
+            max-width: min(260px, 90vw);
             opacity: 0;
             pointer-events: none;
             transition: opacity 0.15s ease;
@@ -205,8 +207,7 @@
             content: "";
             position: absolute;
             top: 100%;
-            left: 50%;
-            transform: translateX(-50%);
+            left: 7px;
             border-width: 5px;
             border-style: solid;
             border-color: var(--color-tooltip-bg) transparent transparent transparent;

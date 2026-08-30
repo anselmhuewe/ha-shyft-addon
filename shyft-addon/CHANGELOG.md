@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.0.44.41
+
+* Warmwasserbereitung-Konfiguration: "Varianten"-Dropdown hat jetzt drei echte Zustände ("Befehl auswählen", "HA-Aktion", "HA-Automation") statt automatisch auf "Befehl" zu fallen - das "Befehl"-Feld blendet sich erst ein, wenn "HA-Aktion" explizit gewählt wird. "Varianten" steht jetzt auch vor statt nach dem "Befehl"-Feld
+* Fix: Tooltip-Text lief bei einem Info-Icon nahe am linken Rand (z.B. in der ersten Tabellenspalte) über den Viewport-Rand hinaus und war dadurch abgeschnitten - Tooltip startet jetzt am Icon statt zentriert darüber
+
 ## 0.0.44.40
 
 * Warmwasser-Aktion (siehe 0.0.44.39) bekommt jetzt eine Subtitle: "Von XXX °C auf YYY °C erwärmen (ZZZ kWh elektr.)" - XXX/YYY sind `T_HW` der aktuellen bzw. nächsten Stunde (auf 0 Nachkommastellen gerundet), ZZZ ist `HP_HW` (auf 1 Nachkommastelle).
