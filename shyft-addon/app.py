@@ -3099,6 +3099,75 @@ def compute_dhw_actions(config, output_rows, input_rows, start, optimizer_run_id
     return result
 
 
+# ============================================================================
+# Heizung (Raumtemperatur-Sollwert) - dritter Aktionstyp nach demselben Muster wie "Warmwasser":
+# Start/Ende sind bereits generisch abgedeckt, da "Heizung Soll-Temperatur" ein normaler
+# AUTO_MANAGED_CONTROLS-Eintrag ist (siehe ACTION_NAME_TO_CONTROL_KEY/execute_auto_managed_action in
+# handle_shyft_action_start/end) - keine Sonderbehandlung wie bei "Auto laden"/"Warmwasser" noetig.
+# ============================================================================
+
+HEIZUNG_ACTION_NAME = "Heizung Soll-Temperatur"
+HEIZUNG_ID_PREFIX = "heizung_soll"
+HEIZUNG_HOUR_WINDOW = 10
+
+
+def _heizung_action_id(hour_start):
+    return f"{HEIZUNG_ID_PREFIX}_{int(hour_start.timestamp() * 1000)}"
+
+
+def compute_heizung_actions(config, output_rows, input_rows, start, optimizer_run_id):
+    """Berechnet fuer die Stunden 0..HEIZUNG_HOUR_WINDOW-1 des aktuellsten Optimierungslaufs, ob
+    eine "Heizung Soll-Temperatur"-Aktion existieren soll - analog zu compute_dhw_actions. Trigger:
+    T_i_Target (auf 0 Stellen gerundet) weicht vom aktuell aktiven Sollwert ab (Live-Wert des
+    Controls "heatpump_heating_target_temp_normal", das die Aktion bei Ausfuehrung selbst setzt -
+    derselbe Bezugswert fuer alle Stunden dieses Laufs, nicht rollierend von Stunde zu Stunde). Ohne
+    lesbaren aktuellen Sollwert wird nichts erzeugt (keine sinnvolle Abweichung feststellbar)."""
+    result = {}
+    if not _is_heatpump_configured(config):
+        return result
+
+    current_target = _read_mapped_numeric(config, "heatpump_heating_target_temp_normal")
+    if current_target is None:
+        return result
+
+    row_count = min(HEIZUNG_HOUR_WINDOW, len(output_rows))
+    for i in range(row_count):
+        output_row = output_rows[i]
+        input_row = input_rows[i] if i < len(input_rows) else {}
+        is_current_hour = (i == 0)
+
+        t_i_target = float(output_row.get("T_i_Target") or 0)
+        if round(t_i_target) == round(current_target):
+            continue
+
+        hour_start = start + timedelta(hours=i)
+        t_i = float(output_row.get("T_i") or 0)
+        hp_fh = float(output_row.get("HP_FH") or 0)
+        avg_price = _hourly_average_price(output_row, input_row)
+        target_value = round(t_i_target)
+
+        action = {
+            "_id": _heizung_action_id(hour_start),
+            "Action Name": HEIZUNG_ACTION_NAME,
+            "Action Trigger Type": "Optimizer",
+            "Energy (electr)": hp_fh,
+            "Start Value": t_i,
+            "Status": "aktiv" if is_current_hour else "geplant",
+            "Target Value": target_value,
+            "Savings": None,
+            "costsbase": None,
+            "costsopt": hp_fh * avg_price,
+            "Date Start": int(datetime.now(timezone.utc).timestamp() * 1000) if is_current_hour else int(hour_start.timestamp() * 1000),
+            "Date End": int((hour_start + timedelta(hours=1)).timestamp() * 1000),
+            "Optimizer Run": optimizer_run_id,
+            "Execution Status": "yes, planned" if is_action_type_enabled(config, HEIZUNG_ACTION_NAME) else "no, deactivated",
+            "Subtitle": f"Soll: {target_value} °C ({round(hp_fh)} kWh elektr.)",
+        }
+        result[i] = action
+
+    return result
+
+
 def _reconcile_computed_actions(config, action_name, id_prefix, computed_by_hour, start):
     """Ersetzt alle vorhandenen Aktionen vom Typ action_name im lokalen Store, deren Stundenfenster
     zum aktuellen Lauf gehoert (Stunden 0..EV_CHARGE_HOUR_WINDOW-1 ab start), durch die frisch
@@ -3151,7 +3220,7 @@ def _reconcile_computed_actions(config, action_name, id_prefix, computed_by_hour
 
 
 def recompute_actions_from_optimizer_run(input_csv, output_csv, creation_date_ms, optimizer_run_id):
-    "Wird bei jedem frischen Optimierungslauf aufgerufen (siehe _write_dashboard_cache) - berechnet und reconciled alle addon-seitigen Aktionstypen neu. Bisher 'Auto laden' und 'Warmwasser'; weitere folgen demselben Muster."
+    "Wird bei jedem frischen Optimierungslauf aufgerufen (siehe _write_dashboard_cache) - berechnet und reconciled alle addon-seitigen Aktionstypen neu. Bisher 'Auto laden', 'Warmwasser' und 'Heizung Soll-Temperatur'; weitere folgen demselben Muster."
     if is_demo_mode():
         return
     try:
@@ -3163,6 +3232,8 @@ def recompute_actions_from_optimizer_run(input_csv, output_csv, creation_date_ms
         _reconcile_computed_actions(config, EV_CHARGE_ACTION_NAME, EV_CHARGE_ID_PREFIX, ev_actions, start)
         dhw_actions = compute_dhw_actions(config, output_rows, input_rows, start, optimizer_run_id)
         _reconcile_computed_actions(config, DHW_ACTION_NAME, DHW_ID_PREFIX, dhw_actions, start)
+        heizung_actions = compute_heizung_actions(config, output_rows, input_rows, start, optimizer_run_id)
+        _reconcile_computed_actions(config, HEIZUNG_ACTION_NAME, HEIZUNG_ID_PREFIX, heizung_actions, start)
     except Exception as e:
         print("[Shyft] Aktionsberechnung aus Optimierungslauf fehlgeschlagen:", repr(e))
 

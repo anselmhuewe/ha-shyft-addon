@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.0.44.43
+
+* Fix: das Navigationsleisten-Icon (`www/assets/shyft-icon.png`, innerhalb der Addon-Seite - nicht zu verwechseln mit `icon.png`/`logo.png` für die HA-Supervisor-UI, siehe 0.0.44.30) war seit längerem als sauber freigestellte 128×128-Version vorbereitet, aber nie tatsächlich deployed. Jetzt live
+
+## 0.0.44.44
+
+* **Dritter addon-berechneter Aktionstyp: "Heizung Soll-Temperatur"**, nach demselben Muster wie "Warmwasser" (`compute_heizung_actions`) - läuft nur, wenn eine Wärmepumpe konfiguriert ist. Eine Aktion entsteht, wenn `T_i_Target` aus `output_csv` (auf 0 Nachkommastellen gerundet) vom aktuell aktiven Sollwert abweicht (Live-Wert des Controls "Heizung Soll-Temperatur (aktuell)", derselbe Referenzwert für alle 10 Stunden dieses Laufs). `Energy (electr) = HP_FH`, `Start Value = T_i` (aktuelle Raumtemperatur), `Target Value = T_i_Target` (gerundet), `costsopt = HP_FH × Durchschnittspreis`, Subtitle "Soll: XXX °C (YYY kWh elektr.)" (beide auf 0 Nachkommastellen). Start/Ende-Steuerung war bereits generisch vorhanden ("Heizung Soll-Temperatur" ist ein normaler `AUTO_MANAGED_CONTROLS`-Eintrag), keine Sonderbehandlung nötig.
+
 ## 0.0.44.41
 
 * Warmwasserbereitung-Konfiguration: "Varianten"-Dropdown hat jetzt drei echte Zustände ("Befehl auswählen", "HA-Aktion", "HA-Automation") statt automatisch auf "Befehl" zu fallen - das "Befehl"-Feld blendet sich erst ein, wenn "HA-Aktion" explizit gewählt wird. "Varianten" steht jetzt auch vor statt nach dem "Befehl"-Feld
