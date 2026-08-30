@@ -367,6 +367,7 @@ def readDashboardChartData():
     # output_csv isn't necessarily the same length as input_csv (the optimizer's own horizon can
     # be shorter) - it's assumed to start at the same creation_date regardless, just with fewer rows
     output_labels, t_i_target, t_hw, soc_b, soc_ev = [], [], [], [], []
+    output_rows = []
     if output_csv:
         try:
             output_rows = list(csv.DictReader(io.StringIO(output_csv)))
@@ -378,6 +379,9 @@ def readDashboardChartData():
                 soc_ev.append(float(row.get("SOC_EV") or 0))
         except Exception as e:
             print("[Shyft] output_csv konnte nicht gelesen werden:", repr(e))
+            output_rows = []
+
+    einsatzplan = _compute_einsatzplan_summary(output_rows, pv_generation, creation_date_ms)
 
     return jsonify({
         "status": "success",
@@ -390,7 +394,68 @@ def readDashboardChartData():
         "t_hw": t_hw,
         "soc_b": soc_b,
         "soc_ev": soc_ev,
+        "einsatzplan": einsatzplan,
     })
+
+
+# Unterhalb dieser Schwelle gilt eine Summe als "praktisch null" (Rundungsrauschen aus dem
+# Optimierer) - Division dagegen wird als nicht sinnvoll behandelt (Frontend zeigt dann "-").
+EINSATZPLAN_ZERO_THRESHOLD = 1e-6
+
+
+def _compute_einsatzplan_summary(output_rows, pv_generation, creation_date_ms):
+    """Fasst den aktuellen Optimierungslauf (output_csv) zur "Einsatzplan"-Karte im Dashboard-Tab
+    zusammen - Stromverbrauch/ø Netzstrom/Autarkie/Eigenverbrauch, jeweils ueber die Laufzeit des
+    Optimizer-Runs (Anzahl output_csv-Zeilen). X_sum/GR_sum/costs_opt sind Pro-Stunde-Spalten in
+    output_csv (siehe OptimizerOutputHeader.java), hier ueber alle Zeilen aufsummiert:
+      - Stromverbrauch (kWh) = Summe(X_sum)
+      - o Netzstrom (Cent/kWh) = Summe(costs_opt) / Summe(GR_sum) * 100 (costs_opt ist in EUR, wie
+        p_buy - siehe die p_buy*100-Umrechnung anderswo in dieser Datei); "-" wenn GR_sum ~0.
+      - Autarkie (%) = (Summe(X_sum) - Summe(GR_sum)) / Summe(X_sum) * 100; "-" wenn X_sum ~0.
+      - Eigenverbrauch (%) = (Summe(X_sum) - Summe(GR_sum)) / PV-Erzeugung * 100, gedeckelt auf
+        100% (mehr als 100% der PV-Erzeugung kann nicht selbst verbraucht werden) - die PV-
+        Erzeugung kommt dabei aus input_csv (PV_generation), auf dieselbe Stundenzahl wie
+        output_csv begrenzt; "-" wenn PV-Erzeugung ~0.
+    Gibt None zurueck (Karte bleibt im Frontend verborgen), wenn output_csv (noch) leer ist."""
+    hours = len(output_rows)
+    if hours == 0:
+        return None
+
+    def _sum_column(name):
+        total = 0.0
+        for row in output_rows:
+            try:
+                total += float(row.get(name) or 0)
+            except (TypeError, ValueError):
+                pass
+        return total
+
+    x_sum = _sum_column("X_sum")
+    gr_sum = _sum_column("GR_sum")
+    costs_opt_sum = _sum_column("costs_opt")
+    pv_sum = sum(pv_generation[:hours])
+
+    netzstrom_preis_cent = None
+    if abs(gr_sum) > EINSATZPLAN_ZERO_THRESHOLD:
+        netzstrom_preis_cent = round(costs_opt_sum / gr_sum * 100, 1)
+
+    autarkie_pct = None
+    if abs(x_sum) > EINSATZPLAN_ZERO_THRESHOLD:
+        autarkie_pct = round((x_sum - gr_sum) / x_sum * 100)
+
+    eigenverbrauch_pct = None
+    if abs(pv_sum) > EINSATZPLAN_ZERO_THRESHOLD:
+        self_consumed = max(0.0, min(x_sum - gr_sum, pv_sum))
+        eigenverbrauch_pct = round(self_consumed / pv_sum * 100)
+
+    return {
+        "creation_date": creation_date_ms,
+        "hours": hours,
+        "stromverbrauch_kwh": round(x_sum, 1),
+        "netzstrom_preis_cent": netzstrom_preis_cent,
+        "autarkie_pct": autarkie_pct,
+        "eigenverbrauch_pct": eigenverbrauch_pct,
+    }
 
 
 def _hour_floor(dt):

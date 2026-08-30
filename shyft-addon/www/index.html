@@ -771,6 +771,48 @@
             margin-top: -1.5em;
             margin-bottom: 2em;
         }
+        .einsatzplanCard {
+            margin-bottom: 2em;
+        }
+        .einsatzplanTitle {
+            font-family: var(--font-heading);
+            font-weight: 700;
+            font-size: 1.3em;
+            color: var(--color-text);
+            margin-bottom: 0.3em;
+        }
+        .einsatzplanSubtitle {
+            font-weight: 400;
+            font-size: 0.75em;
+            color: var(--color-text-secondary);
+            margin-left: 0.4em;
+        }
+        .einsatzplanGrid {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 0.8em;
+            margin-top: 0.8em;
+        }
+        @media (max-width: 700px) {
+            .einsatzplanGrid {
+                grid-template-columns: repeat(2, 1fr);
+            }
+        }
+        .einsatzplanStat {
+            background: var(--color-accent);
+            border-radius: 10px;
+            padding: 0.9em 1em;
+            color: #ffffff;
+        }
+        .einsatzplanStatLabel {
+            font-size: 0.85em;
+            opacity: 0.9;
+            margin-bottom: 0.4em;
+        }
+        .einsatzplanStatValue {
+            font-size: 1.3em;
+            font-weight: 700;
+        }
         .dashboardConsumptionForecast {
             margin-top: -1.2em;
             margin-bottom: 2em;

@@ -3020,6 +3020,47 @@ function showShyftActionsError(container) {
 // Tag als abgeschlossen; ein erneuter Anstieg danach ist im selben Kalendertag praktisch
 // ausgeschlossen. "Morgen" bekommt dieselbe Prüfung (schadet nicht, greift im 48h-Fenster aber
 // nie), nur "Heute" ist bewusst ausgenommen, da dort absichtlich nur die Teilsumme gezeigt wird.
+// Die "Einsatzplan"-Karte direkt unter dem PV-Prognose-Chart: Kennzahlen des aktuellen
+// Optimierungslaufs (siehe _compute_einsatzplan_summary in app.py), einmal pro Dashboard-Ladung
+// aus /dashboard/chart-data gelesen (keine eigene Live-Berechnung im Frontend noetig).
+function buildEinsatzplanCard(einsatzplan) {
+    const card = document.createElement('div');
+    card.className = 'einsatzplanCard';
+
+    const title = document.createElement('div');
+    title.className = 'einsatzplanTitle';
+    title.textContent = 'Einsatzplan';
+    const subtitle = document.createElement('span');
+    subtitle.className = 'einsatzplanSubtitle';
+    subtitle.textContent = `(berechnet um ${formatShyftTime(einsatzplan.creation_date)} Uhr, Kennzahlen jeweils über die nächsten ${einsatzplan.hours} Stunden)`;
+    title.appendChild(subtitle);
+    card.appendChild(title);
+
+    const grid = document.createElement('div');
+    grid.className = 'einsatzplanGrid';
+    const stats = [
+        ['Stromverbrauch', einsatzplan.stromverbrauch_kwh === null || einsatzplan.stromverbrauch_kwh === undefined ? '-' : `${Math.round(einsatzplan.stromverbrauch_kwh)} kWh`],
+        ['ø Netzstrom', einsatzplan.netzstrom_preis_cent === null || einsatzplan.netzstrom_preis_cent === undefined ? '-' : `${einsatzplan.netzstrom_preis_cent} Cent/kWh`],
+        ['Autarkie', einsatzplan.autarkie_pct === null || einsatzplan.autarkie_pct === undefined ? '-' : `${einsatzplan.autarkie_pct} %`],
+        ['Eigenverbrauch', einsatzplan.eigenverbrauch_pct === null || einsatzplan.eigenverbrauch_pct === undefined ? '-' : `${einsatzplan.eigenverbrauch_pct} %`],
+    ];
+    for (const [label, value] of stats) {
+        const stat = document.createElement('div');
+        stat.className = 'einsatzplanStat';
+        const labelEl = document.createElement('div');
+        labelEl.className = 'einsatzplanStatLabel';
+        labelEl.textContent = label;
+        const valueEl = document.createElement('div');
+        valueEl.className = 'einsatzplanStatValue';
+        valueEl.textContent = value;
+        stat.appendChild(labelEl);
+        stat.appendChild(valueEl);
+        grid.appendChild(stat);
+    }
+    card.appendChild(grid);
+    return card;
+}
+
 function formatPvEnergySummary(labels, values) {
     const PV_ZERO_THRESHOLD_KW = 0.05;
     const PV_COMPLETE_CHECK_FROM_HOUR = 17;
@@ -4049,6 +4090,9 @@ async function loadDashboard() {
         }
         if (!pvChartRendered) {
             container.appendChild(buildLineChart('PV-Leistung', 'kW', data.labels, data.pv_generation, {minY: 0}));
+        }
+        if (data.einsatzplan) {
+            container.appendChild(buildEinsatzplanCard(data.einsatzplan));
         }
         const pvEnergySummaryText = formatPvEnergySummary(data.labels, data.pv_generation);
         if (pvEnergySummaryText) {

@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.0.44.31
+
+* Neue "Einsatzplan"-Karte im Dashboard-Tab, direkt unter der PV-Prognose: fasst den aktuellen Optimierungslauf in vier Kennzahlen zusammen - Stromverbrauch (kWh), ø Netzstrom (Cent/kWh), Autarkie (%) und Eigenverbrauch (%), jeweils über die Laufzeit des Optimizer-Runs (Zeilenzahl von `output_csv`). Titel zeigt zusätzlich die Uhrzeit des Laufs ("berechnet um HH:MM Uhr").
+  * Backend (`_compute_einsatzplan_summary` in `app.py`, Teil von `/dashboard/chart-data`): `Stromverbrauch = Σ X_sum`; `ø Netzstrom = Σ costs_opt / Σ GR_sum * 100` ("-" wenn `GR_sum` ~0); `Autarkie = (Σ X_sum - Σ GR_sum) / Σ X_sum * 100` ("-" wenn `X_sum` ~0); `Eigenverbrauch = min(Σ X_sum - Σ GR_sum, PV-Erzeugung) / PV-Erzeugung * 100`, gedeckelt auf 100% ("-" wenn PV-Erzeugung ~0). `X_sum`/`GR_sum`/`costs_opt` sind Pro-Stunde-Spalten in `output_csv`, die PV-Erzeugung kommt aus `input_csv` (`PV_generation`), begrenzt auf dieselbe Stundenzahl.
+  * Frontend (`buildEinsatzplanCard` in `app.js`): vier grüne Kennzahl-Kacheln analog zum Vorbild-Design.
+
 ## 0.0.44.30
 
 * `icon.png`/`logo.png` (Home Assistant Supervisor: Add-on-Liste/Navigation bzw. Info-Header) waren bislang ein auf 67×46px seitlich beschnittener Ausschnitt des Logos, wodurch links und rechts Teile fehlten. Neu erzeugt aus den unbeschnittenen Quellbildern (`www/assets/shyft-icon.png`/`shyft-logo.png`): `icon.png` als quadratisches 128×128-Sonnensymbol (dieser Slot wird von HA fest quadratisch dargestellt), `logo.png` als 250×61 breites "SHYFT"-Wortmarken-Logo (dieser Slot erlaubt nicht-quadratisch, HA schneidet dort nichts ab).
