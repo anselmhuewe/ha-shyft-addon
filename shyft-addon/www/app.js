@@ -3868,12 +3868,14 @@ function renderSkyIcon(cx, cy) {
 
 function buildEnergyFlowLabel(x, y, lines, {anchor = 'start'} = {}) {
     const text = svgEl('text', {x, y, 'text-anchor': anchor, class: 'energyFlowLabel'});
-    // Ein "(HH:MM)"-Zeitstempel-Suffix (siehe withStaleness) bricht auf eine eigene Zeile um, statt
-    // die Zeile beliebig lang werden zu lassen - sonst laufen laengere Werte (z.B. "Ladestand: 36 %
-    // (183 km) (09:17)") ueber den verfuegbaren Platz neben dem Geraete-Icon hinaus. Zentral hier
-    // gelöst statt an jedem der withStaleness-Aufrufe einzeln, da es reine Layout-Frage ist.
+    // Ein "(HH:MM)"- bzw. "(D.M. HH:MM)"-Zeitstempel-Suffix (siehe withStaleness/formatTimeHHMM -
+    // Datum wird ergaenzt, wenn der Zeitstempel nicht von heute ist) bricht auf eine eigene Zeile
+    // um, statt die Zeile beliebig lang werden zu lassen - sonst laufen laengere Werte (z.B.
+    // "Ladestand: 36 % (183 km) (28.8. 09:17)") ueber den verfuegbaren Platz neben dem Geraete-Icon
+    // hinaus. Zentral hier gelöst statt an jedem der withStaleness-Aufrufe einzeln, da es reine
+    // Layout-Frage ist.
     const wrappedLines = lines.flatMap(line => {
-        const match = /^(.*) (\(\d{2}:\d{2}\))$/.exec(line);
+        const match = /^(.*) (\((?:\d{1,2}\.\d{1,2}\.\s)?\d{2}:\d{2}\))$/.exec(line);
         return match ? [match[1], match[2]] : [line];
     });
     // dy in em (relativ zur aktuellen Schriftgroesse) statt fest 14px - so bleibt der Zeilenabstand
@@ -3903,7 +3905,15 @@ function isStale(updatedAtIso, thresholdMinutes) {
 function formatTimeHHMM(updatedAtIso) {
     const d = new Date(updatedAtIso);
     if (Number.isNaN(d.getTime())) return '';
-    return d.toLocaleTimeString('de-DE', {hour: '2-digit', minute: '2-digit'});
+    const time = d.toLocaleTimeString('de-DE', {hour: '2-digit', minute: '2-digit'});
+    const now = new Date();
+    const isToday = d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth() && d.getDate() === now.getDate();
+    if (isToday) return time;
+    // Nicht vom heutigen Tag - Datum ergaenzen (z.B. "28.8. 17:01"), sonst wirkt ein alter
+    // Zeitstempel wie einer von heute morgen frueh. de-DE haengt bei numeric/numeric bereits einen
+    // Punkt an ("28.8."), daher hier kein zusaetzlicher davor.
+    const date = d.toLocaleDateString('de-DE', {day: 'numeric', month: 'numeric'});
+    return `${date} ${time}`;
 }
 
 // Haengt " (HH:MM)" an valueText an, wenn der zugehoerige HA-Sensor (updatedAtIso, siehe

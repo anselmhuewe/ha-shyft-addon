@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.0.44.37
+
+* Energiefluss-Widget: Zeitstempel bei veralteten Werten (z.B. "Ist: 21,4 °C (17:01)") zeigen jetzt zusätzlich das Datum, wenn der Zeitstempel nicht vom heutigen Tag ist (z.B. "28.8. 17:01") - vorher wirkte ein mehrere Tage alter Wert wie einer von heute früh
+
 ## 0.0.44.36
 
 * **Aktionsberechnung für "Auto laden" komplett aus Bubble herausgelöst - läuft jetzt rein im Addon**, kein Bubble-Call mehr für Aktionen (weder lesend noch schreibend). Erster Schritt einer schrittweisen Ablösung von `return_actions_to_addon`/`Create_Change_Action`; weitere Aktionstypen (Heizung, Zweitheizung, Warmwasser, Batterie) folgen später demselben Muster.
