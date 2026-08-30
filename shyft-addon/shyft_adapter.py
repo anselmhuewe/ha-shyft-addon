@@ -49,23 +49,11 @@ class ShyftAdapter:
         "Best-effort error report to shyft-power, sent whenever a Test-Button click in the addon returns an error (see log_error_to_shyft in app.py for how the payload is assembled)."
         return self._call_workflow("ha_addon_error_logging", json.dumps(payload))
 
-    def get_actions(self, user_id: str):
-        "Pulls the (read-only, for display only for now) action queue for user_id from shyft-power. Unlike _call_workflow, this returns the actual response body since the caller needs the action list."
-        try:
-            headers = {
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {self.bubble_token}"
-            }
-            complete_uri = self._create_complete_uri("return_actions_to_addon")
-            payload = json.dumps({"user": user_id})
-            self._log_info(f"get_actions uri={complete_uri}")
-            response = requests.post(complete_uri, headers=headers, data=payload)
-            response.raise_for_status()
-            return response.json()
-        except Exception as e:
-            return {"status": "error", "message": str(e)}
+    # get_actions (return_actions_to_addon) wurde entfernt - die Aktionsberechnung laeuft jetzt
+    # komplett lokal im Addon (siehe recompute_actions_from_optimizer_run in app.py), Bubble wird
+    # dafuer weder gelesen noch beschrieben.
 
-    # Bewusst fest verdrahtet auf die Testumgebung (nicht ueber _create_complete_uri/development_mode
+# Bewusst fest verdrahtet auf die Testumgebung (nicht ueber _create_complete_uri/development_mode
     # geroutet) - der Workflow existiert bislang nur dort, unabhaengig davon, gegen welche Umgebung
     # der aktuell hinterlegte (Demo-)Token sonst laeuft. Wenn der Workflow live geht, hier auf
     # _create_complete_uri("create_user_addon") umstellen.
@@ -96,8 +84,10 @@ class ShyftAdapter:
 
     def get_input_output_csv(self, user_id: str, since: datetime = None):
         """Pulls the optimizer's latest input/output CSV data (used to build the addon's
-        Dashboard-tab charts) for user_id from shyft-power. Like get_actions, returns the actual
-        response body rather than a status string. 'since' (UTC) ist jetzt Pflichtparameter auf
+        Dashboard-tab charts, and as the basis for the addon-side action computation, see
+        recompute_actions_from_optimizer_run in app.py) for user_id from shyft-power. Unlike
+        _call_workflow, returns the actual response body rather than a status string. 'since' (UTC)
+        ist jetzt Pflichtparameter auf
         Bubble-Seite (creation_date) - ohne Angabe wird ein Default gesendet (siehe
         DEFAULT_SINCE_LOOKBACK_HOURS); ein echter Zeitpunkt ist fuers Warten auf ein frisches, nach
         einem bestimmten Trigger entstandenes Ergebnis gedacht."""

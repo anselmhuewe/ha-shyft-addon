@@ -74,6 +74,11 @@ CAR_VAMPIRE_DRAIN_THRESHOLD_PCT_PER_HOUR = 1.0
 CAR_PRESENCE_MAX_GAP_HOURS_FOR_DELTA = 2
 PV_SURPLUS_ACTIONS_PATH = "/data/pv_surplus_actions.json"
 PV_SURPLUS_ACTIONS_MAX_DAYS = 14
+# Aktionen, die das Addon selbst aus dem Optimierungslauf berechnet (siehe
+# recompute_actions_from_optimizer_run) - ersetzt den frueheren Bubble-Rundweg (input.csv -> Bubble
+# -> Optimizer -> output.csv -> Bubble -> return_actions_to_addon): Bubble wird fuer Aktionen weder
+# gelesen noch beschrieben, alles lebt nur noch lokal im Addon.
+COMPUTED_ACTIONS_PATH = "/data/computed_actions.json"
 # Startschwelle (Netzeinspeisung, kW - negativ = Einspeisung): strenger ohne Heimspeicher, da dort
 # kein Puffer existiert, der einen kurzen Regel-Fehlschuss abfedern würde.
 PV_SURPLUS_START_THRESHOLD_KW = -0.3
@@ -318,20 +323,14 @@ def readNotificationTargets():
 
 @app.route("/shyft/actions", methods=["GET"])
 def readShyftActions():
-    """Pulls the action queue from shyft-power for display in the Gerätesteuerung tab (the actual
-    execution against devices happens separately in process_shyft_actions), merged with the
-    addon's own PV-Überschussladen-Rückfalllogik sessions (see run_pv_surplus_charging_tick) so
-    they appear seamlessly alongside shyft-power's own actions instead of a separate list."""
-    user_id = extract_shyft_user_id(shyft_adapter.bubble_token)
-    result = shyft_adapter.get_actions(user_id) if user_id else {"status": "error", "message": "Kein gültiger Shyft-Access-Key konfiguriert."}
+    """Liefert die Aktionsliste fuer die Gerätesteuerung-Tab-Anzeige (die tatsaechliche Ausfuehrung
+    gegen die Geraete passiert separat in process_shyft_actions): die vom Addon selbst berechneten
+    Aktionen (siehe COMPUTED_ACTIONS_PATH/recompute_actions_from_optimizer_run - kein Bubble-Call
+    mehr, siehe CHANGELOG), gemergt mit der addon-eigenen PV-Überschussladen-Rückfalllogik (siehe
+    run_pv_surplus_charging_tick), damit beide nahtlos in einer Liste erscheinen."""
+    computed_actions = _read_computed_actions()
     pv_surplus_actions = [_pv_surplus_session_to_action(s) for s in _read_pv_surplus_actions()]
-
-    if result.get("status") == "success":
-        response_data = result.setdefault("response", {})
-        response_data["actions"] = (response_data.get("actions") or []) + pv_surplus_actions
-    elif pv_surplus_actions:
-        result = {"status": "success", "response": {"actions": pv_surplus_actions}}
-    return jsonify(result)
+    return jsonify({"status": "success", "response": {"actions": computed_actions + pv_surplus_actions}})
 
 
 @app.route("/dashboard/chart-data", methods=["GET"])
@@ -2836,39 +2835,250 @@ def handle_shyft_action_end(action, actions_enabled, config):
     notify_action_event(config, action, "beendet" if actions_enabled else "beendet (nur simuliert)")
 
 
+# ============================================================================
+# Addon-seitige Aktionsberechnung aus dem Optimierungslauf: ersetzt den frueheren Weg ueber Bubble
+# (input.csv -> Bubble -> Optimizer -> output.csv -> Bubble -> return_actions_to_addon) komplett -
+# die Aktionen werden direkt aus output_csv berechnet und nur noch lokal gespeichert
+# (COMPUTED_ACTIONS_PATH), Bubble wird dafuer weder gelesen noch beschrieben.
+#
+# Bisher implementiert: nur "Auto laden" (EV_CHARGE_ACTION_NAME). Weitere Aktionstypen (Heizung,
+# Zweitheizung, Warmwasser, Batterie) folgen demselben Muster in spaeteren Schritten.
+#
+# Reichweite: die ersten EV_CHARGE_HOUR_WINDOW Stunden (0 = die gerade laufende, per output_csv-
+# Zeilenindex) jedes frischen Optimierungslaufs. Stunde 0 wird bei jedem neuen Lauf abgeglichen
+# (Zielwert aktualisiert statt neu angelegt, siehe _reconcile_computed_actions) - fuer die Stunden 1
+# bis EV_CHARGE_HOUR_WINDOW-1 werden zuvor berechnete, noch nicht gestartete Aktionen verworfen und
+# aus dem aktuellen Lauf neu aufgebaut. Der allgemeine "zur vollen Stunde beenden/starten/
+# verlaengern"-Mechanismus (unabhaengig vom Aktionstyp) ist ein spaeterer, separater Schritt.
+# ============================================================================
+
+EV_CHARGE_ACTION_NAME = "Auto laden"
+EV_CHARGE_ID_PREFIX = "auto_laden"
+EV_CHARGE_HOUR_WINDOW = 10
+EV_SUM_TRIGGER_KW = 0.3
+# PV-Ueberschuss liegt vor, wenn kaum Netzeinspeisung stattfindet (PV_GR) UND die Batterie nicht
+# nennenswert zum Laden beitraegt (B_EV) - der Ladestrom kommt dann ueberwiegend direkt von der PV.
+EV_PV_SURPLUS_PV_GR_MAX_KW = 1.0
+EV_PV_SURPLUS_B_EV_MAX_KW = 0.3
+
+
+def _read_computed_actions():
+    try:
+        with open(COMPUTED_ACTIONS_PATH, "r") as f:
+            return json.load(f)
+    except Exception:
+        return []
+
+
+def _write_computed_actions(actions):
+    try:
+        with open(COMPUTED_ACTIONS_PATH, "w") as f:
+            json.dump(actions, f)
+    except Exception as e:
+        print("[Shyft] Berechnete Aktionen konnten nicht gespeichert werden:", repr(e))
+
+
+def _is_ev_wallbox_configured(config):
+    "Voraussetzung fuer jede 'Auto laden'-Berechnung: sowohl ein Auto- als auch ein Wallbox-Geraet muessen hinterlegt sein (auch das jeweilige Demo-Geraet zaehlt)."
+    mappings = config.get("integrationMappings", {})
+    return bool(mappings.get("auto")) and bool(mappings.get("wallbox"))
+
+
+def _hourly_average_price(output_row, input_row):
+    "Durchschnittspreis (EUR/kWh, wie p_buy/p_sell) der Gesamt-Stromkosten dieser Stunde: Netzstromanteil (GR_sum) zu p_buy, PV-Eigenverbrauchsanteil (X_sum - GR_sum) zu p_sell (Opportunitaetskosten - was man sich durch Nicht-Einspeisen entgehen laesst)."
+    x_sum = float(output_row.get("X_sum") or 0)
+    if x_sum <= 0:
+        return 0.0
+    gr_sum = float(output_row.get("GR_sum") or 0)
+    p_buy = float((input_row or {}).get("p_buy") or 0)
+    p_sell = float((input_row or {}).get("p_sell") or 0)
+    pv_used = max(0.0, x_sum - gr_sum)
+    return (gr_sum * p_buy + pv_used * p_sell) / x_sum
+
+
+def _is_ev_pv_surplus(output_row):
+    pv_gr = float(output_row.get("PV_GR") or 0)
+    b_ev = float(output_row.get("B_EV") or 0)
+    return pv_gr < EV_PV_SURPLUS_PV_GR_MAX_KW and b_ev < EV_PV_SURPLUS_B_EV_MAX_KW
+
+
+def _ev_charge_action_id(hour_start):
+    return f"{EV_CHARGE_ID_PREFIX}_{int(hour_start.timestamp() * 1000)}"
+
+
+def compute_ev_charge_actions(config, output_rows, input_rows, start, optimizer_run_id):
+    """Berechnet fuer die Stunden 0..EV_CHARGE_HOUR_WINDOW-1 des aktuellsten Optimierungslaufs, ob
+    eine "Auto laden"-Aktion existieren soll, und liefert die vollstaendigen Aktionsfelder dafuer.
+
+    Rueckgabe: {hour_index: action_dict} - nur fuer Stunden, in denen eine Aktion existieren SOLL;
+    eine fehlende Stunde bedeutet "keine Aktion" (siehe _reconcile_computed_actions fuers Aufraeumen
+    einer eventuell zuvor dort vorhandenen Aktion).
+
+    Stunde 0 = die gerade laufende Stunde (output_csv-Zeile 0): Date Start = jetzt (nicht der
+    Stundenbeginn, der laege in der Vergangenheit), Status = aktiv, und zusaetzliche PV-Ueberschuss-
+    Sonderbehandlung (siehe unten) auf Basis der AKTUELL gemessenen PV-Leistung - ergibt nur fuer die
+    laufende Stunde Sinn, da es fuer zukuenftige Stunden keinen Live-Messwert gibt."""
+    result = {}
+    if not _is_ev_wallbox_configured(config):
+        return result
+
+    row_count = min(EV_CHARGE_HOUR_WINDOW, len(output_rows))
+    for i in range(row_count):
+        output_row = output_rows[i]
+        input_row = input_rows[i] if i < len(input_rows) else {}
+        is_current_hour = (i == 0)
+
+        ev_sum = float(output_row.get("EV_sum") or 0)
+        if ev_sum <= EV_SUM_TRIGGER_KW:
+            continue
+
+        pv_surplus = _is_ev_pv_surplus(output_row)
+        soc_now = float(output_row.get("SOC_EV") or 0)  # Bruchteil 0-1, siehe run_SHEMS.jl (SOC_EV / ev.soc_max)
+
+        if is_current_hour and pv_surplus:
+            max_soc_pct = config.get("evSocMaxPvSurplus")
+            if max_soc_pct is not None and soc_now * 100 >= float(max_soc_pct):
+                continue  # Ausnahme: Ziel-Ladestand (PV-Ueberschuss) fuer die laufende Stunde schon erreicht
+            live_pv_kw = _read_mapped_numeric(config, "photovoltaic_powerflow_pv")
+            pv_sum_forecast = float(output_row.get("PV_sum_44") or 0)
+            boosted = ev_sum + (live_pv_kw - pv_sum_forecast) / 2 if live_pv_kw is not None else ev_sum
+            target_kw = max(PV_SURPLUS_MIN_KW, min(compute_wallbox_max_kw(config), boosted))
+        else:
+            target_kw = ev_sum
+
+        if is_current_hour and not is_car_ready_to_charge(config):
+            continue  # Grundvoraussetzung fuer eine (neu oder weiterhin) laufende Aktion in der aktuellen Stunde
+
+        hour_start = start + timedelta(hours=i)
+        target_value = round(target_kw, 1)
+
+        if pv_surplus:
+            subtitle = "PV-Überschussladen"
+        else:
+            avg_price = _hourly_average_price(output_row, input_row)
+            next_row = output_rows[i + 1] if i + 1 < len(output_rows) else output_row
+            soc_next = float(next_row.get("SOC_EV") or soc_now)
+            subtitle = (f"Laden mit {ev_sum:.1f} kW (von {round(soc_now * 100)} % "
+                        f"auf {round(soc_next * 100)} %) | Preis: {avg_price * 100:.1f} C/kWh")
+
+        avg_price_for_costs = _hourly_average_price(output_row, input_row)
+        action = {
+            "_id": _ev_charge_action_id(hour_start),
+            "Action Name": EV_CHARGE_ACTION_NAME,
+            "Action Trigger Type": "Optimizer",
+            "Energy (electr)": ev_sum,
+            "Start Value": soc_now,
+            "Status": "aktiv" if is_current_hour else "geplant",
+            "Subtitle": subtitle,
+            "Target Value": target_value,
+            "Savings": None,
+            "costsbase": None,
+            "costsopt": ev_sum * avg_price_for_costs,
+            "Date Start": int(datetime.now(timezone.utc).timestamp() * 1000) if is_current_hour else int(hour_start.timestamp() * 1000),
+            "Date End": int((hour_start + timedelta(hours=1)).timestamp() * 1000),
+            "Optimizer Run": optimizer_run_id,
+            "Execution Status": "yes, planned" if is_action_type_enabled(config, EV_CHARGE_ACTION_NAME) else "no, deactivated",
+        }
+        if pv_surplus:
+            timestamp = datetime.now().strftime("%d.%m. %H:%M Uhr")
+            action["Log"] = f"{timestamp}: Laden mit {target_value:.1f} kW"
+        result[i] = action
+
+    return result
+
+
+def _reconcile_computed_actions(config, action_name, id_prefix, computed_by_hour, start):
+    """Ersetzt alle vorhandenen Aktionen vom Typ action_name im lokalen Store, deren Stundenfenster
+    zum aktuellen Lauf gehoert (Stunden 0..EV_CHARGE_HOUR_WINDOW-1 ab start), durch die frisch
+    berechneten (computed_by_hour, siehe compute_ev_charge_actions) - mit Sonderbehandlung fuer die
+    laufende Stunde (Index 0):
+      - existiert dort schon eine Aktion UND soll laut computed_by_hour weiterhin eine existieren:
+        nur Target Value + Log aktualisieren (wenn sich der Zielwert geaendert hat), alle anderen
+        Felder bleiben wie beim ersten Anlegen (Subtitle, Start Value, Energy, costsopt, Date
+        Start/End, Optimizer Run, "_id") - die laufende Aktion wird nicht beendet und neu angelegt.
+      - existiert dort schon eine Aktion, soll laut computed_by_hour aber keine mehr existieren
+        (Bedingung nicht mehr gegeben): sofort beenden (handle_shyft_action_end), nicht bis zum
+        naechsten process_shyft_actions-Poll warten.
+    Stunden 1..EV_CHARGE_HOUR_WINDOW-1: immer vollstaendig ersetzt - sie sind noch nicht gestartet
+    (Status "geplant"), koennen also gefahrlos verworfen und aus dem aktuellen Lauf neu aufgebaut
+    werden. Aktionen ausserhalb dieses Stundenfensters (z.B. eine gerade zu Ende gegangene Stunde)
+    bleiben unangetastet - der Stundenwechsel selbst gehoert zum spaeteren, allgemeinen Start/Ende/
+    Verlaengern-Mechanismus."""
+    all_actions = _read_computed_actions()
+    run_ids = {f"{id_prefix}_{int((start + timedelta(hours=i)).timestamp() * 1000)}" for i in range(EV_CHARGE_HOUR_WINDOW)}
+
+    kept = [a for a in all_actions if not (a.get("Action Name") == action_name and a.get("_id") in run_ids)]
+    existing_in_window = {a.get("_id"): a for a in all_actions if a.get("Action Name") == action_name and a.get("_id") in run_ids}
+
+    hour0_id = f"{id_prefix}_{int(start.timestamp() * 1000)}"
+    hour0_existing = existing_in_window.get(hour0_id)
+
+    if 0 in computed_by_hour:
+        if hour0_existing:
+            new_target = computed_by_hour[0]["Target Value"]
+            if hour0_existing.get("Target Value") != new_target:
+                timestamp = datetime.now().strftime("%d.%m. %H:%M Uhr")
+                note = f"{timestamp}: neuer Zielwert {new_target:.1f} kW"
+                hour0_existing["Log"] = (hour0_existing.get("Log") + "\n" + note) if hour0_existing.get("Log") else note
+                hour0_existing["Target Value"] = new_target
+            kept.append(hour0_existing)
+        else:
+            kept.append(computed_by_hour[0])
+    elif hour0_existing:
+        try:
+            handle_shyft_action_end(hour0_existing, is_action_type_enabled(config, action_name), config)
+        except Exception as e:
+            print(f"[Shyft] Sofortiges Beenden von '{action_name}' fehlgeschlagen:", repr(e))
+        # nicht wieder aufgenommen - die Aktion ist beendet und faellt aus dem Store
+
+    for i in range(1, EV_CHARGE_HOUR_WINDOW):
+        if i in computed_by_hour:
+            kept.append(computed_by_hour[i])
+
+    _write_computed_actions(kept)
+
+
+def recompute_actions_from_optimizer_run(input_csv, output_csv, creation_date_ms, optimizer_run_id):
+    "Wird bei jedem frischen Optimierungslauf aufgerufen (siehe _write_dashboard_cache) - berechnet und reconciled alle addon-seitigen Aktionstypen neu. Bisher nur 'Auto laden'."
+    if is_demo_mode():
+        return
+    try:
+        config = _read_current_config()
+        start = datetime.fromtimestamp(creation_date_ms / 1000, tz=timezone.utc).replace(minute=0, second=0, microsecond=0)
+        input_rows = list(csv.DictReader(io.StringIO(input_csv), delimiter=";")) if input_csv else []
+        output_rows = list(csv.DictReader(io.StringIO(output_csv))) if output_csv else []
+        ev_actions = compute_ev_charge_actions(config, output_rows, input_rows, start, optimizer_run_id)
+        _reconcile_computed_actions(config, EV_CHARGE_ACTION_NAME, EV_CHARGE_ID_PREFIX, ev_actions, start)
+    except Exception as e:
+        print("[Shyft] Aktionsberechnung aus Optimierungslauf fehlgeschlagen:", repr(e))
+
+
 def process_shyft_actions():
-    """Polls shyft-power's action queue and fires start/end hooks based on timing, independent
-    of what the API currently reports for status (see handle_shyft_action_start/end).
+    """Checks the addon's own locally computed action list (COMPUTED_ACTIONS_PATH, see
+    recompute_actions_from_optimizer_run - no Bubble call anymore) and fires start/end hooks based
+    on timing, independent of what's currently recorded as Status (see
+    handle_shyft_action_start/end).
 
     Start: Status is "aktiv" and Date Start has passed - fired exactly once per action id,
     tracked via a persisted set of already-started ids. This also covers extended actions for
     free: an extension keeps the same id and only pushes Date End further out, so it's already
-    in the set and won't fire again. A superseded ("abgeloest") action gets a new id from Shyft,
+    in the set and won't fire again. A superseded ("abgeloest") action gets a new id,
     which correctly fires its own start.
 
     End: Date End has passed, regardless of Status - fired exactly once per action id, tracked
     via a persisted set of already-ended ids so it survives addon restarts and doesn't require
-    re-checking the API.
+    re-checking the store.
 
     Whether a fire is "real" or "simulated only" is decided per Aktionstyp via the addon's own
-    actionTypeEnabled toggle (see is_action_type_enabled) - shyft-power's own '(deaktiviert)'
-    status suffix is intentionally ignored here.
+    actionTypeEnabled toggle (see is_action_type_enabled).
     """
+    if is_demo_mode():
+        return
     config = _read_current_config()
     started_ids = set(config.get("startedShyftActionIds", []))
     ended_ids = set(config.get("endedShyftActionIds", []))
 
-    user_id = extract_shyft_user_id(shyft_adapter.bubble_token)
-    if not user_id:
-        print("[Shyft] Kein gueltiger Access-Key konfiguriert, ueberspringe Action-Poll.")
-        return
-
-    result = shyft_adapter.get_actions(user_id)
-    if result.get("status") != "success":
-        print("[Shyft] Action-Poll fehlgeschlagen:", result.get("message"))
-        return
-
-    actions = (result.get("response") or {}).get("actions") or []
+    actions = _read_computed_actions()
     now_ms = time.time() * 1000
     seen_ids = set()
 
@@ -2914,16 +3124,7 @@ def apply_action_type_toggle_changes(old_map, new_map, config):
     if not changed_names:
         return
 
-    user_id = extract_shyft_user_id(shyft_adapter.bubble_token)
-    if not user_id:
-        return
-
-    result = shyft_adapter.get_actions(user_id)
-    if result.get("status") != "success":
-        print("[Shyft] Sofort-Abgleich nach Toggle-Aenderung fehlgeschlagen:", result.get("message"))
-        return
-
-    actions = (result.get("response") or {}).get("actions") or []
+    actions = _read_computed_actions()
     now_ms = time.time() * 1000
     started_ids = set(config.get("startedShyftActionIds", []))
     ended_ids = set(config.get("endedShyftActionIds", []))
@@ -3032,14 +3233,15 @@ def _load_demo_dashboard_data():
     return {"input_csv": input_csv, "output_csv": output_csv, "creation_date": int(now_hour.timestamp() * 1000)}
 
 
-def _write_dashboard_cache(input_csv, output_csv, creation_date_ms):
-    "Shared cache-write (DASHBOARD_CACHE_PATH) - used by sync_dashboard_chart_data's hourly refresh and by _check_optimizer_result's post-/trigger wait, so both end up feeding the Dashboard-tab charts the same way."
+def _write_dashboard_cache(input_csv, output_csv, creation_date_ms, optimizer_run_id=None):
+    "Shared cache-write (DASHBOARD_CACHE_PATH) - used by sync_dashboard_chart_data's hourly refresh and by _check_optimizer_result's post-/trigger wait, so both end up feeding the Dashboard-tab charts the same way. Also the single choke point that triggers the addon-side action recomputation (see recompute_actions_from_optimizer_run) whenever a fresh optimizer run arrives."
     try:
         with open(DASHBOARD_CACHE_PATH, "w") as f:
-            json.dump({"input_csv": input_csv, "output_csv": output_csv, "creation_date": creation_date_ms}, f)
+            json.dump({"input_csv": input_csv, "output_csv": output_csv, "creation_date": creation_date_ms, "optimizer_run_id": optimizer_run_id}, f)
     except Exception as e:
         print("[Shyft] Dashboard-Chart-Daten konnten nicht zwischengespeichert werden:", repr(e))
     _maybe_freeze_pv_forecast_snapshot(input_csv, creation_date_ms)
+    recompute_actions_from_optimizer_run(input_csv, output_csv, creation_date_ms, optimizer_run_id)
 
 
 def sync_dashboard_chart_data():
@@ -3064,7 +3266,7 @@ def sync_dashboard_chart_data():
     if not input_csv or creation_date_ms is None:
         print("[Shyft] Dashboard-Chart-Daten: input_csv oder creation_date fehlt in der Antwort von shyft-power.")
         return
-    _write_dashboard_cache(input_csv, output_csv, creation_date_ms)
+    _write_dashboard_cache(input_csv, output_csv, creation_date_ms, optimizer_run.get("_id"))
 
 
 # ============================================================================
@@ -3160,7 +3362,7 @@ def _check_optimizer_result(submitted_at, optimizer_period, attempt, is_last, si
 
     if not input_csv or creation_date_ms is None:
         return
-    _write_dashboard_cache(input_csv, output_csv, creation_date_ms)
+    _write_dashboard_cache(input_csv, output_csv, creation_date_ms, optimizer_run.get("_id"))
 
 
 # Bubble schreibt diesen Text ins "Infos"-Feld des Optimizer Run, wenn der Optimizer nach 600s in

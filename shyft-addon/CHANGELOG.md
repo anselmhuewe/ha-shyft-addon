@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.0.44.36
+
+* **Aktionsberechnung für "Auto laden" komplett aus Bubble herausgelöst - läuft jetzt rein im Addon**, kein Bubble-Call mehr für Aktionen (weder lesend noch schreibend). Erster Schritt einer schrittweisen Ablösung von `return_actions_to_addon`/`Create_Change_Action`; weitere Aktionstypen (Heizung, Zweitheizung, Warmwasser, Batterie) folgen später demselben Muster.
+  * `recompute_actions_from_optimizer_run` (app.py) wird bei jedem frischen Optimierungslauf ausgelöst (stündlicher Sync UND die neue Warte-/Retry-Logik, siehe `_write_dashboard_cache`) und berechnet `compute_ev_charge_actions` für die ersten 10 Stunden von `output_csv` (Stunde 0 = die gerade laufende Stunde): eine Aktion entsteht, wenn `EV_sum > 0,3` (und in Stunde 0 zusätzlich nur, wenn das Auto laut `is_car_ready_to_charge` mit der Wallbox verbunden ist).
+  * PV-Überschuss-Erkennung (`PV_GR < 1` und `B_EV < 0,3`): eigener Subtitle "PV-Überschussladen" plus Log-Eintrag; in der laufenden Stunde wird der Zielwert zusätzlich um die halbe Differenz zwischen aktuell gemessener PV-Leistung und der PV-Prognose des Laufs angehoben (gedeckelt auf 6A/1-phasig bis zur maximalen Wallbox-Leistung) - außer der in der Konfiguration hinterlegte "Maximaler Ladestand (PV-Überschuss)" ist schon erreicht, dann entsteht keine Aktion.
+  * Durchschnittspreis je Stunde (für Subtitle-Anzeige und `costsopt`) aus Netzstromanteil (`GR_sum` zu `p_buy`) und PV-Eigenverbrauchsanteil (`X_sum - GR_sum` zu `p_sell`, als Opportunitätskosten).
+  * Reconciliation (`_reconcile_computed_actions`, im neuen lokalen Store `COMPUTED_ACTIONS_PATH`): die laufende Stunde wird bei jedem neuen Lauf nur im Zielwert aktualisiert (nicht beendet und neu angelegt) und sofort beendet, falls die Bedingung nicht mehr gegeben ist; die Stunden 1–9 werden bei jedem Lauf verworfen und aus dem aktuellen Ergebnis neu aufgebaut. Der allgemeine, aktionstyp-unabhängige "zur vollen Stunde beenden/starten/verlängern"-Mechanismus folgt als separater, späterer Schritt.
+  * `/shyft/actions` und `process_shyft_actions` lesen jetzt aus diesem lokalen Store statt von Bubble; `ShyftAdapter.get_actions`/`return_actions_to_addon` entfernt.
+
 ## 0.0.44.35
 
 * Neue Felder `hw_usage_h`/`hotwaterkwh` in der an shyft-power gesendeten JSON (analog zu `ev_usage_h`/`d_ev_kwh`) - fester Default von 10 kWh/Tag Warmwasserbedarf, gleichmäßig auf die Stunden zwischen 6 und 22 Uhr verteilt (0,625 kWh/h), außerhalb 0. Noch kein eigenes Konfigurationsfeld dafür (bewusst erstmal einfach gehalten) - nur wenn eine Wärmepumpe konfiguriert ist
