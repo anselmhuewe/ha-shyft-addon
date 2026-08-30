@@ -3092,6 +3092,7 @@ def compute_dhw_actions(config, output_rows, input_rows, start, optimizer_run_id
             "Date End": int((hour_start + timedelta(hours=1)).timestamp() * 1000),
             "Optimizer Run": optimizer_run_id,
             "Execution Status": "yes, planned" if is_action_type_enabled(config, DHW_ACTION_NAME) else "no, deactivated",
+            "Subtitle": f"Von {round(t_hw)} °C auf {round(target_t_hw)} °C erwärmen ({hp_hw:.1f} kWh elektr.)",
         }
         result[i] = action
 

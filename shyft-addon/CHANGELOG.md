@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.0.44.40
+
+* Warmwasser-Aktion (siehe 0.0.44.39) bekommt jetzt eine Subtitle: "Von XXX °C auf YYY °C erwärmen (ZZZ kWh elektr.)" - XXX/YYY sind `T_HW` der aktuellen bzw. nächsten Stunde (auf 0 Nachkommastellen gerundet), ZZZ ist `HP_HW` (auf 1 Nachkommastelle).
+
 ## 0.0.44.39
 
 * **Zweiter addon-berechneter Aktionstyp: "Warmwasser" (DHW)**, nach demselben Muster wie "Auto laden" (siehe 0.0.44.36/38) - läuft nur, wenn eine Wärmepumpe konfiguriert ist (`compute_dhw_actions`). Eine Aktion entsteht, wenn `HP_HW >= 0,2` in `output_csv`: `Energy (electr) = HP_HW`, `Start Value = T_HW` (aktuelle Zeile), `Target Value = T_HW der nächsten Zeile`, `costsopt = HP_HW × Durchschnittspreis` (dieselbe Berechnung wie bei "Auto laden"). Stunde 0 (die laufende Stunde) bekommt sofort `Status = "aktiv"` (Date Start = jetzt), damit sie nicht erst bis zu 59 Minuten auf den Stundenwechsel-Mechanismus warten muss; Stunden 1–9 bleiben "geplant". Nutzt dieselbe generische Reconciliation (`_reconcile_computed_actions`) und denselben Stundenwechsel-Mechanismus (`run_hourly_action_transition`) wie "Auto laden" - Start/Ende-Steuerung (`execute_hot_water_activate`) war bereits vorhanden.
