@@ -516,11 +516,30 @@ async function saveConfigurationNow() {
         "wallboxMaxPhases": configData["wallboxMaxPhases"] ?? 3,
         "wallboxMaxCurrentAmps": configData["wallboxMaxCurrentAmps"] ?? 16,
         "batteryFlowSignOverride": configData["batteryFlowSignOverride"] ?? null,
-        // Bislang fehlten diese beiden hier (nur configData in-memory gesetzt, nie tatsaechlich
-        // mitgeschickt) - die Auswahl ging beim naechsten Speichern wieder verloren, siehe
-        // writeConfig in app.py (data.update(incoming) uebernimmt nur, was hier drinsteht).
         "evSocNormal": configData["evSocNormal"] ?? null,
-        "evSocMaxPvSurplus": configData["evSocMaxPvSurplus"] ?? null
+        "evSocMaxPvSurplus": configData["evSocMaxPvSurplus"] ?? null,
+        // Bis 0.0.44.33 fehlten alle uebrigen "einfachen" staticConfig-Felder (Waermepumpe/Batterie/
+        // Strompreise/Optimierung) hier komplett - sie wurden per change-Handler nur lokal in
+        // configData gesetzt, aber nie tatsaechlich per PUT mitgeschickt. writeConfig in app.py
+        // uebernimmt nur Keys, die im PUT-Body stehen (data.update(incoming)) - die Auswahl ging
+        // also bei jedem naechsten Speichern wieder verloren. Default-Werte hier spiegeln exakt die
+        // defaultValue der jeweiligen buildXyzField-Funktion oben.
+        "hpType": configData["hpType"] ?? 'Air-Water',
+        "hpBuildingSize": configData["hpBuildingSize"] ?? '130 m²',
+        "hpEnergyEfficiency": configData["hpEnergyEfficiency"] ?? 'C (90 kWh/a/m²)',
+        "hpDhwTankSize": configData["hpDhwTankSize"] ?? 'klein (200 Liter)',
+        "hpMaxPower": configData["hpMaxPower"] ?? 'mittel (6 kW)',
+        "hpMaxSupplyTempC": configData["hpMaxSupplyTempC"] ?? 55,
+        "hpHeatingBuffer": configData["hpHeatingBuffer"] ?? 'mittel__0.2',
+        "hpHeatingCurveLevel": configData["hpHeatingCurveLevel"] ?? 0,
+        "hpHeatingCurveSlope": configData["hpHeatingCurveSlope"] ?? 1.2,
+        "batteryCapacityKwh": configData["batteryCapacityKwh"] ?? 10,
+        "batterySocMinPercent": configData["batterySocMinPercent"] ?? 10,
+        "coPriceGas": configData["coPriceGas"] ?? 0.1,
+        "optimizationPeriodsSite": configData["optimizationPeriodsSite"] ?? 48,
+        "electricityBaseLoad": configData["electricityBaseLoad"] ?? 'niedrig__2628',
+        "electricityPriceBuy": configData["electricityPriceBuy"] ?? 'mittel (30 Cent)',
+        "electricityPriceSell": configData["electricityPriceSell"] ?? 'mittel (10 Cent)'
     };
     const response = await putJson(configUri, toBeWritten);
     configData = response;

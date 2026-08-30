@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.0.44.34
+
+* Fix: 16 weitere Konfigurationsfelder (Wärmepumpe: Typ/Wohnfläche/Energieeffizienz/WW-Speicher/Max. Leistung/Max. Vorlauftemp./Heizungspuffer/Heizkurve Niveau+Steigung; Batterie: Kapazität/Min. Ladestand; Strom/Optimierung: Gaspreis/Optimierungszeitraum/Grundlast/Strompreis Einkauf/Einspeisevergütung) fehlten bislang im PUT-Body beim Speichern (nur lokal in configData gesetzt) - jede Auswahl ging beim nächsten Speichern wieder verloren. Alle jetzt korrekt in saveConfigurationNow enthalten, mit denselben Default-Werten wie ihr jeweiliges Eingabefeld
+
 ## 0.0.44.33
 
 * "Ziel-Ladestand (normal)" beim Auto umbenannt in "Mindestladestand" (samt klarerer Erläuterung). Neues Feld "Maximaler Ladestand (PV-Überschuss)" (60–95 %) - deckelt nur das PV-Überschussladen, um die Autobatterie zu schonen; geplante Strecken und günstiger Netzstrom laden weiterhin voll. Neues Bubble-Feld `EV - SOC Max PV Surplus`
