@@ -3031,6 +3031,73 @@ def _apply_ev_pv_surplus_start_correction(action, config):
     return corrected
 
 
+# ============================================================================
+# Warmwasser (DHW) - zweiter Aktionstyp nach demselben Muster wie "Auto laden": Berechnung aus
+# output_csv, Reconciliation ueber die generische _reconcile_computed_actions, Start/Ende bereits
+# vorhanden (execute_hot_water_activate - "single-action" Aktionstyp, kein Ende-Verhalten). Kein
+# Live-Anschluss-Check wie bei "Auto laden" und keine PV-Ueberschuss-Sonderbehandlung.
+# ============================================================================
+
+DHW_ACTION_NAME = "Warmwasser"
+DHW_ID_PREFIX = "warmwasser"
+DHW_HOUR_WINDOW = 10
+HP_HW_TRIGGER_KW = 0.2
+
+
+def _is_heatpump_configured(config):
+    return bool(config.get("integrationMappings", {}).get("waermepumpe"))
+
+
+def _dhw_action_id(hour_start):
+    return f"{DHW_ID_PREFIX}_{int(hour_start.timestamp() * 1000)}"
+
+
+def compute_dhw_actions(config, output_rows, input_rows, start, optimizer_run_id):
+    """Berechnet fuer die Stunden 0..DHW_HOUR_WINDOW-1 des aktuellsten Optimierungslaufs, ob eine
+    "Warmwasser"-Aktion existieren soll (HP_HW >= HP_HW_TRIGGER_KW) - analog zu
+    compute_ev_charge_actions, siehe dort fuer die generelle Struktur (Stunde 0 = die gerade
+    laufende Stunde: Date Start = jetzt, Status = aktiv, sonst geplant mit Stundenbeginn)."""
+    result = {}
+    if not _is_heatpump_configured(config):
+        return result
+
+    row_count = min(DHW_HOUR_WINDOW, len(output_rows))
+    for i in range(row_count):
+        output_row = output_rows[i]
+        input_row = input_rows[i] if i < len(input_rows) else {}
+        is_current_hour = (i == 0)
+
+        hp_hw = float(output_row.get("HP_HW") or 0)
+        if hp_hw < HP_HW_TRIGGER_KW:
+            continue
+
+        hour_start = start + timedelta(hours=i)
+        t_hw = float(output_row.get("T_HW") or 0)
+        next_row = output_rows[i + 1] if i + 1 < len(output_rows) else output_row
+        target_t_hw = float(next_row.get("T_HW") or t_hw)
+        avg_price = _hourly_average_price(output_row, input_row)
+
+        action = {
+            "_id": _dhw_action_id(hour_start),
+            "Action Name": DHW_ACTION_NAME,
+            "Action Trigger Type": "Optimizer",
+            "Energy (electr)": hp_hw,
+            "Start Value": t_hw,
+            "Status": "aktiv" if is_current_hour else "geplant",
+            "Target Value": target_t_hw,
+            "Savings": None,
+            "costsbase": None,
+            "costsopt": hp_hw * avg_price,
+            "Date Start": int(datetime.now(timezone.utc).timestamp() * 1000) if is_current_hour else int(hour_start.timestamp() * 1000),
+            "Date End": int((hour_start + timedelta(hours=1)).timestamp() * 1000),
+            "Optimizer Run": optimizer_run_id,
+            "Execution Status": "yes, planned" if is_action_type_enabled(config, DHW_ACTION_NAME) else "no, deactivated",
+        }
+        result[i] = action
+
+    return result
+
+
 def _reconcile_computed_actions(config, action_name, id_prefix, computed_by_hour, start):
     """Ersetzt alle vorhandenen Aktionen vom Typ action_name im lokalen Store, deren Stundenfenster
     zum aktuellen Lauf gehoert (Stunden 0..EV_CHARGE_HOUR_WINDOW-1 ab start), durch die frisch
@@ -3083,7 +3150,7 @@ def _reconcile_computed_actions(config, action_name, id_prefix, computed_by_hour
 
 
 def recompute_actions_from_optimizer_run(input_csv, output_csv, creation_date_ms, optimizer_run_id):
-    "Wird bei jedem frischen Optimierungslauf aufgerufen (siehe _write_dashboard_cache) - berechnet und reconciled alle addon-seitigen Aktionstypen neu. Bisher nur 'Auto laden'."
+    "Wird bei jedem frischen Optimierungslauf aufgerufen (siehe _write_dashboard_cache) - berechnet und reconciled alle addon-seitigen Aktionstypen neu. Bisher 'Auto laden' und 'Warmwasser'; weitere folgen demselben Muster."
     if is_demo_mode():
         return
     try:
@@ -3093,6 +3160,8 @@ def recompute_actions_from_optimizer_run(input_csv, output_csv, creation_date_ms
         output_rows = list(csv.DictReader(io.StringIO(output_csv))) if output_csv else []
         ev_actions = compute_ev_charge_actions(config, output_rows, input_rows, start, optimizer_run_id)
         _reconcile_computed_actions(config, EV_CHARGE_ACTION_NAME, EV_CHARGE_ID_PREFIX, ev_actions, start)
+        dhw_actions = compute_dhw_actions(config, output_rows, input_rows, start, optimizer_run_id)
+        _reconcile_computed_actions(config, DHW_ACTION_NAME, DHW_ID_PREFIX, dhw_actions, start)
     except Exception as e:
         print("[Shyft] Aktionsberechnung aus Optimierungslauf fehlgeschlagen:", repr(e))
 

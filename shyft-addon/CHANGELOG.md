@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.0.44.39
+
+* **Zweiter addon-berechneter Aktionstyp: "Warmwasser" (DHW)**, nach demselben Muster wie "Auto laden" (siehe 0.0.44.36/38) - läuft nur, wenn eine Wärmepumpe konfiguriert ist (`compute_dhw_actions`). Eine Aktion entsteht, wenn `HP_HW >= 0,2` in `output_csv`: `Energy (electr) = HP_HW`, `Start Value = T_HW` (aktuelle Zeile), `Target Value = T_HW der nächsten Zeile`, `costsopt = HP_HW × Durchschnittspreis` (dieselbe Berechnung wie bei "Auto laden"). Stunde 0 (die laufende Stunde) bekommt sofort `Status = "aktiv"` (Date Start = jetzt), damit sie nicht erst bis zu 59 Minuten auf den Stundenwechsel-Mechanismus warten muss; Stunden 1–9 bleiben "geplant". Nutzt dieselbe generische Reconciliation (`_reconcile_computed_actions`) und denselben Stundenwechsel-Mechanismus (`run_hourly_action_transition`) wie "Auto laden" - Start/Ende-Steuerung (`execute_hot_water_activate`) war bereits vorhanden.
+
 ## 0.0.44.38
 
 * PV-Überschussladen: die Zielwert-Korrektur anhand der aktuell gemessenen PV-Leistung (siehe 0.0.44.36) passiert jetzt erst im tatsächlichen Startmoment der Aktion (`_apply_ev_pv_surplus_start_correction`, aufgerufen aus `handle_shyft_action_start`), nicht mehr schon bei der Berechnung - zwischen Berechnung und tatsächlichem Start können mehrere Minuten liegen, in denen sich die PV-Leistung schon geändert haben kann. `compute_ev_charge_actions` speichert dafür bei PV-Überschuss-Aktionen zusätzlich `PV Surplus`/`PV Sum Forecast` auf der Aktion.
