@@ -515,7 +515,12 @@ async function saveConfigurationNow() {
         "carConsumptionKwhPer100km": configData["carConsumptionKwhPer100km"] ?? null,
         "wallboxMaxPhases": configData["wallboxMaxPhases"] ?? 3,
         "wallboxMaxCurrentAmps": configData["wallboxMaxCurrentAmps"] ?? 16,
-        "batteryFlowSignOverride": configData["batteryFlowSignOverride"] ?? null
+        "batteryFlowSignOverride": configData["batteryFlowSignOverride"] ?? null,
+        // Bislang fehlten diese beiden hier (nur configData in-memory gesetzt, nie tatsaechlich
+        // mitgeschickt) - die Auswahl ging beim naechsten Speichern wieder verloren, siehe
+        // writeConfig in app.py (data.update(incoming) uebernimmt nur, was hier drinsteht).
+        "evSocNormal": configData["evSocNormal"] ?? null,
+        "evSocMaxPvSurplus": configData["evSocMaxPvSurplus"] ?? null
     };
     const response = await putJson(configUri, toBeWritten);
     configData = response;
@@ -1172,6 +1177,7 @@ function renderSectionBody(bodyDiv, section, entryIds) {
             bodyDiv.appendChild(buildCarBatteryCapacityField());
             bodyDiv.appendChild(buildCarConsumptionField());
             bodyDiv.appendChild(buildEvSocNormalField());
+            bodyDiv.appendChild(buildEvSocMaxPvSurplusField());
         }
         if (section.key === 'waermepumpe') {
             bodyDiv.appendChild(buildHpTypeField());
@@ -1309,7 +1315,7 @@ function buildWallboxConnectionStatusMapping() {
 
 // Reine Konfigurationszahl (keine Entity-Zuordnung), gleiches Muster fuer mehrere Felder unter
 // "Auto" (Akkukapazitaet, Verbrauch/100km) - siehe buildCarBatteryCapacityField/buildCarConsumptionField.
-function buildConfigNumberField({label, tooltip, id, configKey, placeholder, step = '0.1', defaultValue = null}) {
+function buildConfigNumberField({label, tooltip, id, configKey, placeholder, step = '0.1', defaultValue = null, min = '0', max = null}) {
     const wrapper = document.createElement('div');
     const table = document.createElement('table');
     const tbody = document.createElement('tbody');
@@ -1322,7 +1328,8 @@ function buildConfigNumberField({label, tooltip, id, configKey, placeholder, ste
     input.type = 'number';
     input.id = id;
     input.className = 'sensorInput';
-    input.min = '0';
+    input.min = min;
+    if (max !== null) input.max = max;
     input.step = step;
     input.placeholder = placeholder;
     input.value = configData[configKey] ?? defaultValue ?? '';
@@ -1516,12 +1523,29 @@ function buildBatterySocMinField() {
 
 function buildEvSocNormalField() {
     return buildConfigSelectField({
-        label: 'Ziel-Ladestand (normal)',
-        tooltip: 'Ladestand, den die Optimierung im Normalfall für dein Auto anstrebt.',
+        label: 'Mindestladestand',
+        tooltip: 'Wie viel Prozent der Batterie sollen unabhängig von den geplanten Fahrten möglichst schnell geladen und für spontane Fahrten vorgehalten werden?',
         id: 'ev_soc_normal',
         configKey: 'evSocNormal',
         options: ['10 %', '20 %', '30 %', '40 %', '50 %', '60 %', '70 %', '80 %'].map(v => [v, v]),
         defaultValue: '10 %',
+    });
+}
+
+// Deckelt nur das PV-Ueberschussladen (siehe run_pv_surplus_charging_tick in app.py) - geplante
+// Strecken und sehr guenstiger Netzstrom laden trotzdem bis zum vollen/gewuenschten Ladestand,
+// diese Grenze soll die Autobatterie nur vor unnoetig haeufigem Vollladen durch PV-Ueberschuss
+// schuetzen. 60-95%, da darunter der Nutzen fraglich waere und 100% die Grenze ohnehin sinnlos macht.
+function buildEvSocMaxPvSurplusField() {
+    return buildConfigNumberField({
+        label: 'Maximaler Ladestand (PV-Überschuss)',
+        tooltip: 'Setze für PV-Überschussladen einen maximalen Ladestand, um die Autobatterie zu schonen. Für geplante Strecken gilt diese Grenze nicht. Auch wird bei sehr günstigem Netzstrom vollgeladen.',
+        id: 'ev_soc_max_pv_surplus',
+        configKey: 'evSocMaxPvSurplus',
+        placeholder: 'z.B. 80',
+        min: '60',
+        max: '95',
+        step: '1',
     });
 }
 

@@ -247,6 +247,7 @@ class SyncService:
         add("B - Capacity", "batteryCapacityKwh")
         add("B - SOC min", "batterySocMinPercent")
         add("EV - SOC Normal", "evSocNormal")
+        add("EV - SOC Max PV Surplus", "evSocMaxPvSurplus")
         add("CO - Price Gas", "coPriceGas")
         if optimizer_periods_override is not None:
             static_config["Optimization Periods Site"] = optimizer_periods_override

@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.0.44.33
+
+* "Ziel-Ladestand (normal)" beim Auto umbenannt in "Mindestladestand" (samt klarerer Erläuterung). Neues Feld "Maximaler Ladestand (PV-Überschuss)" (60–95 %) - deckelt nur das PV-Überschussladen, um die Autobatterie zu schonen; geplante Strecken und günstiger Netzstrom laden weiterhin voll. Neues Bubble-Feld `EV - SOC Max PV Surplus`
+* Fix: beide Felder (und "Ziel-Ladestand normal" selbst) wurden bisher beim Speichern nicht tatsächlich mitgeschickt (nur lokal in configData gesetzt) - eine Auswahl ging beim nächsten Speichern wieder verloren. Jetzt korrekt in saveConfigurationNow enthalten
+
 ## 0.0.44.32
 
 * Energiefluss-Widget: die durch die Zeitstempel-Anzeige verlängerten Geräte-Labels ließen die Icons (v.a. das 130px breite Auto-Bild) in den senkrechten Verbraucher-Bus hineinragen - Grafik verbreitert (1100→1300) und der Abstand zwischen Bus und Geräte-Spalte deutlich vergrößert (30→110px), sodass alle Icons klar abgesetzt rechts der Leitung stehen. Ein "(HH:MM)"-Zeitstempel-Suffix bricht jetzt automatisch auf eine eigene Zeile um, statt die Zeile beliebig lang werden zu lassen. Die wandernden Stromfluss-Punkte bewegen sich jetzt unabhängig von der jeweiligen Leitungslänge gleich schnell (px/s) - vorher liefen sie auf kurzen Leitungen (z.B. Haushaltsstrom) sichtbar langsamer, weil dieselbe Umlaufdauer bei kürzerer Strecke automatisch eine geringere Geschwindigkeit ergab
