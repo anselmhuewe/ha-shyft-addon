@@ -3576,11 +3576,46 @@ let flowDotIdCounter = 0;
 // Wanderungsdauer eines Punkts: logarithmisch schneller bei mehr kW, ohne harte Obergrenze bei
 // kW selbst (nur die Dauer naehert sich einem praktischen Minimum an, damit es nie "hektisch"
 // wirkt). 10 kW ist bewusst kein hartes Maximum, sondern nur ein Bezugspunkt der Kurve.
+// Kalibriert auf FLOW_DOT_REFERENCE_LENGTH (siehe dort) - fuer eine Leitung anderer Laenge skaliert
+// buildFlowDots diese Dauer proportional zur tatsaechlichen Pfadlaenge, damit die Punkte ueberall
+// gleich schnell (px/s) wirken statt auf kurzen Leitungen (z.B. Haushaltsstrom) langsamer zu kriechen.
 function flowDotDuration(kw) {
     const absKw = Math.abs(kw || 0);
     const minDuration = 1.1, maxDuration = 6.5;
     const duration = maxDuration / (1 + Math.log2(1 + absKw));
     return Math.max(minDuration, duration);
+}
+
+// Referenzlaenge (px, in SVG-Nutzereinheiten), auf die obige flowDotDuration-Kurve kalibriert ist -
+// ungefaehr die typische Laenge einer Verbraucher-Zeile (busX bis Geraet). Siehe computePathLength.
+const FLOW_DOT_REFERENCE_LENGTH = 100;
+
+// Reine Geometrie-Berechnung der Gesamtlaenge eines Pfads, ohne dafuer ein <path>-Element ins DOM
+// haengen zu muessen (SVGGeometryElement.getTotalLength() bräuchte das eigentlich nicht, ist aber
+// je nach Browser zuverlässiger mit einem tatsächlich angehängten Element) - deckt genau die drei
+// Pfad-Formen ab, die in diesem Widget je an buildFlowDots gehen: buildFlowPath (M + L, oder M+H+V),
+// buildBusFlowPath (M+H+V+H) und die manuellen Spine-Pfade (M+V). Kein Bogen/Kurven-Support noetig,
+// weil hier nie welche vorkommen.
+function computePathLength(d) {
+    const tokens = d.trim().split(/\s+/);
+    let x = 0, y = 0, length = 0;
+    for (let i = 0; i < tokens.length; i++) {
+        const cmd = tokens[i];
+        if (cmd === 'M' || cmd === 'L') {
+            const [nx, ny] = tokens[++i].split(',').map(Number);
+            if (cmd === 'L') length += Math.hypot(nx - x, ny - y);
+            x = nx; y = ny;
+        } else if (cmd === 'H') {
+            const nx = Number(tokens[++i]);
+            length += Math.abs(nx - x);
+            x = nx;
+        } else if (cmd === 'V') {
+            const ny = Number(tokens[++i]);
+            length += Math.abs(ny - y);
+            y = ny;
+        }
+    }
+    return length;
 }
 
 // Gerade Verbindung (Netz/Batterie), oder ein rechtwinkliger Knick, falls y1 != y2.
@@ -3613,7 +3648,12 @@ function buildFlowDots(d, kw, {reversed = false, thresholdKw = FLOW_DOT_THRESHOL
         return g;
     }
 
-    const duration = flowDotDuration(kw);
+    // Auf die tatsaechliche Pfadlaenge skaliert (siehe FLOW_DOT_REFERENCE_LENGTH) - sonst legen die
+    // Punkte auf einer kurzen Leitung (z.B. Haushaltsstrom) dieselbe Dauer wie auf einer langen
+    // zurueck und wirken dadurch sichtbar langsamer, obwohl derselbe kW-Wert dieselbe Geschwindigkeit
+    // (px/s) suggerieren sollte.
+    const pathLength = computePathLength(d);
+    const duration = Math.max(0.2, Math.min(20, flowDotDuration(kw) * (pathLength / FLOW_DOT_REFERENCE_LENGTH)));
     for (const offsetFraction of [0, 0.5]) {
         const dot = svgEl('circle', {r: 3.2, class: 'energyFlowDot'});
         const motion = svgEl('animateMotion', {
@@ -3785,10 +3825,18 @@ function renderSkyIcon(cx, cy) {
 
 function buildEnergyFlowLabel(x, y, lines, {anchor = 'start'} = {}) {
     const text = svgEl('text', {x, y, 'text-anchor': anchor, class: 'energyFlowLabel'});
+    // Ein "(HH:MM)"-Zeitstempel-Suffix (siehe withStaleness) bricht auf eine eigene Zeile um, statt
+    // die Zeile beliebig lang werden zu lassen - sonst laufen laengere Werte (z.B. "Ladestand: 36 %
+    // (183 km) (09:17)") ueber den verfuegbaren Platz neben dem Geraete-Icon hinaus. Zentral hier
+    // gelöst statt an jedem der withStaleness-Aufrufe einzeln, da es reine Layout-Frage ist.
+    const wrappedLines = lines.flatMap(line => {
+        const match = /^(.*) (\(\d{2}:\d{2}\))$/.exec(line);
+        return match ? [match[1], match[2]] : [line];
+    });
     // dy in em (relativ zur aktuellen Schriftgroesse) statt fest 14px - so bleibt der Zeilenabstand
     // korrekt, wenn .energyFlowLabel die Schriftgroesse per Media Query fuer mobile aendert (siehe
     // index.html), statt dass sich mehrzeilige Labels dann ueberlappen.
-    lines.forEach((line, i) => {
+    wrappedLines.forEach((line, i) => {
         text.appendChild(svgEl('tspan', {x, dy: i === 0 ? 0 : '1.2em'}, [document.createTextNode(line)]));
     });
     return text;
@@ -3829,7 +3877,10 @@ function buildEnergyFlowWidget(data) {
     // Breiter als hoch (statt quadratischer 940x560) - das Haus steht jetzt mittig, links bleibt
     // Platz fuer den Netz-Anschluss, rechts fuer die Verbraucher-Spalte samt ihrer (teils mehrzeiligen)
     // Labels, ohne dass beide Seiten sich in die Quere kommen.
-    const VIEW_W = 1100, VIEW_H = 560;
+    // VIEW_W von 1100 auf 1300 erhoeht (siehe auch der groessere busX->columnX-Abstand unten) - bei
+    // 1100 ragten breitere Geraete-Icons (v.a. das 130px breite Auto-Bild) links in den senkrechten
+    // Verbraucher-Bus hinein statt sichtbar rechts davon abgesetzt zu stehen.
+    const VIEW_W = 1300, VIEW_H = 560;
     const svg = svgEl('svg', {viewBox: `0 0 ${VIEW_W} ${VIEW_H}`});
 
     // Haus: der im Bild eingezeichnete Strommast/die Leitung laesst sich nicht animieren - wird
@@ -3929,11 +3980,6 @@ function buildEnergyFlowWidget(data) {
         svg.appendChild(buildEnergyFlowLabel(batteryCx + batteryImgW / 2 + 10, batteryLabelY, batteryLines));
     }
 
-    // Etwas weiter links als vorher (860 statt 900) - schafft rechts mehr Puffer fuer die
-    // mehrzeiligen Status-Labels (Waermepumpe/Auto), die auf mobil eine groessere Schriftgroesse
-    // bekommen (siehe .energyFlowLabel Media Query in index.html) und sonst ueber den rechten
-    // viewBox-Rand hinauslaufen wuerden.
-    const columnX = 830;
     const houseRightX = houseX + houseVisibleW;
     // Gemeinsamer Bus "Haus -> Verbraucher": alle vier rechten Verbraucher gehen vom selben
     // Hausaustrittspunkt ab und teilen sich eine senkrechte Spalte (der "Trunk"), bevor sie zur
@@ -3941,6 +3987,10 @@ function buildEnergyFlowWidget(data) {
     // Wallbox-Icon. Trunk kurz (Haus ist ja jetzt zentriert, direkt daneben), individuelle Leitungen
     // von busX bis dicht ans jeweilige Geraet-Icon heran entsprechend laenger.
     const busX = houseRightX + 135;
+    // 110 statt vorher 30 - bei 30 ragte das 130px breite Auto-Bild (columnX +/-65) mit seiner
+    // linken Haelfte in den senkrechten Bus (busX) hinein, statt sichtbar rechts davon abgesetzt zu
+    // stehen. 110 laesst selbst dem breitesten Geraete-Icon (Auto) noch reichlich Abstand zur Leitung.
+    const columnX = busX + 110;
     const consumerAnchorX = columnX - 10;
     // Reihen symmetrisch um houseCy verteilt (Hausmitte liegt jetzt zwischen den Reihen), statt
     // wie vorher alle unterhalb des - damals houseCy-nahen - Hausoberkante.
