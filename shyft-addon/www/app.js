@@ -1011,9 +1011,19 @@ function buildIntegrationPicker(section, currentIds, onChange) {
     const wrapper = document.createElement('div');
     wrapper.className = 'integrationPicker';
 
-    const button = document.createElement('button');
-    button.type = 'button';
+    // Ein <div role="button"> statt eines echten <button> - die pro Geraet anzeigten "×"-Buttons
+    // (siehe buildChip) muessen selbst echte <button>-Elemente sein (fuer Tastatur-Bedienbarkeit),
+    // und ein <button> im <button> ist ungueltiges HTML mit inkonsistentem Verhalten je nach Browser.
+    const button = document.createElement('div');
     button.className = 'integrationPickerButton';
+    button.setAttribute('role', 'button');
+    button.tabIndex = 0;
+    button.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault();
+            button.click();
+        }
+    });
     const buttonText = document.createElement('span');
     buttonText.className = 'integrationPickerButtonText';
     const buttonArrow = document.createElement('span');
@@ -1049,15 +1059,53 @@ function buildIntegrationPicker(section, currentIds, onChange) {
 
     let selectedIds = [...currentIds];
 
+    // Entfernt genau ein ausgewaehltes Geraet (per Checkbox-Abwaehl ODER per "×" an seinem Chip, siehe
+    // buildChip) - zentral hier statt an beiden Stellen dupliziert, da beide denselben Ablauf
+    // brauchen: selectedIds aktualisieren, Button+Liste neu zeichnen, onChange (schreibt configData/
+    // integrationMappings) benachrichtigen.
+    function removeSelection(id) {
+        selectedIds = selectedIds.filter(existing => existing !== id);
+        updateButtonText();
+        if (!panel.hidden) renderList(search.value);
+        onChange([...selectedIds]);
+    }
+
+    // Ein "×" pro ausgewaehltem Geraet direkt im (geschlossenen) Button, statt das Panel oeffnen und
+    // die Checkbox suchen zu muessen, um ein versehentlich gewaehltes Geraet wieder loszuwerden.
+    function buildChip(id, name) {
+        const chip = document.createElement('span');
+        chip.className = 'integrationPickerChip';
+        const label = document.createElement('span');
+        label.className = 'integrationPickerChipLabel';
+        label.textContent = name;
+        chip.appendChild(label);
+        const remove = document.createElement('button');
+        remove.type = 'button';
+        remove.className = 'integrationPickerChipRemove';
+        remove.textContent = '×';
+        remove.title = `${name} entfernen`;
+        remove.setAttribute('aria-label', `${name} entfernen`);
+        remove.addEventListener('click', (event) => {
+            // Verhindert, dass der Klick zum umschliessenden Button durchreicht und das Panel
+            // oeffnet/schliesst - das "×" soll ausschliesslich das Geraet entfernen.
+            event.stopPropagation();
+            removeSelection(id);
+        });
+        chip.appendChild(remove);
+        return chip;
+    }
+
     function updateButtonText() {
+        buttonText.innerHTML = '';
         if (selectedIds.length === 0) {
             buttonText.textContent = 'nicht vorhanden';
         } else if (demoOption && selectedIds.length === 1 && selectedIds[0] === DEMO_INTEGRATION_ID) {
-            buttonText.textContent = demoOption.name;
+            buttonText.appendChild(buildChip(demoOption.id, demoOption.name));
         } else {
-            buttonText.textContent = selectedIds
-                .map(id => (integrationsData.integrations.find(integration => integration.id === id) || {}).name || id)
-                .join(', ');
+            for (const id of selectedIds) {
+                const name = (integrationsData.integrations.find(integration => integration.id === id) || {}).name || id;
+                buttonText.appendChild(buildChip(id, name));
+            }
         }
     }
 
@@ -1090,12 +1138,12 @@ function buildIntegrationPicker(section, currentIds, onChange) {
                     // Demo-Geraet und echte Integrationen schliessen sich gegenseitig aus - entweder
                     // Beispieldaten oder ein echtes Geraet, nie beides gleichzeitig.
                     selectedIds = isDemo ? [id] : [...selectedIds.filter(existing => existing !== DEMO_INTEGRATION_ID), id];
+                    updateButtonText();
+                    renderList(search.value);
+                    onChange([...selectedIds]);
                 } else {
-                    selectedIds = selectedIds.filter(existing => existing !== id);
+                    removeSelection(id);
                 }
-                updateButtonText();
-                renderList(search.value);
-                onChange([...selectedIds]);
             });
 
             const text = document.createElement('span');

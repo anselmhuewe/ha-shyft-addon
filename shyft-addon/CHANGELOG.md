@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.0.44.46
+
+* Jedes ausgewählte Gerät im Integrations-Dropdown (z.B. "Wechselrichter", "Batterie", ...) zeigt jetzt ein eigenes "×" zum direkten Entfernen, statt dafür das Dropdown öffnen und die Checkbox abwählen zu müssen. Wird ein Gerät so (oder über die Checkbox) entfernt, bleiben die zugehörigen Sensor-/Steuerungs-Zuordnungen erhalten - wählt man später dasselbe (oder ein anderes) Gerät wieder aus, sind die zuvor eingetragenen Werte weiterhin vorausgefüllt. Ein versehentliches Löschen führt also nicht zu Datenverlust.
+
 ## 0.0.44.45
 
 * Der Button "Shyft-Zugangstoken ändern" in der In-App-Konfiguration hatte keine erkennbare Funktion mehr und wurde entfernt (samt dem zugehörigen `/set-access-key`-Endpoint). Stattdessen zeigt jetzt die native Add-on-Konfigurationsseite von Home Assistant (Supervisor-Tab, zwischen "Info" und "Protokoll") den Zugangstoken maskiert an - `shyft_access_key` nutzt dort HA's eingebauten `password`-Feldtyp inkl. Anzeigen-Button, statt ihn im Klartext zu zeigen.
