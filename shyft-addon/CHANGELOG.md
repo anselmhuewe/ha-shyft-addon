@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.0.44.38
+
+* PV-Überschussladen: die Zielwert-Korrektur anhand der aktuell gemessenen PV-Leistung (siehe 0.0.44.36) passiert jetzt erst im tatsächlichen Startmoment der Aktion (`_apply_ev_pv_surplus_start_correction`, aufgerufen aus `handle_shyft_action_start`), nicht mehr schon bei der Berechnung - zwischen Berechnung und tatsächlichem Start können mehrere Minuten liegen, in denen sich die PV-Leistung schon geändert haben kann. `compute_ev_charge_actions` speichert dafür bei PV-Überschuss-Aktionen zusätzlich `PV Surplus`/`PV Sum Forecast` auf der Aktion.
+* Korrektur: `SOC_EV` in `output.csv` ist bereits 0–100-skaliert (nicht 0–1, wie zunächst angenommen) - die Subtitle-Prozentanzeige und der Vergleich gegen "Maximaler Ladestand (PV-Überschuss)" rechnen jetzt nicht mehr fälschlich ×100.
+* **Neuer, aktionstyp-übergreifender Stundenwechsel-Mechanismus** (`run_hourly_action_transition`, stündlich zur vollen Stunde): beendet abgelaufene aktive Aktionen (Status → "beendet" + tatsächliche Steuerung) und startet fällige geplante Aktionen (Status → "aktiv" + tatsächliche Steuerung) - gilt für jeden Aktionstyp im lokalen Store, nicht nur "Auto laden". Verlängerung statt Beenden+Neustart: hat die Aktion der unmittelbar folgenden Stunde denselben Target Value, wird sie gelöscht, ihre `costsopt` zur laufenden Aktion addiert und deren `Date End` um eine Stunde verlängert, statt das Gerät unnötig erneut zu triggern. Teilt sich `startedShyftActionIds`/`endedShyftActionIds` mit `process_shyft_actions`, damit nichts doppelt feuert.
+
 ## 0.0.44.37
 
 * Energiefluss-Widget: Zeitstempel bei veralteten Werten (z.B. "Ist: 21,4 °C (17:01)") zeigen jetzt zusätzlich das Datum, wenn der Zeitstempel nicht vom heutigen Tag ist (z.B. "28.8. 17:01") - vorher wirkte ein mehrere Tage alter Wert wie einer von heute früh

@@ -2752,6 +2752,7 @@ def handle_shyft_action_start(action, actions_enabled, config):
         _note_action_outcome(label, "gestartet")  # deaktiviert = kein Ausfuehrungsfehler, evtl. alten Eintrag freigeben
     elif label == "Auto laden":
         try:
+            target = _apply_ev_pv_surplus_start_correction(action, config)
             execute_car_charge_start(target)
             print(f"[Shyft] Start ausgefuehrt fuer '{label}' (Ziel: {target} kW).")
             _note_action_outcome(label, "gestartet")
@@ -2878,6 +2879,17 @@ def _write_computed_actions(actions):
         print("[Shyft] Berechnete Aktionen konnten nicht gespeichert werden:", repr(e))
 
 
+def _update_computed_action(updated_action):
+    "Ueberschreibt eine einzelne Aktion im lokalen Store anhand ihrer '_id' - fuer punktuelle In-Place-Korrekturen wie die PV-Ueberschuss-Zielwert-Aktualisierung im Startmoment (siehe _apply_ev_pv_surplus_start_correction). Kein-Op, wenn die Aktion (z.B. inzwischen entfernt) nicht mehr im Store steht."
+    actions = _read_computed_actions()
+    action_id = updated_action.get("_id")
+    for i, a in enumerate(actions):
+        if a.get("_id") == action_id:
+            actions[i] = updated_action
+            _write_computed_actions(actions)
+            return
+
+
 def _is_ev_wallbox_configured(config):
     "Voraussetzung fuer jede 'Auto laden'-Berechnung: sowohl ein Auto- als auch ein Wallbox-Geraet muessen hinterlegt sein (auch das jeweilige Demo-Geraet zaehlt)."
     mappings = config.get("integrationMappings", {})
@@ -2933,24 +2945,24 @@ def compute_ev_charge_actions(config, output_rows, input_rows, start, optimizer_
             continue
 
         pv_surplus = _is_ev_pv_surplus(output_row)
-        soc_now = float(output_row.get("SOC_EV") or 0)  # Bruchteil 0-1, siehe run_SHEMS.jl (SOC_EV / ev.soc_max)
+        soc_now = float(output_row.get("SOC_EV") or 0)  # bereits 0-100 skaliert, wie im Dashboard-Chart
 
         if is_current_hour and pv_surplus:
             max_soc_pct = config.get("evSocMaxPvSurplus")
-            if max_soc_pct is not None and soc_now * 100 >= float(max_soc_pct):
+            if max_soc_pct is not None and soc_now >= float(max_soc_pct):
                 continue  # Ausnahme: Ziel-Ladestand (PV-Ueberschuss) fuer die laufende Stunde schon erreicht
-            live_pv_kw = _read_mapped_numeric(config, "photovoltaic_powerflow_pv")
-            pv_sum_forecast = float(output_row.get("PV_sum_44") or 0)
-            boosted = ev_sum + (live_pv_kw - pv_sum_forecast) / 2 if live_pv_kw is not None else ev_sum
-            target_kw = max(PV_SURPLUS_MIN_KW, min(compute_wallbox_max_kw(config), boosted))
-        else:
-            target_kw = ev_sum
 
         if is_current_hour and not is_car_ready_to_charge(config):
             continue  # Grundvoraussetzung fuer eine (neu oder weiterhin) laufende Aktion in der aktuellen Stunde
 
         hour_start = start + timedelta(hours=i)
-        target_value = round(target_kw, 1)
+        # Der Zielwert bleibt hier bewusst der unkorrigierte Optimierungswert (EV_sum) - die
+        # PV-Ueberschuss-Korrektur anhand der dann aktuell gemessenen PV-Leistung passiert erst im
+        # tatsaechlichen Startmoment (siehe _apply_ev_pv_surplus_start_correction in
+        # handle_shyft_action_start), nicht schon hier bei der Berechnung. Zwischen Berechnung und
+        # tatsaechlichem Start (naechster process_shyft_actions-Poll) koennen mehrere Minuten
+        # liegen, in denen sich die PV-Leistung schon geaendert haben kann.
+        target_value = round(ev_sum, 1)
 
         if pv_surplus:
             subtitle = "PV-Überschussladen"
@@ -2958,8 +2970,8 @@ def compute_ev_charge_actions(config, output_rows, input_rows, start, optimizer_
             avg_price = _hourly_average_price(output_row, input_row)
             next_row = output_rows[i + 1] if i + 1 < len(output_rows) else output_row
             soc_next = float(next_row.get("SOC_EV") or soc_now)
-            subtitle = (f"Laden mit {ev_sum:.1f} kW (von {round(soc_now * 100)} % "
-                        f"auf {round(soc_next * 100)} %) | Preis: {avg_price * 100:.1f} C/kWh")
+            subtitle = (f"Laden mit {ev_sum:.1f} kW (von {round(soc_now)} % "
+                        f"auf {round(soc_next)} %) | Preis: {avg_price * 100:.1f} C/kWh")
 
         avg_price_for_costs = _hourly_average_price(output_row, input_row)
         action = {
@@ -2980,11 +2992,43 @@ def compute_ev_charge_actions(config, output_rows, input_rows, start, optimizer_
             "Execution Status": "yes, planned" if is_action_type_enabled(config, EV_CHARGE_ACTION_NAME) else "no, deactivated",
         }
         if pv_surplus:
+            # PV Surplus/PV Sum Forecast: fuer die Zielwert-Korrektur im tatsaechlichen Startmoment
+            # (siehe _apply_ev_pv_surplus_start_correction) - EV_sum liegt bereits in "Energy (electr)".
+            action["PV Surplus"] = True
+            action["PV Sum Forecast"] = float(output_row.get("PV_sum_44") or 0)
             timestamp = datetime.now().strftime("%d.%m. %H:%M Uhr")
-            action["Log"] = f"{timestamp}: Laden mit {target_value:.1f} kW"
+            action["Log"] = f"{timestamp}: geplant mit {target_value:.1f} kW (PV-Überschuss, Korrektur folgt beim Start)"
         result[i] = action
 
     return result
+
+
+def _apply_ev_pv_surplus_start_correction(action, config):
+    """Im tatsaechlichen Startmoment einer PV-Ueberschuss-'Auto laden'-Aktion (siehe
+    handle_shyft_action_start) wird der bei der Berechnung gespeicherte, unkorrigierte Zielwert
+    (EV_sum aus der Optimierung, siehe compute_ev_charge_actions) durch die dann aktuell gemessene
+    PV-Leistung korrigiert, statt den ggf. schon veralteten Optimierungswert unveraendert zu
+    uebernehmen: EV_sum plus die Haelfte der Differenz zwischen jetzt gemessener PV-Leistung und der
+    PV-Prognose des Optimierungslaufs ("PV Sum Forecast"), gedeckelt auf 6A/1-phasig bis zur
+    maximalen Wallbox-Leistung. Aendert 'action' in-place und persistiert die Korrektur sofort im
+    Store (siehe _update_computed_action). Nicht-PV-Ueberschuss-Aktionen bleiben unveraendert; ohne
+    aktuellen PV-Messwert bleibt ebenfalls der urspruengliche Zielwert bestehen."""
+    if not action.get("PV Surplus"):
+        return action.get("Target Value")
+    live_pv_kw = _read_mapped_numeric(config, "photovoltaic_powerflow_pv")
+    if live_pv_kw is None:
+        return action.get("Target Value")
+    ev_sum = action.get("Energy (electr)") or 0
+    pv_sum_forecast = action.get("PV Sum Forecast") or 0
+    boosted = ev_sum + (live_pv_kw - pv_sum_forecast) / 2
+    corrected = round(max(PV_SURPLUS_MIN_KW, min(compute_wallbox_max_kw(config), boosted)), 1)
+    if corrected != action.get("Target Value"):
+        timestamp = datetime.now().strftime("%d.%m. %H:%M Uhr")
+        note = f"{timestamp}: Zielwert bei Start auf {corrected:.1f} kW korrigiert (PV-Überschuss, aktuell gemessen)"
+        action["Log"] = (action.get("Log") + "\n" + note) if action.get("Log") else note
+        action["Target Value"] = corrected
+        _update_computed_action(action)
+    return corrected
 
 
 def _reconcile_computed_actions(config, action_name, id_prefix, computed_by_hour, start):
@@ -3051,6 +3095,93 @@ def recompute_actions_from_optimizer_run(input_csv, output_csv, creation_date_ms
         _reconcile_computed_actions(config, EV_CHARGE_ACTION_NAME, EV_CHARGE_ID_PREFIX, ev_actions, start)
     except Exception as e:
         print("[Shyft] Aktionsberechnung aus Optimierungslauf fehlgeschlagen:", repr(e))
+
+
+def _find_next_hour_action(group, current):
+    "Die 'geplante' Aktion desselben Aktionstyps fuer die unmittelbar folgende Stunde (Date Start == Date End der aktuellen Aktion) - Basis fuer die Verlaengerungs-Erkennung in run_hourly_action_transition."
+    date_end = current.get("Date End")
+    if date_end is None:
+        return None
+    return next((a for a in group if a.get("Date Start") == date_end and (a.get("Status") or "").lower() == "geplant"), None)
+
+
+def run_hourly_action_transition():
+    """Allgemeiner, aktionstyp-uebergreifender Stundenwechsel-Mechanismus (siehe Scheduler-Cron,
+    minute=0) - gilt fuer jeden "Action Name" im lokalen Store (COMPUTED_ACTIONS_PATH), nicht nur
+    "Auto laden":
+      - Eine abgelaufene aktive Aktion (Date End erreicht) wird beendet: Status = "beendet" plus die
+        tatsaechliche Steuerung (handle_shyft_action_end, z.B. der "Laden beenden"-Workflow).
+      - Eine faellige geplante Aktion (Date Start erreicht) wird gestartet: Status = "aktiv" plus die
+        tatsaechliche Steuerung (handle_shyft_action_start).
+      - Verlaengerung statt Beenden+Neustart: hat die Aktion der unmittelbar folgenden Stunde
+        denselben Target Value wie die gerade ablaufende, wird sie geloescht, ihre costsopt zur
+        laufenden Aktion addiert und deren Date End um eine Stunde verlaengert - kein erneutes
+        Triggern eines Geraets, das ohnehin schon mit demselben Zielwert laeuft.
+
+    Feuert handle_shyft_action_start/end direkt (nicht ueber process_shyft_actions) - pflegt deshalb
+    dieselben startedShyftActionIds/endedShyftActionIds wie process_shyft_actions (siehe dort), damit
+    dessen naechster Poll (alle 15 Minuten, kann auf denselben Tick fallen) dieselbe Aktion nicht ein
+    zweites Mal feuert."""
+    if is_demo_mode():
+        return
+    config = _read_current_config()
+    actions = _read_computed_actions()
+    now_ms = time.time() * 1000
+    started_ids = set(config.get("startedShyftActionIds", []))
+    ended_ids = set(config.get("endedShyftActionIds", []))
+
+    by_name = {}
+    for a in actions:
+        by_name.setdefault(a.get("Action Name"), []).append(a)
+
+    to_remove_ids = set()
+    changed = False
+
+    for name, group in by_name.items():
+        enabled = is_action_type_enabled(config, name)
+
+        expiring = [a for a in group
+                    if (a.get("Status") or "").lower().startswith("aktiv")
+                    and a.get("Date End") is not None and a["Date End"] <= now_ms]
+        for current in expiring:
+            next_action = _find_next_hour_action(group, current)
+            if next_action is not None and next_action.get("Target Value") == current.get("Target Value"):
+                current["Date End"] = next_action.get("Date End")
+                current["costsopt"] = (current.get("costsopt") or 0) + (next_action.get("costsopt") or 0)
+                to_remove_ids.add(next_action.get("_id"))
+                changed = True
+                continue
+            action_id = current.get("_id")
+            if action_id and action_id not in ended_ids:
+                try:
+                    handle_shyft_action_end(current, enabled, config)
+                except Exception as e:
+                    print(f"[Shyft] Stundenwechsel: Beenden von '{name}' fehlgeschlagen:", repr(e))
+                ended_ids.add(action_id)
+            current["Status"] = "beendet"
+            changed = True
+
+        due = [a for a in group
+               if (a.get("Status") or "").lower() == "geplant"
+               and a.get("Date Start") is not None and a["Date Start"] <= now_ms
+               and a.get("_id") not in to_remove_ids]
+        for action in due:
+            action["Status"] = "aktiv"
+            action_id = action.get("_id")
+            if action_id and action_id not in started_ids:
+                try:
+                    handle_shyft_action_start(action, enabled, config)
+                except Exception as e:
+                    print(f"[Shyft] Stundenwechsel: Start von '{name}' fehlgeschlagen:", repr(e))
+                started_ids.add(action_id)
+            changed = True
+
+    if changed:
+        result_actions = [a for a in actions if a.get("_id") not in to_remove_ids]
+        _write_computed_actions(result_actions)
+        config["startedShyftActionIds"] = sorted(started_ids)
+        config["endedShyftActionIds"] = sorted(ended_ids)
+        _write_current_config(config)
 
 
 def process_shyft_actions():
@@ -3415,6 +3546,10 @@ def process_shyft_actions_periodically():
     with app.app_context():
         process_shyft_actions()
 
+def run_hourly_action_transition_periodically():
+    with app.app_context():
+        run_hourly_action_transition()
+
 def sync_dashboard_chart_data_periodically():
     with app.app_context():
         sync_dashboard_chart_data()
@@ -3485,6 +3620,8 @@ scheduler.add_job(sync_dashboard_chart_data_periodically, 'cron', minute="0")
 # on the hour and every 15 min after - actions can be created mid-hour for the current hour
 # and start immediately, so a coarser schedule would miss those until the next hour
 scheduler.add_job(process_shyft_actions_periodically, 'cron', minute="0,15,30,45")
+# Allgemeiner Beenden/Starten/Verlaengern-Mechanismus zur vollen Stunde, siehe run_hourly_action_transition
+scheduler.add_job(run_hourly_action_transition_periodically, 'cron', minute="0")
 # on the hour, alongside the other hourly syncs - one snapshot per hour is exactly the
 # resolution the Anwesenheitsprognose needs (see compute_car_presence_forecast)
 scheduler.add_job(sync_car_presence_log_periodically, 'cron', minute="0")
