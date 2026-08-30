@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.0.44.45
+
+* Der Button "Shyft-Zugangstoken ändern" in der In-App-Konfiguration hatte keine erkennbare Funktion mehr und wurde entfernt (samt dem zugehörigen `/set-access-key`-Endpoint). Stattdessen zeigt jetzt die native Add-on-Konfigurationsseite von Home Assistant (Supervisor-Tab, zwischen "Info" und "Protokoll") den Zugangstoken maskiert an - `shyft_access_key` nutzt dort HA's eingebauten `password`-Feldtyp inkl. Anzeigen-Button, statt ihn im Klartext zu zeigen.
+* Energiefluss-Widget: Alle Leistungsfluss-Beschriftungen (Grid, Eigenverbrauch, Batterie, Wärmepumpe, Auto, Sonstiges Gerät, Haushaltsstrom) werden jetzt vertikal mittig an ihrer jeweiligen Stromleitung ausgerichtet, statt an einem festen Offset - dadurch bleiben sie auf gleicher Höhe, egal ob z.B. durch einen zusätzlichen Zeitstempel eine oder zwei Zeilen angezeigt werden. Grid- und Eigenverbrauchs-Beschriftung liegen jetzt zusätzlich auf exakt derselben Höhe (beide Leitungen liegen auf gleicher Höhe).
+* Energiefluss-Widget: Die Leitung zwischen Sonne/Mond und Haus (PV) bleibt jetzt auch bei 0 kW sichtbar (grau, ohne Strompunkte) statt bei fehlendem PV-Ertrag ganz zu verschwinden - wie bei allen anderen Verbraucher-Leitungen.
+
 ## 0.0.44.44
 
 * **Dritter addon-berechneter Aktionstyp: "Heizung Soll-Temperatur"**, nach demselben Muster wie "Warmwasser" (`compute_heizung_actions`) - läuft nur, wenn eine Wärmepumpe konfiguriert ist. Eine Aktion entsteht, wenn `T_i_Target` aus `output_csv` (auf 0 Nachkommastellen gerundet) vom aktuell aktiven Sollwert abweicht (Live-Wert des Controls "Heizung Soll-Temperatur (aktuell)", derselbe Referenzwert für alle 10 Stunden dieses Laufs). `Energy (electr) = HP_FH`, `Start Value = T_i` (aktuelle Raumtemperatur), `Target Value = T_i_Target` (gerundet), `costsopt = HP_FH × Durchschnittspreis`, Subtitle "Soll: XXX °C (YYY kWh elektr.)" (beide auf 0 Nachkommastellen). Start/Ende-Steuerung war bereits generisch vorhanden ("Heizung Soll-Temperatur" ist ein normaler `AUTO_MANAGED_CONTROLS`-Eintrag), keine Sonderbehandlung nötig.

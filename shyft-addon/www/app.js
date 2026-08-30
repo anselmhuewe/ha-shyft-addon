@@ -3883,8 +3883,18 @@ function renderSkyIcon(cx, cy) {
     return g;
 }
 
-function buildEnergyFlowLabel(x, y, lines, {anchor = 'start'} = {}) {
-    const text = svgEl('text', {x, y, 'text-anchor': anchor, class: 'energyFlowLabel'});
+// Zeilenhoehe (px) von .energyFlowLabel (siehe index.html) - Basis fuer die vertikale Zentrierung
+// mehrzeiliger Labels in buildEnergyFlowLabel. FLOW_LABEL_BASELINE_ADJUST gleicht aus, dass eine
+// SVG-Text-y-Koordinate die Baseline meint, nicht die optische Mitte der Schrift (empirisch
+// ermittelt, vorher schon so fuer die Batterie-Beschriftung verwendet).
+const FLOW_LABEL_LINE_HEIGHT = 14;
+const FLOW_LABEL_BASELINE_ADJUST = 4;
+// Gemeinsamer Abstand ueber der jeweiligen (horizontalen) Stromleitung fuer Grid- und
+// Eigenverbrauchs-Beschriftung - beide Leitungen liegen auf derselben Hoehe (pylonCy === houseCy),
+// mit demselben Gap landen ihre Labels dadurch auch auf derselben Hoehe.
+const FLOW_LINE_LABEL_GAP = 24;
+
+function buildEnergyFlowLabel(x, centerY, lines, {anchor = 'start'} = {}) {
     // Ein "(HH:MM)"- bzw. "(D.M. HH:MM)"-Zeitstempel-Suffix (siehe withStaleness/formatTimeHHMM -
     // Datum wird ergaenzt, wenn der Zeitstempel nicht von heute ist) bricht auf eine eigene Zeile
     // um, statt die Zeile beliebig lang werden zu lassen - sonst laufen laengere Werte (z.B.
@@ -3895,6 +3905,14 @@ function buildEnergyFlowLabel(x, y, lines, {anchor = 'start'} = {}) {
         const match = /^(.*) (\((?:\d{1,2}\.\d{1,2}\.\s)?\d{2}:\d{2}\))$/.exec(line);
         return match ? [match[1], match[2]] : [line];
     });
+    // centerY ist die Mitte der zugehoerigen Stromleitung (bzw. des Geraete-Icons auf ihr) - der
+    // gesamte, ggf. mehrzeilige Textblock wird darum zentriert, statt centerY als Anker der ERSTEN
+    // Zeile zu behandeln. Sonst haengt die sichtbare Hoehe eines Labels davon ab, ob es (z.B. durch
+    // einen zusaetzlichen Zeitstempel bei veralteten Sensorwerten) ein- oder zweizeilig ist, und
+    // zwei Labels an derselben Leitung/Hoehe koennten je nach Zeilenzahl unterschiedlich hoch
+    // erscheinen.
+    const startY = centerY - ((wrappedLines.length - 1) * FLOW_LABEL_LINE_HEIGHT) / 2 + FLOW_LABEL_BASELINE_ADJUST;
+    const text = svgEl('text', {x, y: startY, 'text-anchor': anchor, class: 'energyFlowLabel'});
     // dy in em (relativ zur aktuellen Schriftgroesse) statt fest 14px - so bleibt der Zeilenabstand
     // korrekt, wenn .energyFlowLabel die Schriftgroesse per Media Query fuer mobile aendert (siehe
     // index.html), statt dass sich mehrzeilige Labels dann ueberlappen.
@@ -4018,7 +4036,7 @@ function buildEnergyFlowWidget(data) {
         // dem Mast selbst - er ist kein Leitungs-Fluesswert, sondern eine dem Mast zugeordnete
         // Zusatzinfo.
         const gridLabelX = (pylonCx + 24 + houseX) / 2;
-        svg.appendChild(buildEnergyFlowLabel(gridLabelX, pylonCy - 34, [withStaleness(formatKwValue(data.grid.kw), data.grid.updatedAt, INVERTER_STALE_MINUTES)], {anchor: 'middle'}));
+        svg.appendChild(buildEnergyFlowLabel(gridLabelX, pylonCy - FLOW_LINE_LABEL_GAP, [withStaleness(formatKwValue(data.grid.kw), data.grid.updatedAt, INVERTER_STALE_MINUTES)], {anchor: 'middle'}));
         if (priceText) {
             // Kein Zeitstempel hier - der Strompreis kommt nicht direkt aus HA (siehe
             // _read_current_price_info in app.py), sondern aus dem shyft-Cache.
@@ -4026,7 +4044,15 @@ function buildEnergyFlowWidget(data) {
         }
     }
     if (data.pv && data.pv.configured) {
-        svg.appendChild(buildEnergyFlowLabel(houseCx + 30, houseY + 24, [withStaleness(formatKwValue(data.pv.kw), data.pv.updatedAt, INVERTER_STALE_MINUTES)]));
+        // Leitung Sonne/Mond -> Haus: wie bei allen anderen Fluessen bleibt sie (grau, ohne Punkte)
+        // auch bei 0 kW sichtbar (siehe buildFlowLine/buildFlowDots) statt bei fehlendem PV-Ertrag
+        // (z.B. nachts) ganz zu verschwinden. 45px Abstand unter sunCy, damit die Leitung nicht in
+        // die Sonnenstrahlen bzw. den Mond hineinragt (aeusserer Radius dort ca. 35px).
+        const pvLineTopY = sunCy + 45, pvLineBottomY = houseY;
+        const pvLine = buildFlowLine(houseCx, pvLineTopY, houseCx, pvLineBottomY, data.pv.kw);
+        if (pvLine) svg.appendChild(pvLine);
+        const pvLineCenterY = (pvLineTopY + pvLineBottomY) / 2;
+        svg.appendChild(buildEnergyFlowLabel(houseCx + 30, pvLineCenterY, [withStaleness(formatKwValue(data.pv.kw), data.pv.updatedAt, INVERTER_STALE_MINUTES)]));
     }
 
     if (data.battery && data.battery.configured) {
@@ -4036,7 +4062,8 @@ function buildEnergyFlowWidget(data) {
         // Deutlich mehr Abstand zum Haus als vorher (60 statt 20).
         const batteryGap = 60;
         const batteryCx = houseCx, batteryCy = houseY + houseH + batteryGap + batteryImgH / 2;
-        const line = buildFlowLine(houseCx, houseY + houseH, batteryCx, batteryCy - batteryImgH / 2 - 4, data.battery.kw, {reversed: (data.battery.kw || 0) < 0});
+        const batteryLineTopY = houseY + houseH, batteryLineBottomY = batteryCy - batteryImgH / 2 - 4;
+        const line = buildFlowLine(houseCx, batteryLineTopY, batteryCx, batteryLineBottomY, data.battery.kw, {reversed: (data.battery.kw || 0) < 0});
         if (line) svg.appendChild(line);
         svg.appendChild(buildFlowImage(batteryImageFor(data.battery.soc), batteryCx, batteryCy, 240, 448, batteryImgW));
         // Neben dem Icon (nicht ueber der Leitung) - Haus->Batterie ist ein senkrechter Fluss, und
@@ -4044,10 +4071,10 @@ function buildEnergyFlowWidget(data) {
         // horizontalen Fluessen wie Grid/Trunk).
         const batteryLines = [withStaleness(formatKwValue(data.battery.kw), data.battery.updatedAt, INVERTER_STALE_MINUTES), `${Math.round(data.battery.soc ?? 0)} %`];
         if (data.battery.mode) batteryLines.push(data.battery.mode);
-        // Vertikal mittig am Icon ausgerichtet statt an einem festen Offset - haengt sonst davon ab,
-        // ob 2 oder 3 Zeilen Text anfallen (mit/ohne Modus).
-        const batteryLabelY = batteryCy - ((batteryLines.length - 1) * 14) / 2 + 4;
-        svg.appendChild(buildEnergyFlowLabel(batteryCx + batteryImgW / 2 + 10, batteryLabelY, batteryLines));
+        // Vertikal mittig an der Leitung (Haus->Batterie-Icon) ausgerichtet, nicht am Icon selbst -
+        // die Leitung endet ja bereits oberhalb des Icons (siehe batteryLineTopY/-BottomY).
+        const batteryLineCenterY = (batteryLineTopY + batteryLineBottomY) / 2;
+        svg.appendChild(buildEnergyFlowLabel(batteryCx + batteryImgW / 2 + 10, batteryLineCenterY, batteryLines));
     }
 
     const houseRightX = houseX + houseVisibleW;
@@ -4089,7 +4116,10 @@ function buildEnergyFlowWidget(data) {
     // Wallbox-/Waermepumpen-Leistung schon herausrechnet.
     if (data.household && data.household.configured) {
         const trunkLabelX = (houseRightX + busX) / 2;
-        svg.appendChild(buildEnergyFlowLabel(trunkLabelX, houseCy - 14, [withStaleness(formatKwValue(data.household.kw), data.household.updatedAt, INVERTER_STALE_MINUTES)], {anchor: 'middle'}));
+        // Gleicher Gap wie beim Grid-Label (FLOW_LINE_LABEL_GAP) - Grid- und Trunk-Leitung liegen auf
+        // derselben Hoehe (houseCy === pylonCy), damit landen auch beide Beschriftungen auf derselben
+        // Hoehe, statt (wie vorher) mit unterschiedlichen Offsets leicht versetzt zu wirken.
+        svg.appendChild(buildEnergyFlowLabel(trunkLabelX, houseCy - FLOW_LINE_LABEL_GAP, [withStaleness(formatKwValue(data.household.kw), data.household.updatedAt, INVERTER_STALE_MINUTES)], {anchor: 'middle'}));
     }
 
     if (data.heatpump && data.heatpump.configured) {
@@ -4110,7 +4140,9 @@ function buildEnergyFlowWidget(data) {
                 ? `Heizung: ${data.heatpump.heatingOn ? 'An' : 'Aus'}` + (data.heatpump.supplyTempC !== null ? ` (${formatTemp(data.heatpump.supplyTempC)})` : '')
                 : null,
         ].filter(Boolean);
-        svg.appendChild(buildEnergyFlowLabel(columnX + 46, rowY - 24, statusLines));
+        // Vertikal mittig an der Leitung/dem Icon (rowY) statt an einem festen Offset - so bleibt die
+        // Beschriftung auf Leitungshoehe, egal wie viele der optionalen statusLines gerade anfallen.
+        svg.appendChild(buildEnergyFlowLabel(columnX + 46, rowY, statusLines));
     }
 
     if (data.car && data.car.configured) {
@@ -4130,7 +4162,7 @@ function buildEnergyFlowWidget(data) {
         if (data.car.state === 'away') carLines.push('abwesend');
         else if (data.car.state === 'charging') carLines.push('lädt');
         else if (data.car.state === 'connected') carLines.push('eingesteckt');
-        svg.appendChild(buildEnergyFlowLabel(columnX + carTargetW / 2 + 10, rowY - 4, carLines));
+        svg.appendChild(buildEnergyFlowLabel(columnX + carTargetW / 2 + 10, rowY, carLines));
     }
 
     if (data.sonstigerVerbraucher && data.sonstigerVerbraucher.configured) {
@@ -4144,7 +4176,7 @@ function buildEnergyFlowWidget(data) {
         const line = buildFlowLineFromPath(buildFlowPath(busX, rowY, columnX - plugHalfWidth - 6, rowY), sonstigerFlowKw);
         if (line) svg.appendChild(line);
         svg.appendChild(buildPlugIcon(columnX, rowY, on, plugScale));
-        svg.appendChild(buildEnergyFlowLabel(columnX + plugHalfWidth + 10, rowY + 4, ['Sonstiges Gerät']));
+        svg.appendChild(buildEnergyFlowLabel(columnX + plugHalfWidth + 10, rowY, ['Sonstiges Gerät']));
     }
 
     if (data.household && data.household.configured) {
@@ -4152,7 +4184,7 @@ function buildEnergyFlowWidget(data) {
         const line = buildFlowLineFromPath(buildFlowPath(busX, rowY, consumerAnchorX, rowY), householdFlowKw);
         if (line) svg.appendChild(line);
         svg.appendChild(buildLightningIcon(columnX, rowY));
-        svg.appendChild(buildEnergyFlowLabel(columnX + 24, rowY + 4, ['Haushaltsstrom']));
+        svg.appendChild(buildEnergyFlowLabel(columnX + 24, rowY, ['Haushaltsstrom']));
     }
 
     // Ungenutzten linken Rand wegschneiden, der durch den naeher heranger ueckten Mast frei wurde
@@ -4316,52 +4348,6 @@ function setupTabs() {
             }
             document.getElementById('tab-' + button.dataset.tab).classList.add('active');
         });
-    }
-}
-
-// ============================================================================
-// Zugangstoken-Wechsel: der eigentliche Account wird jetzt automatisch im Hintergrund
-// angelegt, sobald ein erstes echtes Geraet (statt eines Demo-Geraets, siehe
-// INTEGRATION_SECTIONS/buildIntegrationPicker) hinterlegt wird - kein Popup mehr noetig.
-// "Zugangstoken ändern" bleibt als manuelle Option, um einen bestehenden Account zu
-// hinterlegen bzw. das Konto zu wechseln - der echte aktuelle Token wird dafuer nie ans
-// Frontend zurueckgegeben, nur neu gesetzt.
-// ============================================================================
-
-function showShyftAccountTokenField() {
-    document.getElementById('shyftAccountTokenDisplay').style.display = 'none';
-    document.getElementById('shyftAccountTokenEdit').style.display = 'flex';
-    document.getElementById('shyftAccountTokenInput').focus();
-}
-
-function setShyftAccountStatus(message, isError) {
-    const el = document.getElementById('shyftAccountStatus');
-    if (!el) return;
-    el.textContent = message || '';
-    el.className = 'shyftAccountStatus' + (message ? (isError ? ' status-error' : ' status-ok') : '');
-}
-
-async function saveShyftAccountToken() {
-    const input = document.getElementById('shyftAccountTokenInput');
-    const accessKey = (input.value || '').trim();
-    if (!accessKey) {
-        setShyftAccountStatus('Bitte einen Zugangstoken eingeben.', true);
-        return;
-    }
-    setShyftAccountStatus('Speichere…', false);
-    try {
-        const result = await postJson(insideHomeAssistant + '/set-access-key', {access_key: accessKey});
-        if (result.status === 'success') {
-            setShyftAccountStatus('Zugangstoken gespeichert.', false);
-            input.value = '';
-            document.getElementById('shyftAccountTokenEdit').style.display = 'none';
-            document.getElementById('shyftAccountTokenDisplay').style.display = 'block';
-        } else {
-            setShyftAccountStatus(result.message || 'Zugangstoken konnte nicht gespeichert werden.', true);
-        }
-    } catch (err) {
-        console.log(err);
-        setShyftAccountStatus('Zugangstoken konnte nicht gespeichert werden.', true);
     }
 }
 

@@ -179,20 +179,6 @@ def _persist_shyft_access_key(new_access_key):
     shyft_adapter.set_access_key(new_access_key)
 
 
-@app.route("/set-access-key", methods=["POST"])
-def setAccessKeyEndpoint():
-    "Manually hinterlegt einen bestehenden shyft_access_key (siehe 'Shyft-Zugangstoken ändern' in www/index.html) - fuer Nutzer, die schon einen Account haben, oder um das Konto zu wechseln."
-    body = request.get_json(silent=True) or {}
-    access_key = (body.get("access_key") or "").strip()
-    if not access_key:
-        return jsonify({"status": "error", "message": "Zugangstoken darf nicht leer sein."})
-    try:
-        _persist_shyft_access_key(access_key)
-    except Exception as e:
-        print("[Shyft] Zugangstoken konnte nicht gespeichert werden:", repr(e))
-        return jsonify({"status": "error", "message": "Zugangstoken konnte nicht gespeichert werden."})
-    return jsonify({"status": "success"})
-
 
 # Sections, die (statt einer echten HA-Integration) ein synthetisches "Demo"-Geraet anbieten - siehe
 # DEMO_INTEGRATION_ID, buildIntegrationPicker/INTEGRATION_SECTIONS in www/app.js, DEMO_SECTION_SENSORS

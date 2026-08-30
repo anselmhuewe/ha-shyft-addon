@@ -241,34 +241,6 @@
             opacity: 0.85;
         }
 
-        .shyftAccountSection {
-            margin: 1.5em 0;
-            padding-top: 1em;
-            border-top: 1px solid var(--color-border);
-        }
-        .shyftAccountSection .actionMenu {
-            margin: 0.5em 0 0;
-        }
-        .shyftAccountTokenRow {
-            display: flex;
-            align-items: center;
-            gap: 0.6em;
-            max-width: 30em;
-        }
-        .shyftAccountTokenRow .sensorInput {
-            flex: 1;
-        }
-        .shyftAccountStatus {
-            font-size: 0.9em;
-            margin-top: 0.4em;
-        }
-        .shyftAccountStatus.status-error {
-            color: var(--color-error);
-        }
-        .shyftAccountStatus.status-ok {
-            color: var(--color-accent);
-        }
-
         .autoActionControl {
             margin-top: 1.5em;
             padding-top: 1em;
@@ -1035,16 +1007,6 @@
     </datalist>
     <div id="deviceSections"></div>
     <div id="notificationSection"></div>
-    <div class="shyftAccountSection">
-        <div id="shyftAccountTokenDisplay">
-            <button type="button" onclick="showShyftAccountTokenField()">Shyft-Zugangstoken ändern</button>
-        </div>
-        <div id="shyftAccountTokenEdit" class="shyftAccountTokenRow" style="display:none;">
-            <input type="password" id="shyftAccountTokenInput" class="sensorInput" placeholder="Zugangstoken einfügen" autocomplete="off">
-            <button type="button" onclick="saveShyftAccountToken()">Speichern</button>
-        </div>
-        <div id="shyftAccountStatus" class="shyftAccountStatus"></div>
-    </div>
     <div class="actionMenu">
         <button onclick="trigger()">Verbindung testen</button>
         <span id="saveStatus"></span>
