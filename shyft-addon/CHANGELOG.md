@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.0.44.35
+
+* Neue Felder `hw_usage_h`/`hotwaterkwh` in der an shyft-power gesendeten JSON (analog zu `ev_usage_h`/`d_ev_kwh`) - fester Default von 10 kWh/Tag Warmwasserbedarf, gleichmäßig auf die Stunden zwischen 6 und 22 Uhr verteilt (0,625 kWh/h), außerhalb 0. Noch kein eigenes Konfigurationsfeld dafür (bewusst erstmal einfach gehalten) - nur wenn eine Wärmepumpe konfiguriert ist
+
 ## 0.0.44.34
 
 * Fix: 16 weitere Konfigurationsfelder (Wärmepumpe: Typ/Wohnfläche/Energieeffizienz/WW-Speicher/Max. Leistung/Max. Vorlauftemp./Heizungspuffer/Heizkurve Niveau+Steigung; Batterie: Kapazität/Min. Ladestand; Strom/Optimierung: Gaspreis/Optimierungszeitraum/Grundlast/Strompreis Einkauf/Einspeisevergütung) fehlten bislang im PUT-Body beim Speichern (nur lokal in configData gesetzt) - jede Auswahl ging beim nächsten Speichern wieder verloren. Alle jetzt korrekt in saveConfigurationNow enthalten, mit denselben Default-Werten wie ihr jeweiliges Eingabefeld

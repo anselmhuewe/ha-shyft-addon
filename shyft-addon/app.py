@@ -259,6 +259,11 @@ def sync_site_data(optimizer_period_override=None, _wait_attempt=1):
         live_values["ev_usage_h"] = ev_fields["ev_usage_h"]
         live_values["d_ev_kwh"] = ev_fields["d_ev_kwh"]
         live_values["baseTime"] = ev_fields["baseTime"]
+    hw_fields = build_hot_water_optimizer_fields(config, optimizer_period=optimizer_period)
+    if hw_fields:
+        live_values["hw_usage_h"] = hw_fields["hw_usage_h"]
+        live_values["hotwaterkwh"] = hw_fields["hotwaterkwh"]
+        live_values["baseTime"] = hw_fields["baseTime"]
     wb_p_min = compute_wb_p_min()
     if wb_p_min is not None:
         live_values["WB - p_min"] = wb_p_min
@@ -1170,6 +1175,64 @@ def build_ev_optimizer_fields(config, optimizer_period=48):
     return {
         "ev_usage_h": ev_usage_h,
         "d_ev_kwh": d_ev_kwh,
+        "baseTime": labels[0],
+    }
+
+
+# Bewusst noch kein eigenes Konfigurationsfeld ("Warmwasserbedarf pro Tag") - erstmal ein fixer
+# Default, gleichmaessig auf die Tagesstunden verteilt statt eines echten Verbrauchsprofils. Ein
+# Eingabefeld dafuer ist ein moeglicher naechster Schritt, aber bewusst noch nicht Teil hiervon.
+HOT_WATER_DEFAULT_KWH_PER_DAY = 10.0
+HOT_WATER_START_HOUR = 6   # inklusive
+HOT_WATER_END_HOUR = 22    # exklusiv - Verbrauch faellt also auf die Stunden 6:00 bis 21:59
+
+
+def build_hot_water_optimizer_fields(config, optimizer_period=48):
+    """Baut hw_usage_h/hotwaterkwh fuer shyfts Optimierer, im selben Format wie ev_usage_h/d_ev_kwh
+    (siehe build_ev_optimizer_fields) - 1-basierte, ";"-getrennte Stunden-Indizes ab der aktuellen
+    (auf die volle Stunde abgerundeten) Stunde als "Stunde 1":
+      - "hw_usage_h": kompakte Liste der Stunden-Indizes, in denen ueberhaupt Warmwasser verbraucht
+        wird (also z.B. bei einer um 4 Uhr erzeugten JSON "3;4;5;...;18" fuer 6 bis 21 Uhr - Stunde
+        1 = 4-5 Uhr, Stunde 3 = 6-7 Uhr, die erste mit Verbrauch).
+      - "hotwaterkwh": dichter Stunden-Array (ein Wert je Stunde, auch 0) mit dem erwarteten
+        Warmwasserverbrauch (kWh) - HOT_WATER_DEFAULT_KWH_PER_DAY gleichmaessig verteilt auf die
+        Stunden zwischen HOT_WATER_START_HOUR und HOT_WATER_END_HOUR, sonst 0.
+      - "baseTime": wie bei ev_usage_h, ISO-Zeitstempel der Stunde 1.
+
+    Reines Default-Verhalten (keine Forecast-/Sensordaten-Abhaengigkeit) - im Gegensatz zu
+    build_ev_optimizer_fields braucht es deshalb auch keinen Fallback fuer "nichts ueberschreitet
+    die Schwelle", jede Stunde zwischen Start/Ende hat immer denselben festen Wert.
+
+    Gibt {} zurueck, wenn keine Waermepumpe konfiguriert ist (mirrors build_ev_optimizer_fields's
+    "kein Auto" -> {}-Verhalten).
+    """
+    has_heatpump = bool(config.get("integrationMappings", {}).get("waermepumpe"))
+    if not has_heatpump:
+        return {}
+
+    hours = optimizer_period + 1
+    start = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
+    labels = [(start + timedelta(hours=i)).isoformat() for i in range(hours)]
+
+    active_hour_count = HOT_WATER_END_HOUR - HOT_WATER_START_HOUR
+    kwh_per_active_hour = HOT_WATER_DEFAULT_KWH_PER_DAY / active_hour_count
+
+    usage_hours_zero_based = []
+    hotwaterkwh_values = []
+    for i in range(hours):
+        hour_of_day = (start + timedelta(hours=i)).hour
+        if HOT_WATER_START_HOUR <= hour_of_day < HOT_WATER_END_HOUR:
+            usage_hours_zero_based.append(i)
+            hotwaterkwh_values.append(kwh_per_active_hour)
+        else:
+            hotwaterkwh_values.append(0.0)
+
+    hw_usage_h = ";".join(str(i + 1) for i in usage_hours_zero_based)
+    hotwaterkwh = ";".join(f"{v:.3f}" for v in hotwaterkwh_values)
+
+    return {
+        "hw_usage_h": hw_usage_h,
+        "hotwaterkwh": hotwaterkwh,
         "baseTime": labels[0],
     }
 
