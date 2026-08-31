@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.0.44.50
+
+* `provide_input_output_csv`-Abruf, Diagnose des seit Samstag stehengebliebenen Dashboards:
+  * **`creation_date` jetzt als Unix-Millisekunden-Integer** statt als `datetime.isoformat()`-String. Bubble speichert Datumsfelder intern als ms und parst ISO-8601-Strings mit Sekundenbruchteilen/Offset (`…123456+00:00`) im API-Workflow unzuverlässig - ein nicht geparster Wert lässt die "`creation_date >= X`"-Suche potenziell ins Leere laufen.
+  * **Request-Payload und Response-Body werden jetzt geloggt** (`get_input_output_csv`, nur bei `detailed_logging`) - bisher stand nur die URL im Log, das genau gesendete `creation_date` und die Antwort waren nicht sichtbar.
+  * **Stündlicher Dashboard-Refresh nutzt als `since` den `creation_date` des zuletzt gecachten Laufs** statt pauschal "jetzt − 5 h". Vor dem zuletzt bekannten Lauf gibt es ohnehin nichts Neueres zu holen (ein Output entsteht immer nach seinem Input). Nur beim allerersten Lauf ohne Cache greift eine kurze Rückschau (3 h). Der Warte-Poll nach `sync_site_data` nutzt wie bisher den exakten Absendezeitpunkt.
+
 ## 0.0.44.49
 
 * Energiefluss-Widget (Mobil): Die Icons von Wärmepumpe/Auto/Sonstiges Gerät/Haushaltsstrom stehen weiterhin nebeneinander unter dem Haus, aber die vollständigen Detailwerte (wie auf Desktop, z.B. Ist-Temperatur, WW-Speicher, Heizungsstatus bei der Wärmepumpe bzw. Reichweite/Zeitstempel beim Auto) stehen jetzt untereinander darunter, statt gekürzt zu werden - dafür ist ja nach unten genug Platz. Behebt außerdem einen Layout-Fehler, durch den sich diese Textblöcke bei der größeren Mobil-Schrift teilweise überlappt hätten.

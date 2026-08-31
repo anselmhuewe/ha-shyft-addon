@@ -3502,6 +3502,26 @@ def _write_dashboard_cache(input_csv, output_csv, creation_date_ms, optimizer_ru
     recompute_actions_from_optimizer_run(input_csv, output_csv, creation_date_ms, optimizer_run_id)
 
 
+# Kaltstart-Fallback fuer _dashboard_sync_since, wenn noch gar kein Lauf gecacht ist - danach
+# zaehlt immer der creation_date des zuletzt gecachten Laufs.
+DASHBOARD_SYNC_FALLBACK_LOOKBACK_HOURS = 3
+
+
+def _dashboard_sync_since():
+    """Untere Zeitgrenze fuer den stuendlichen Dashboard-Refresh: der creation_date des zuletzt
+    gecachten Optimierungslaufs. Alles Aeltere haben wir bereits, und ein Output kann ohnehin nur
+    nach seinem Input entstehen - vor diesem Zeitpunkt gibt es also nichts Neues zu holen. Nur beim
+    allerersten Lauf (noch kein Cache) greift eine knappe Rueckschau."""
+    try:
+        with open(DASHBOARD_CACHE_PATH, "r") as f:
+            cached_ms = json.load(f).get("creation_date")
+        if cached_ms:
+            return datetime.fromtimestamp(cached_ms / 1000, tz=timezone.utc)
+    except Exception:
+        pass
+    return datetime.now(timezone.utc) - timedelta(hours=DASHBOARD_SYNC_FALLBACK_LOOKBACK_HOURS)
+
+
 def sync_dashboard_chart_data():
     "Refreshes the cached optimizer input_csv/output_csv/creation_date (see DASHBOARD_CACHE_PATH) from shyft-power - runs hourly (see scheduler), alongside the action queue poll, since the underlying data itself only changes about that often."
     if is_demo_mode():
@@ -3513,7 +3533,7 @@ def sync_dashboard_chart_data():
     user_id = extract_shyft_user_id(shyft_adapter.bubble_token)
     if not user_id:
         return
-    result = shyft_adapter.get_input_output_csv(user_id)
+    result = shyft_adapter.get_input_output_csv(user_id, since=_dashboard_sync_since())
     response_data = (result or {}).get("response") or {}
     # response_data enthaelt jetzt das ganze "Optimizer Run"-Bubble-Objekt unter "optimizer_run"
     # statt input_csv/output_csv/creation_date direkt auf oberster Ebene.

@@ -75,32 +75,35 @@ class ShyftAdapter:
         response.raise_for_status()
         return response.json()
 
-    # provide_input_output_csv braucht seit Kurzem zwingend einen creation_date-Parameter (Bubble
-    # "Date"-Feld, erwartet UTC) - ohne "since" (siehe get_input_output_csv) wird dieser Default
-    # gesendet. 5 Stunden auf Wunsch des Nutzers, solange die eigentliche "nur neuer als X"-Logik
-    # noch nicht bubble-seitig fertig gebaut ist - einfach nur ein Wert, der zuverlaessig ein
-    # Ergebnis liefert. TODO: sobald das fertig ist, ggf. wieder anpassen (siehe Konversation).
+    # provide_input_output_csv erwartet einen creation_date-Parameter als untere Grenze ("gib mir
+    # den Lauf neuer als das"). Ohne "since" (siehe get_input_output_csv) wird dieser Default
+    # gesendet - reiner Kaltstart-Fallback, wenn der Aufrufer keinen konkreten Zeitpunkt kennt
+    # (die regulaeren Aufrufer tun das inzwischen: der Warte-Poll den Absendezeitpunkt, der
+    # Dashboard-Refresh den creation_date des zuletzt gecachten Laufs).
     DEFAULT_SINCE_LOOKBACK_HOURS = 5
 
     def get_input_output_csv(self, user_id: str, since: datetime = None):
         """Pulls the optimizer's latest input/output CSV data (used to build the addon's
         Dashboard-tab charts, and as the basis for the addon-side action computation, see
         recompute_actions_from_optimizer_run in app.py) for user_id from shyft-power. Unlike
-        _call_workflow, returns the actual response body rather than a status string. 'since' (UTC)
-        ist jetzt Pflichtparameter auf
-        Bubble-Seite (creation_date) - ohne Angabe wird ein Default gesendet (siehe
-        DEFAULT_SINCE_LOOKBACK_HOURS); ein echter Zeitpunkt ist fuers Warten auf ein frisches, nach
-        einem bestimmten Trigger entstandenes Ergebnis gedacht."""
+        _call_workflow, returns the actual response body rather than a status string.
+
+        'since' (UTC) wird als Bubble-"Date" gesendet. Bubble speichert Datumsfelder intern als
+        Unix-Millisekunden und parst ISO-8601-Strings mit Sekundenbruchteilen/Offset im API-
+        Workflow unzuverlaessig (behandelt sie teils als leeren String) - deshalb wird
+        creation_date als Millisekunden-Integer uebertragen, nicht als isoformat()-String."""
         since = since or (datetime.now(timezone.utc) - timedelta(hours=self.DEFAULT_SINCE_LOOKBACK_HOURS))
+        creation_date_ms = int(since.timestamp() * 1000)
         try:
             headers = {
                 "Content-Type": "application/json",
                 "Authorization": f"Bearer {self.bubble_token}"
             }
             complete_uri = self._create_complete_uri("provide_input_output_csv")
-            payload = json.dumps({"user": user_id, "creation_date": since.isoformat()})
-            self._log_info(f"get_input_output_csv uri={complete_uri}")
+            payload = json.dumps({"user": user_id, "creation_date": creation_date_ms})
+            self._log_info(f"get_input_output_csv uri={complete_uri} payload={payload}")
             response = requests.post(complete_uri, headers=headers, data=payload)
+            self._log_info(f"get_input_output_csv response=[{response.status_code}] {response.text}")
             response.raise_for_status()
             return response.json()
         except Exception as e:
