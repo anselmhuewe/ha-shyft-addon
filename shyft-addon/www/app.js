@@ -3806,6 +3806,7 @@ function buildFlowImage(href, cx, cy, naturalW, naturalH, targetW) {
 // links UND von oben (die Freileitung reicht schraeg nach oben weiter nach rechts als der
 // Mast-Pfosten selbst) - beides faellt in den Bildbereich oberhalb/links vom Haus, das Haus selbst
 // beginnt (Dach/First) erst weiter unten/rechts und bleibt dadurch unangetastet.
+let houseClipIdCounter = 0;
 function buildCroppedHouseImage(href, naturalW, naturalH, cropLeftFraction, cropTopFraction, x, y, visibleW) {
     const fullW = visibleW / (1 - cropLeftFraction);
     const fullH = fullW * (naturalH / naturalW);
@@ -3813,7 +3814,13 @@ function buildCroppedHouseImage(href, naturalW, naturalH, cropLeftFraction, crop
     const imgX = x - fullW * cropLeftFraction;
     const imgY = y - cropTopPx;
     const visibleH = fullH - cropTopPx;
-    const clipId = 'efw-house-clip';
+    // Eindeutige ID pro Aufruf (statt eines fest verdrahteten Strings) - buildEnergyFlowWidget baut
+    // Desktop- UND Mobil-<svg> gleichzeitig in dasselbe Dokument (siehe dort), ein hart codierter Id
+    // waere dort doppelt vergeben. Bei doppelter ID loest der Browser url(#...) auf DAS GESAMTE
+    // Dokument bezogen auf, nicht pro <svg> - das Mobil-Hausbild haette dann faelschlich den
+    // Zuschnitt des Desktop-Layouts benutzt (andere Koordinaten/Groesse) und der eigentlich
+    // ausgeblendete Mast waere wieder sichtbar geworden.
+    const clipId = 'efw-house-clip-' + (houseClipIdCounter++);
     const g = svgEl('g');
     const defs = svgEl('defs');
     const clip = svgEl('clipPath', {id: clipId});
@@ -4295,14 +4302,14 @@ function placeLabelBelow(x, topY, lines, opts = {}) {
 // insgesamt schmaler, ohne Geraete wegzulassen. Aktiv unter genau der Breite, ab der .energyFlowLabel
 // per Media Query vergroessert wird (siehe .energyFlowSvgMobile/.energyFlowSvgDesktop in index.html).
 function buildEnergyFlowSvgMobile(data) {
-    // 980 statt z.B. 640 - mit vier vollen Verbraucher-Labels nebeneinander (Waermepumpe/Auto/
+    // 1150 statt z.B. 640 - mit vier vollen Verbraucher-Labels nebeneinander (Waermepumpe/Auto/
     // Sonstiges Geraet/Haushaltsstrom) reicht ein schmaleres viewBox nicht: einzelne Zeilen wie
     // "Sonstiges Gerät" oder "eingesteckt" sind bei gut lesbarer Schriftgroesse (siehe
     // .energyFlowLabel-Media-Query) schon fuer sich genommen breiter als eine schmalere Spalte
     // erlauben wuerde. Ausserdem brauchen Mast/Batterie mehr Abstand zum Haus (siehe pylonCx/
-    // batteryCx), sonst wirkt es zu eng. 980 ist trotzdem noch deutlich schmaler als das
-    // Desktop-Layout (1300).
-    const VIEW_W = 980;
+    // batteryCx) und die Beschriftungen auf den horizontalen Leitungen (Grid/Batterie) mehr Luft,
+    // sonst wirkt es zu eng. 1150 ist trotzdem noch etwas schmaler als das Desktop-Layout (1300).
+    const VIEW_W = 1150;
     const svg = svgEl('svg');
 
     const house = houseImageFor(data);
@@ -4461,18 +4468,19 @@ function buildEnergyFlowSvgMobile(data) {
             }
         });
 
-        // Detail-Bloecke untereinander (in derselben Reihenfolge wie die Icons darueber), aber jeder
-        // Block bleibt horizontal unter SEINEM EIGENEN Icon (colX) zentriert, statt alle am selben
-        // linken Rand zu starten - sonst wirkt es z.B. so, als gehoerten die Wallbox-Werte zur
-        // Waermepumpe, weil beide am selben x anfangen. Da die Bloecke untereinander (verschiedene Y)
-        // stehen, kollidieren sie trotz unterschiedlicher x nicht mit ihren Nachbarn.
-        let blockTopY = rowY + 60;
+        // Jeder Block bleibt horizontal unter SEINEM EIGENEN Icon (colX) zentriert, statt alle am
+        // selben linken Rand zu starten - sonst wirkt es z.B. so, als gehoerten die Wallbox-Werte zur
+        // Waermepumpe, weil beide am selben x anfangen. Vertikal starten jetzt ALLE Bloecke an
+        // derselben Hoehe (nicht mehr nacheinander gestapelt) - sonst rutscht z.B. der Auto-Block
+        // immer weiter nach unten, nur weil die (laengere) Waermepumpen-Liste davor mehr Zeilen
+        // brauchte. Kollisionsgefahr besteht trotzdem nicht: die Bloecke stehen ja bereits an
+        // unterschiedlichem x (siehe oben).
+        const detailBlocksTopY = rowY + 60;
         for (const {colX, lines} of deviceDetailBlocks) {
-            const placed = placeLabelBelow(colX, blockTopY, lines, {anchor: 'middle', lineHeight: MOBILE_FLOW_LABEL_LINE_HEIGHT});
+            const placed = placeLabelBelow(colX, detailBlocksTopY, lines, {anchor: 'middle', lineHeight: MOBILE_FLOW_LABEL_LINE_HEIGHT});
             svg.appendChild(placed.el);
-            blockTopY = placed.bottomY + 16;
+            contentBottomY = Math.max(contentBottomY, placed.bottomY + 16);
         }
-        contentBottomY = Math.max(contentBottomY, blockTopY);
     }
 
     // Hoehe (anders als beim Desktop-Layout mit fester VIEW_H) dynamisch anhand des tatsaechlich

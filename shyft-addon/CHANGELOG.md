@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.0.44.55
+
+* **Fix: Mast aus dem Hausbild war auf Mobil wieder sichtbar.** `buildCroppedHouseImage` (blendet den im Hausfoto eingezeichneten Strommasten per `clipPath` aus) hat eine fest verdrahtete `id` benutzt - seit es Desktop- UND Mobil-`<svg>` gleichzeitig im selben Dokument gibt (0.0.44.48), gab es diese ID doppelt. Der Browser löst `url(#...)` dokumentweit auf, nicht pro `<svg>` - das Mobil-Hausbild bekam dadurch fälschlich den Desktop-Zuschnitt (andere Koordinaten) und der eigentlich ausgeblendete Mast blitzte wieder durch. IDs sind jetzt pro Aufruf eindeutig.
+* Energiefluss-Widget (Mobil): Grafik nochmal breiter (1150 statt 980), damit die Beschriftungen an den horizontalen Leitungen (Grid/Batterie) mehr Luft haben.
+* Energiefluss-Widget (Mobil): Die Detail-Blöcke (Wärmepumpe/Auto/Sonstiges Gerät/Haushaltsstrom) starteten nacheinander gestapelt, dadurch rutschten die hinteren (z.B. Auto) immer weiter nach unten, nur weil die Wärmepumpe davor mehr Zeilen brauchte. Alle vier starten jetzt auf gleicher Höhe.
+
 ## 0.0.44.54
 
 * **PV-Erzeugungsprognose ins Addon verlagert** (`pv_forecast.py`, ersetzt die frühere bubble-seitige „PV Prediction").
