@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.0.44.53
+
+* Energiefluss-Widget (Mobil), drei Layout-Korrekturen:
+  * Die Detail-Werte je Verbraucher (Wärmepumpe/Auto/Sonstiges Gerät/Haushaltsstrom) standen alle am selben linken Rand untereinander, dadurch wirkte es z.B. so, als gehörten die Wallbox-Werte zur Wärmepumpe. Jeder Block steht jetzt unter seinem eigenen Icon zentriert.
+  * Strommast und Batterie standen zu eng am Haus - beide haben jetzt deutlich mehr Abstand.
+  * Grafik insgesamt breiter (980 statt 820), damit die Leistungswerte (kW) an Mast und Batterie nicht mehr in die jeweilige Grafik hineinreichen.
+
 ## 0.0.44.52
 
 * **Fix: Navigationsleisten-Icon wirklich nicht mehr abgeschnitten.** Die bisherigen Deploys (u.a. 0.0.44.43) hatten das Icon zwar korrekt aus dem Original-Logo erzeugt, aber randlos gefüllt - die Sonnenstrahlen/der Bogen berührten dadurch exakt die Bildkante, was in jeder Navigationsleiste "abgeschnitten" wirkte, obwohl die Datei technisch vollständig war. Icon jetzt mit echtem Sicherheitsabstand (aus der unbeschnittenen Quelle `assets/IconOnly_Transparent_NoBuffer_32px.png` neu erzeugt, auf 84% verkleinert und zentriert) - berührt jetzt keine Kante mehr. Betrifft sowohl `icon.png` (HA-Supervisor-Seite) als auch `www/assets/shyft-icon.png` (In-App-Navigationsleiste), weiterhin byte-identisch. Quelldatei erstmals ins Repo aufgenommen, damit sich das Icon künftig aus derselben Quelle neu erzeugen lässt.

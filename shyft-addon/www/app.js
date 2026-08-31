@@ -4295,12 +4295,14 @@ function placeLabelBelow(x, topY, lines, opts = {}) {
 // insgesamt schmaler, ohne Geraete wegzulassen. Aktiv unter genau der Breite, ab der .energyFlowLabel
 // per Media Query vergroessert wird (siehe .energyFlowSvgMobile/.energyFlowSvgDesktop in index.html).
 function buildEnergyFlowSvgMobile(data) {
-    // 820 statt z.B. 640 - mit vier vollen Verbraucher-Labels nebeneinander (Waermepumpe/Auto/
+    // 980 statt z.B. 640 - mit vier vollen Verbraucher-Labels nebeneinander (Waermepumpe/Auto/
     // Sonstiges Geraet/Haushaltsstrom) reicht ein schmaleres viewBox nicht: einzelne Zeilen wie
     // "Sonstiges Gerät" oder "eingesteckt" sind bei gut lesbarer Schriftgroesse (siehe
     // .energyFlowLabel-Media-Query) schon fuer sich genommen breiter als eine schmalere Spalte
-    // erlauben wuerde. 820 ist trotzdem noch deutlich schmaler als das Desktop-Layout (1300).
-    const VIEW_W = 820;
+    // erlauben wuerde. Ausserdem brauchen Mast/Batterie mehr Abstand zum Haus (siehe pylonCx/
+    // batteryCx), sonst wirkt es zu eng. 980 ist trotzdem noch deutlich schmaler als das
+    // Desktop-Layout (1300).
+    const VIEW_W = 980;
     const svg = svgEl('svg');
 
     const house = houseImageFor(data);
@@ -4322,16 +4324,23 @@ function buildEnergyFlowSvgMobile(data) {
     const flows = computeEnergyFlowKw(data);
 
     if (data.grid && data.grid.configured) {
-        const pylonCx = houseX - 75, pylonCy = houseCy;
+        // 130 statt vorher 75 - bei 75 stand der Mast zu eng am Haus (siehe buildPylonIcon: der Mast
+        // selbst ist schon ca. 90 breit inkl. Freileitung oben). Der Mast reicht von cy-44 (oberste
+        // Freileitung) bis cy+42 (Fuss) - die kW-Beschriftung braucht deshalb deutlich mehr Abstand
+        // als der generische FLOW_LINE_LABEL_GAP, sonst haengt sie in der Freileitung (siehe
+        // pylonLabelGap unten), ebenso der Strompreis-Text noch darueber.
+        const pylonCx = houseX - 130, pylonCy = houseCy;
         svg.appendChild(buildPylonIcon(pylonCx, pylonCy));
         const line = buildFlowLine(pylonCx + 24, pylonCy, houseX, houseCy, data.grid.kw, {reversed: (data.grid.kw || 0) < 0, thresholdKw: 0.1});
         if (line) svg.appendChild(line);
         const priceColor = data.grid.priceLevel === 'hoch' ? '#e74c3c' : data.grid.priceLevel === 'niedrig' ? 'var(--color-accent)' : '#5b6b8c';
         const priceText = data.grid.priceCent !== null ? `${data.grid.priceCent.toLocaleString('de-DE')} Cent` : '';
         const gridLabelX = (pylonCx + 24 + houseX) / 2;
-        svg.appendChild(buildEnergyFlowLabel(gridLabelX, pylonCy - FLOW_LINE_LABEL_GAP, [withStaleness(formatKwValue(data.grid.kw), data.grid.updatedAt, INVERTER_STALE_MINUTES)], {anchor: 'middle', noWrap: true}));
+        const pylonTopY = pylonCy - 44;
+        const gridLabelY = pylonTopY - 16;
+        svg.appendChild(buildEnergyFlowLabel(gridLabelX, gridLabelY, [withStaleness(formatKwValue(data.grid.kw), data.grid.updatedAt, INVERTER_STALE_MINUTES)], {anchor: 'middle', noWrap: true}));
         if (priceText) {
-            svg.appendChild(svgEl('text', {x: pylonCx, y: pylonCy - 54, 'text-anchor': 'middle', class: 'energyFlowLabel', fill: priceColor}, [document.createTextNode(priceText)]));
+            svg.appendChild(svgEl('text', {x: pylonCx, y: gridLabelY - 26, 'text-anchor': 'middle', class: 'energyFlowLabel', fill: priceColor}, [document.createTextNode(priceText)]));
         }
     }
 
@@ -4348,14 +4357,18 @@ function buildEnergyFlowSvgMobile(data) {
     // wie auf Desktop darunter - dort unten stehen stattdessen die vier Verbraucher nebeneinander.
     if (data.battery && data.battery.configured) {
         const batteryImgW = 42, batteryImgH = batteryImgW / 0.535;
-        const batteryCx = houseRightX + 95, batteryCy = houseCy;
+        // 130 statt vorher 95, symmetrisch zum Mast (siehe pylonCx oben) - sonst wirkt es zu eng.
+        const batteryCx = houseRightX + 130, batteryCy = houseCy;
         const line = buildFlowLine(houseRightX, houseCy, batteryCx - batteryImgW / 2 - 4, houseCy, data.battery.kw, {reversed: (data.battery.kw || 0) < 0});
         if (line) svg.appendChild(line);
         svg.appendChild(buildFlowImage(batteryImageFor(data.battery.soc), batteryCx, batteryCy, 240, 448, batteryImgW));
-        // kW-Wert an der Leitung (wie Grid, mittig ueber der Linie), SOC+Modus dagegen unterhalb des
-        // Icons - dort ist auf Mobil mehr Platz in der Breite als seitlich neben dem Icon (dort wuerde
-        // z.B. "Maximize Self Consumption" ueber den rechten Bildrand hinauslaufen).
-        svg.appendChild(buildEnergyFlowLabel(batteryCx, houseCy - FLOW_LINE_LABEL_GAP, [withStaleness(formatKwValue(data.battery.kw), data.battery.updatedAt, INVERTER_STALE_MINUTES)], {anchor: 'middle', noWrap: true}));
+        // kW-Wert oberhalb des Icons (mit echtem Abstand zur Icon-Oberkante, nicht der generische
+        // FLOW_LINE_LABEL_GAP - der reichte bei diesem vergleichsweise hohen Batterie-Icon nicht und
+        // die Beschriftung haenge sichtbar ins Icon hinein). SOC+Modus dagegen unterhalb des Icons -
+        // dort ist auf Mobil mehr Platz in der Breite als seitlich neben dem Icon (dort wuerde z.B.
+        // "Maximize Self Consumption" ueber den rechten Bildrand hinauslaufen).
+        const batteryTopY = batteryCy - batteryImgH / 2;
+        svg.appendChild(buildEnergyFlowLabel(batteryCx, batteryTopY - 16, [withStaleness(formatKwValue(data.battery.kw), data.battery.updatedAt, INVERTER_STALE_MINUTES)], {anchor: 'middle', noWrap: true}));
         const batterySocModeLines = [`${Math.round(data.battery.soc ?? 0)} %`];
         if (data.battery.mode) batterySocModeLines.push(data.battery.mode);
         svg.appendChild(placeLabelBelow(batteryCx, batteryCy + batteryImgH / 2 + 14, batterySocModeLines, {anchor: 'middle', lineHeight: MOBILE_FLOW_LABEL_LINE_HEIGHT}).el);
@@ -4409,7 +4422,7 @@ function buildEnergyFlowSvgMobile(data) {
                 const hp = buildFlowImage('assets/heatpump.jpg', colX, rowY, 499, 492, 70);
                 if (data.heatpump.on) hp.setAttribute('class', 'energyFlowPulse');
                 svg.appendChild(hp);
-                deviceDetailBlocks.push([
+                deviceDetailBlocks.push({colX, lines: [
                     `Wärmepumpe: ${withStaleness(data.heatpump.on === null ? '–' : (data.heatpump.on ? 'An' : 'Aus'), data.heatpump.updatedAt, OTHER_STALE_MINUTES)}`,
                     data.heatpump.targetTempC !== null ? `Soll: ${formatTemp(data.heatpump.targetTempC)}` : null,
                     data.indoorTemp && data.indoorTemp.configured && data.indoorTemp.tempC !== null ? withStaleness(`Ist: ${formatTemp(data.indoorTemp.tempC)}`, data.indoorTemp.updatedAt, OTHER_STALE_MINUTES) : null,
@@ -4417,7 +4430,7 @@ function buildEnergyFlowSvgMobile(data) {
                     (data.heatpump.heatingOn !== null || data.heatpump.supplyTempC !== null)
                         ? `Heizung: ${data.heatpump.heatingOn ? 'An' : 'Aus'}` + (data.heatpump.supplyTempC !== null ? ` (${formatTemp(data.heatpump.supplyTempC)})` : '')
                         : null,
-                ].filter(Boolean));
+                ].filter(Boolean)});
             } else if (type === 'car') {
                 const iconHalfH = 38;
                 const drop = buildFlowLineFromPath(`M ${colX},${busY} V ${rowY - iconHalfH}`, flows.carFlowKw);
@@ -4431,30 +4444,31 @@ function buildEnergyFlowSvgMobile(data) {
                 if (data.car.state === 'away') carLines.push('abwesend');
                 else if (data.car.state === 'charging') carLines.push('lädt');
                 else if (data.car.state === 'connected') carLines.push('eingesteckt');
-                deviceDetailBlocks.push(carLines);
+                deviceDetailBlocks.push({colX, lines: carLines});
             } else if (type === 'sonstiger') {
                 const iconHalfH = 34;
                 const plugScale = 1.9;
                 const drop = buildFlowLineFromPath(`M ${colX},${busY} V ${rowY - iconHalfH}`, flows.sonstigerFlowKw);
                 if (drop) svg.appendChild(drop);
                 svg.appendChild(buildPlugIcon(colX, rowY, flows.sonstigerOn, plugScale));
-                deviceDetailBlocks.push([`Sonstiges Gerät: ${flows.sonstigerOn ? 'An' : 'Aus'}`]);
+                deviceDetailBlocks.push({colX, lines: [`Sonstiges Gerät: ${flows.sonstigerOn ? 'An' : 'Aus'}`]});
             } else if (type === 'household') {
                 const iconHalfH = 16;
                 const drop = buildFlowLineFromPath(`M ${colX},${busY} V ${rowY - iconHalfH}`, flows.householdFlowKw);
                 if (drop) svg.appendChild(drop);
                 svg.appendChild(buildLightningIcon(colX, rowY));
-                deviceDetailBlocks.push(['Haushaltsstrom']);
+                deviceDetailBlocks.push({colX, lines: ['Haushaltsstrom']});
             }
         });
 
-        // Detail-Bloecke untereinander, in derselben Reihenfolge wie die Icons darueber - jeder Block
-        // bekommt die volle Breite (kein Spalten-Zwang mehr), dadurch passt hier auch eine lange Zeile
-        // wie "WW-Speicher: 36,5 °C" locker ohne Nachbar-Ueberlappung.
-        const detailLeftX = 30;
+        // Detail-Bloecke untereinander (in derselben Reihenfolge wie die Icons darueber), aber jeder
+        // Block bleibt horizontal unter SEINEM EIGENEN Icon (colX) zentriert, statt alle am selben
+        // linken Rand zu starten - sonst wirkt es z.B. so, als gehoerten die Wallbox-Werte zur
+        // Waermepumpe, weil beide am selben x anfangen. Da die Bloecke untereinander (verschiedene Y)
+        // stehen, kollidieren sie trotz unterschiedlicher x nicht mit ihren Nachbarn.
         let blockTopY = rowY + 60;
-        for (const lines of deviceDetailBlocks) {
-            const placed = placeLabelBelow(detailLeftX, blockTopY, lines, {anchor: 'start', lineHeight: MOBILE_FLOW_LABEL_LINE_HEIGHT});
+        for (const {colX, lines} of deviceDetailBlocks) {
+            const placed = placeLabelBelow(colX, blockTopY, lines, {anchor: 'middle', lineHeight: MOBILE_FLOW_LABEL_LINE_HEIGHT});
             svg.appendChild(placed.el);
             blockTopY = placed.bottomY + 16;
         }
