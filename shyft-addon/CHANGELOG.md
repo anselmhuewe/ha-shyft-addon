@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.0.44.48
+
+* Energiefluss-Widget bekommt jetzt ein eigenes, gedrehtes Layout für schmale Bildschirme (Mobil), statt das breite Desktop-Layout nur herunterzuskalieren (dort bisher kaum lesbar). Auf Mobil steht die Batterie rechts neben dem Haus (dort, wo auf Desktop die Verbraucher-Spalte beginnt), Wärmepumpe/Auto/Sonstiges Gerät/Haushaltsstrom stehen dafür nebeneinander unter dem Haus - weiterhin über animierte Stromleitungen verbunden. Die Schrift ist auf Mobil dadurch spürbar größer/lesbarer als vorher. Wärmepumpe und Auto zeigen dort aus Platzgründen nur die wichtigsten Werte (Status + Soll-Temperatur bzw. Ladestand + Status) statt aller Detailzeilen - das volle Detail bleibt unverändert auf Desktop sichtbar. Desktop-Ansicht selbst ist unverändert.
+
 ## 0.0.44.47
 
 * Energiefluss-Widget: Bei der Batterie stehen SOC und Modus ("Maximize Self Consumption" o.ä.) wieder wie ursprünglich neben dem Batterie-Icon - nur der kW-Wert ist an der Leitung selbst zentriert (0.0.44.45 hatte versehentlich den ganzen Block inkl. SOC/Modus an die Leitung gehängt).

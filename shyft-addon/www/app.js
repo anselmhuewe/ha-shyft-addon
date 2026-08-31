@@ -3942,19 +3942,25 @@ const FLOW_LABEL_BASELINE_ADJUST = 4;
 // mit demselben Gap landen ihre Labels dadurch auch auf derselben Hoehe.
 const FLOW_LINE_LABEL_GAP = 24;
 
-function buildEnergyFlowLabel(x, centerY, lines, {anchor = 'start', noWrap = false} = {}) {
-    // Ein "(HH:MM)"- bzw. "(D.M. HH:MM)"-Zeitstempel-Suffix (siehe withStaleness/formatTimeHHMM -
-    // Datum wird ergaenzt, wenn der Zeitstempel nicht von heute ist) bricht auf eine eigene Zeile
-    // um, statt die Zeile beliebig lang werden zu lassen - sonst laufen laengere Werte (z.B.
-    // "Ladestand: 36 % (183 km) (28.8. 09:17)") ueber den verfuegbaren Platz neben dem Geraete-Icon
-    // hinaus. Zentral hier gelöst statt an jedem der withStaleness-Aufrufe einzeln, da es reine
-    // Layout-Frage ist. noWrap ueberspringt das: fuer die vier reinen Leistungswerte an den
-    // Stromleitungen (Grid/PV/Eigenverbrauch/Batterie) ist neben dem Wert genug Platz, dort soll der
-    // Zeitstempel in derselben Zeile stehen statt darunter.
-    const wrappedLines = noWrap ? lines : lines.flatMap(line => {
+// Ein "(HH:MM)"- bzw. "(D.M. HH:MM)"-Zeitstempel-Suffix (siehe withStaleness/formatTimeHHMM - Datum
+// wird ergaenzt, wenn der Zeitstempel nicht von heute ist) bricht auf eine eigene Zeile um, statt die
+// Zeile beliebig lang werden zu lassen - sonst laufen laengere Werte (z.B. "Ladestand: 36 % (183 km)
+// (28.8. 09:17)") ueber den verfuegbaren Platz neben dem Geraete-Icon hinaus. Eigene Funktion (statt
+// nur Teil von buildEnergyFlowLabel), damit buildEnergyFlowSvgMobile die resultierende Zeilenzahl
+// schon VOR dem eigentlichen Bauen kennt (siehe placeLabelBelow dort) - fuer die Restplatz-Berechnung
+// unterhalb eines Geraete-Icons.
+function wrapEnergyFlowLines(lines) {
+    return lines.flatMap(line => {
         const match = /^(.*) (\((?:\d{1,2}\.\d{1,2}\.\s)?\d{2}:\d{2}\))$/.exec(line);
         return match ? [match[1], match[2]] : [line];
     });
+}
+
+function buildEnergyFlowLabel(x, centerY, lines, {anchor = 'start', noWrap = false} = {}) {
+    // noWrap ueberspringt das Umbrechen: fuer die vier reinen Leistungswerte an den Stromleitungen
+    // (Grid/PV/Eigenverbrauch/Batterie) ist neben dem Wert genug Platz, dort soll der Zeitstempel in
+    // derselben Zeile stehen statt darunter.
+    const wrappedLines = noWrap ? lines : wrapEnergyFlowLines(lines);
     // centerY ist die Mitte der zugehoerigen Stromleitung (bzw. des Geraete-Icons auf ihr) - der
     // gesamte, ggf. mehrzeilige Textblock wird darum zentriert, statt centerY als Anker der ERSTEN
     // Zeile zu behandeln. Sonst haengt die sichtbare Hoehe eines Labels davon ab, ob es (z.B. durch
@@ -4009,9 +4015,27 @@ function withStaleness(valueText, updatedAtIso, thresholdMinutes) {
     return `${valueText} (${formatTimeHHMM(updatedAtIso)})`;
 }
 
-function buildEnergyFlowWidget(data) {
-    const wrapper = document.createElement('div');
-    wrapper.className = 'energyFlowWidget dashboardChart';
+// Fluss-Groessen der vier "rechten"/"unteren" Verbraucher (Waermepumpe/Auto/Sonstiges Geraet/
+// Haushaltsstrom) - von Desktop- UND Mobil-Layout gemeinsam genutzt (siehe buildEnergyFlowSvgDesktop/
+// buildEnergyFlowWidgetMobile), da beide dieselbe Logik brauchen, nur mit unterschiedlicher Geometrie.
+function computeEnergyFlowKw(data) {
+    const heatpumpOn = !!(data.heatpump && data.heatpump.configured && data.heatpump.on);
+    const carCharging = !!(data.car && data.car.configured && data.car.state === 'charging');
+    const sonstigerOn = !!(data.sonstigerVerbraucher && data.sonstigerVerbraucher.configured && data.sonstigerVerbraucher.on);
+    return {
+        heatpumpOn,
+        heatpumpFlowKw: heatpumpOn ? (data.heatpump.kw || 0.3) : 0,
+        carCharging,
+        carFlowKw: carCharging ? (data.car.chargingKw || 0.5) : 0,
+        sonstigerOn,
+        sonstigerFlowKw: sonstigerOn ? 0.3 : 0,
+        householdFlowKw: (data.household && data.household.configured) ? (data.household.residualKw ?? 0.1) : 0,
+    };
+}
+
+// Baut nur das eigentliche Desktop-<svg> (siehe buildEnergyFlowWidget fuer den gemeinsamen Wrapper
+// mit dem Mobil-Pendant buildEnergyFlowWidgetMobile).
+function buildEnergyFlowSvgDesktop(data) {
     // Breiter als hoch (statt quadratischer 940x560) - das Haus steht jetzt mittig, links bleibt
     // Platz fuer den Netz-Anschluss, rechts fuer die Verbraucher-Spalte samt ihrer (teils mehrzeiligen)
     // Labels, ohne dass beide Seiten sich in die Quere kommen.
@@ -4058,13 +4082,7 @@ function buildEnergyFlowWidget(data) {
     // unten, im jeweils eigenen Block) - der Trunk (Haus -> Knotenpunkt, siehe busX unten) braucht
     // sie schon fuer seine eigene, gemeinsame Punkte-Animation, bevor die einzelnen Zweige gezeichnet
     // werden.
-    const heatpumpOn = !!(data.heatpump && data.heatpump.configured && data.heatpump.on);
-    const heatpumpFlowKw = heatpumpOn ? (data.heatpump.kw || 0.3) : 0;
-    const carCharging = !!(data.car && data.car.configured && data.car.state === 'charging');
-    const carFlowKw = carCharging ? (data.car.chargingKw || 0.5) : 0;
-    const sonstigerOn = !!(data.sonstigerVerbraucher && data.sonstigerVerbraucher.configured && data.sonstigerVerbraucher.on);
-    const sonstigerFlowKw = sonstigerOn ? 0.3 : 0;
-    const householdFlowKw = (data.household && data.household.configured) ? (data.household.residualKw ?? 0.1) : 0;
+    const {heatpumpFlowKw, carCharging, carFlowKw, sonstigerOn, sonstigerFlowKw, householdFlowKw} = computeEnergyFlowKw(data);
 
     if (data.grid && data.grid.configured) {
         const pylonCx = houseX - 135, pylonCy = houseCy;
@@ -4243,7 +4261,210 @@ function buildEnergyFlowWidget(data) {
     const viewCropLeft = Math.max(0, (houseX - 135) - 90);
     svg.setAttribute('viewBox', `${viewCropLeft} 0 ${VIEW_W - viewCropLeft} ${VIEW_H}`);
 
-    wrapper.appendChild(svg);
+    return svg;
+}
+
+// Wie buildEnergyFlowLabel, aber fuer Labels, die UNTERHALB eines festen Punkts (Geraete-Icon) nach
+// unten wachsen sollen, statt um eine Mitte zentriert zu werden - buildEnergyFlowLabel zentriert den
+// gesamten (ggf. durch einen Zeitstempel umgebrochenen) Textblock um centerY, hier kennen wir aber
+// erst den TOP-Punkt (Icon-Unterkante + Abstand) und wollen den Block von dort abwaerts wachsen
+// lassen. Gibt zusaetzlich bottomY zurueck (fuer die dynamische viewBox-Hoehe des Mobil-Layouts,
+// siehe buildEnergyFlowSvgMobile).
+function placeLabelBelow(x, topY, lines, opts = {}) {
+    const wrapped = wrapEnergyFlowLines(lines);
+    const centerY = topY + ((wrapped.length - 1) * FLOW_LABEL_LINE_HEIGHT) / 2;
+    const bottomY = topY + (wrapped.length - 1) * FLOW_LABEL_LINE_HEIGHT + FLOW_LABEL_BASELINE_ADJUST + 8;
+    return {el: buildEnergyFlowLabel(x, centerY, lines, opts), bottomY};
+}
+
+// Mobil-Layout: schmaler und hochkant statt breit (buildEnergyFlowSvgDesktop), damit bei derselben
+// Containerbreite mehr Bildschirmpixel pro SVG-Einheit zur Verfuegung stehen (= groesserer, lesbarer
+// Text - siehe .energyFlowLabel-Media-Query in index.html) statt auf einem schmalen Screen unleserlich
+// klein zu skalieren. Layout gegenueber Desktop gedreht: Batterie steht rechts neben dem Haus (dort,
+// wo auf Desktop die Verbraucher-Spalte beginnt), Waermepumpe/Auto/Sonstiges Geraet/Haushaltsstrom
+// stehen dafuer nebeneinander UNTER dem Haus (statt in einer Spalte rechts) - dadurch wird die Grafik
+// insgesamt schmaler, ohne Geraete wegzulassen. Aktiv unter genau der Breite, ab der .energyFlowLabel
+// per Media Query vergroessert wird (siehe .energyFlowSvgMobile/.energyFlowSvgDesktop in index.html).
+function buildEnergyFlowSvgMobile(data) {
+    // 820 statt z.B. 640 - mit vier vollen Verbraucher-Labels nebeneinander (Waermepumpe/Auto/
+    // Sonstiges Geraet/Haushaltsstrom) reicht ein schmaleres viewBox nicht: einzelne Zeilen wie
+    // "Sonstiges Gerät" oder "eingesteckt" sind bei gut lesbarer Schriftgroesse (siehe
+    // .energyFlowLabel-Media-Query) schon fuer sich genommen breiter als eine schmalere Spalte
+    // erlauben wuerde. 820 ist trotzdem noch deutlich schmaler als das Desktop-Layout (1300).
+    const VIEW_W = 820;
+    const svg = svgEl('svg');
+
+    const house = houseImageFor(data);
+    const houseCropLeftFraction = 0.40, houseCropTopFraction = 0.28;
+    const houseVisibleW = 170;
+    const houseFullW = houseVisibleW / (1 - houseCropLeftFraction);
+    const houseFullH = houseFullW * (house.h / house.w);
+    const houseH = houseFullH - houseFullH * houseCropTopFraction;
+    const houseCx = VIEW_W / 2;
+    const houseY = 160;
+    const houseX = houseCx - houseVisibleW / 2;
+    const houseCy = houseY + houseH / 2;
+    const cropped = buildCroppedHouseImage(house.href, house.w, house.h, houseCropLeftFraction, houseCropTopFraction, houseX, houseY, houseVisibleW);
+    svg.appendChild(cropped.group);
+
+    const sunCy = houseY - 90;
+    svg.appendChild(renderSkyIcon(houseCx, sunCy));
+
+    const flows = computeEnergyFlowKw(data);
+
+    if (data.grid && data.grid.configured) {
+        const pylonCx = houseX - 75, pylonCy = houseCy;
+        svg.appendChild(buildPylonIcon(pylonCx, pylonCy));
+        const line = buildFlowLine(pylonCx + 24, pylonCy, houseX, houseCy, data.grid.kw, {reversed: (data.grid.kw || 0) < 0, thresholdKw: 0.1});
+        if (line) svg.appendChild(line);
+        const priceColor = data.grid.priceLevel === 'hoch' ? '#e74c3c' : data.grid.priceLevel === 'niedrig' ? 'var(--color-accent)' : '#5b6b8c';
+        const priceText = data.grid.priceCent !== null ? `${data.grid.priceCent.toLocaleString('de-DE')} Cent` : '';
+        const gridLabelX = (pylonCx + 24 + houseX) / 2;
+        svg.appendChild(buildEnergyFlowLabel(gridLabelX, pylonCy - FLOW_LINE_LABEL_GAP, [withStaleness(formatKwValue(data.grid.kw), data.grid.updatedAt, INVERTER_STALE_MINUTES)], {anchor: 'middle', noWrap: true}));
+        if (priceText) {
+            svg.appendChild(svgEl('text', {x: pylonCx, y: pylonCy - 54, 'text-anchor': 'middle', class: 'energyFlowLabel', fill: priceColor}, [document.createTextNode(priceText)]));
+        }
+    }
+
+    if (data.pv && data.pv.configured) {
+        const pvLineTopY = sunCy + 40, pvLineBottomY = houseY;
+        const pvLine = buildFlowLine(houseCx, pvLineTopY, houseCx, pvLineBottomY, data.pv.kw);
+        if (pvLine) svg.appendChild(pvLine);
+        const pvLineCenterY = (pvLineTopY + pvLineBottomY) / 2;
+        svg.appendChild(buildEnergyFlowLabel(houseCx + 26, pvLineCenterY, [withStaleness(formatKwValue(data.pv.kw), data.pv.updatedAt, INVERTER_STALE_MINUTES)], {noWrap: true}));
+    }
+
+    const houseRightX = houseX + houseVisibleW;
+    // Batterie wandert auf Mobil rechts neben das Haus (horizontaler Fluss, wie Grid links) statt
+    // wie auf Desktop darunter - dort unten stehen stattdessen die vier Verbraucher nebeneinander.
+    if (data.battery && data.battery.configured) {
+        const batteryImgW = 42, batteryImgH = batteryImgW / 0.535;
+        const batteryCx = houseRightX + 95, batteryCy = houseCy;
+        const line = buildFlowLine(houseRightX, houseCy, batteryCx - batteryImgW / 2 - 4, houseCy, data.battery.kw, {reversed: (data.battery.kw || 0) < 0});
+        if (line) svg.appendChild(line);
+        svg.appendChild(buildFlowImage(batteryImageFor(data.battery.soc), batteryCx, batteryCy, 240, 448, batteryImgW));
+        // kW-Wert an der Leitung (wie Grid, mittig ueber der Linie), SOC+Modus dagegen unterhalb des
+        // Icons - dort ist auf Mobil mehr Platz in der Breite als seitlich neben dem Icon (dort wuerde
+        // z.B. "Maximize Self Consumption" ueber den rechten Bildrand hinauslaufen).
+        svg.appendChild(buildEnergyFlowLabel(batteryCx, houseCy - FLOW_LINE_LABEL_GAP, [withStaleness(formatKwValue(data.battery.kw), data.battery.updatedAt, INVERTER_STALE_MINUTES)], {anchor: 'middle', noWrap: true}));
+        const batterySocModeLines = [`${Math.round(data.battery.soc ?? 0)} %`];
+        if (data.battery.mode) batterySocModeLines.push(data.battery.mode);
+        svg.appendChild(placeLabelBelow(batteryCx, batteryCy + batteryImgH / 2 + 14, batterySocModeLines, {anchor: 'middle'}).el);
+    }
+
+    // Waermepumpe/Auto/Sonstiges Geraet/Haushaltsstrom nebeneinander unter dem Haus - nur die
+    // tatsaechlich konfigurierten, gleichmaessig ueber die Breite verteilt (dieselbe
+    // configured-Pruefung wie im Desktop-Layout, nur andere Geometrie).
+    const devices = [];
+    if (data.heatpump && data.heatpump.configured) devices.push('heatpump');
+    if (data.car && data.car.configured) devices.push('car');
+    if (data.sonstigerVerbraucher && data.sonstigerVerbraucher.configured) devices.push('sonstiger');
+    if (data.household && data.household.configured) devices.push('household');
+
+    const trunkTopY = houseY + houseH;
+    let contentBottomY = trunkTopY + 20;
+
+    if (devices.length > 0) {
+        const busY = trunkTopY + 55;
+        const rowY = busY + 80;
+        const n = devices.length;
+        const colXs = devices.map((_, i) => (VIEW_W / (n + 1)) * (i + 1));
+
+        // Vereinfachung gegenueber dem Desktop-Spine (siehe dortiger Kommentar zu upper-/lowerSpine):
+        // die gesamte waagerechte Bus-Leitung nutzt hier die Summe ALLER aktiven Zweige fuer ihre
+        // Punkte-Geschwindigkeit, statt pro Segment nur die ab dort noch abzweigenden Verbraucher zu
+        // zaehlen - bei bis zu 4 Spalten waere die exakte Segment-Aufteilung unverhaeltnismaessig
+        // komplex fuer einen rein optischen Geschwindigkeitswert.
+        const trunkKw = flows.heatpumpFlowKw + flows.carFlowKw + flows.sonstigerFlowKw + flows.householdFlowKw;
+        const trunkLine = buildFlowLineFromPath(buildFlowPath(houseCx, trunkTopY, houseCx, busY), trunkKw, {thresholdKw: 0.1});
+        if (trunkLine) svg.appendChild(trunkLine);
+        if (n > 1) {
+            const busLine = buildFlowLineFromPath(`M ${colXs[0]},${busY} H ${colXs[n - 1]}`, trunkKw, {thresholdKw: 0.1});
+            if (busLine) svg.appendChild(busLine);
+        }
+
+        devices.forEach((type, i) => {
+            const colX = colXs[i];
+
+            if (type === 'heatpump') {
+                const iconHalfH = 35;
+                const drop = buildFlowLineFromPath(`M ${colX},${busY} V ${rowY - iconHalfH}`, flows.heatpumpFlowKw);
+                if (drop) svg.appendChild(drop);
+                const hp = buildFlowImage('assets/heatpump.jpg', colX, rowY, 499, 492, 70);
+                if (data.heatpump.on) hp.setAttribute('class', 'energyFlowPulse');
+                svg.appendChild(hp);
+                // Kompakter als auf Desktop (nur Status + Soll-Temp statt bis zu 5 Zeilen): bei vier
+                // Verbrauchern nebeneinander reicht selbst bei diesem breiteren viewBox nicht genug
+                // Spaltenbreite fuer die vollen Statuszeilen (Ist-Temp/WW-Speicher/Heizung) OHNE dass
+                // sich Nachbarspalten ueberlappen - das volle Detail bleibt auf Desktop sichtbar.
+                const statusLines = [
+                    withStaleness(data.heatpump.on === null ? 'Wärmepumpe' : (data.heatpump.on ? 'An' : 'Aus'), data.heatpump.updatedAt, OTHER_STALE_MINUTES),
+                    data.heatpump.targetTempC !== null ? formatTemp(data.heatpump.targetTempC) : null,
+                ].filter(Boolean);
+                const placed = placeLabelBelow(colX, rowY + iconHalfH + 14, statusLines, {anchor: 'middle'});
+                svg.appendChild(placed.el);
+                contentBottomY = Math.max(contentBottomY, placed.bottomY);
+            } else if (type === 'car') {
+                const iconHalfH = 38;
+                const drop = buildFlowLineFromPath(`M ${colX},${busY} V ${rowY - iconHalfH}`, flows.carFlowKw);
+                if (drop) svg.appendChild(drop);
+                const isAway = data.car.state === 'away';
+                const carImg = isAway ? {href: 'assets/ev-away.jpg', w: 356, h: 239} : {href: 'assets/ev-connected.jpg', w: 464, h: 229};
+                svg.appendChild(buildFlowImage(carImg.href, colX, rowY, carImg.w, carImg.h, 100));
+                // Kompakter als auf Desktop (nur Ladestand-% + Status statt zusaetzlich Reichweite/
+                // Zeitstempel in derselben Zeile) - aus demselben Platzgrund wie bei der Waermepumpe.
+                const carLines = [];
+                if (data.car.soc !== null) carLines.push(withStaleness(`${Math.round(data.car.soc)} %`, data.car.updatedAt, OTHER_STALE_MINUTES));
+                if (data.car.state === 'away') carLines.push('abwesend');
+                else if (data.car.state === 'charging') carLines.push('lädt');
+                else if (data.car.state === 'connected') carLines.push('eingesteckt');
+                const placed = placeLabelBelow(colX, rowY + iconHalfH + 14, carLines, {anchor: 'middle'});
+                svg.appendChild(placed.el);
+                contentBottomY = Math.max(contentBottomY, placed.bottomY);
+            } else if (type === 'sonstiger') {
+                const iconHalfH = 34;
+                const plugScale = 1.9;
+                const drop = buildFlowLineFromPath(`M ${colX},${busY} V ${rowY - iconHalfH}`, flows.sonstigerFlowKw);
+                if (drop) svg.appendChild(drop);
+                svg.appendChild(buildPlugIcon(colX, rowY, flows.sonstigerOn, plugScale));
+                const placed = placeLabelBelow(colX, rowY + iconHalfH + 14, ['Sonstiges Gerät'], {anchor: 'middle'});
+                svg.appendChild(placed.el);
+                contentBottomY = Math.max(contentBottomY, placed.bottomY);
+            } else if (type === 'household') {
+                const iconHalfH = 16;
+                const drop = buildFlowLineFromPath(`M ${colX},${busY} V ${rowY - iconHalfH}`, flows.householdFlowKw);
+                if (drop) svg.appendChild(drop);
+                svg.appendChild(buildLightningIcon(colX, rowY));
+                const placed = placeLabelBelow(colX, rowY + iconHalfH + 14, ['Haushaltsstrom'], {anchor: 'middle'});
+                svg.appendChild(placed.el);
+                contentBottomY = Math.max(contentBottomY, placed.bottomY);
+            }
+        });
+    }
+
+    // Hoehe (anders als beim Desktop-Layout mit fester VIEW_H) dynamisch anhand des tatsaechlich
+    // gezeichneten Inhalts - die Verbraucher-Labels unten sind unterschiedlich lang (bis zu 5 Zeilen
+    // bei der Waermepumpe), eine feste Hoehe wuerde entweder abschneiden oder unnoetig viel Leerraum
+    // lassen.
+    svg.setAttribute('viewBox', `0 0 ${VIEW_W} ${contentBottomY}`);
+    return svg;
+}
+
+// Baut BEIDE Layouts (Desktop + Mobil) und lässt CSS per @media-Breakpoint (siehe
+// .energyFlowSvgDesktop/.energyFlowSvgMobile in index.html, dieselbe 600px-Grenze wie die
+// vergroesserte .energyFlowLabel-Mobil-Schrift) entscheiden, welches sichtbar ist - robuster als ein
+// JS-seitiger resize-Listener (funktioniert auch bei Rotation/Fenstergroessenaenderung ohne
+// Nachbau-Aufruf) und aendert an refreshEnergyFlowWidget (ersetzt einfach den ganzen
+// .energyFlowWidget-Knoten) nichts.
+function buildEnergyFlowWidget(data) {
+    const wrapper = document.createElement('div');
+    wrapper.className = 'energyFlowWidget dashboardChart';
+    const desktopSvg = buildEnergyFlowSvgDesktop(data);
+    desktopSvg.classList.add('energyFlowSvgDesktop');
+    wrapper.appendChild(desktopSvg);
+    const mobileSvg = buildEnergyFlowSvgMobile(data);
+    mobileSvg.classList.add('energyFlowSvgMobile');
+    wrapper.appendChild(mobileSvg);
     return wrapper;
 }
 

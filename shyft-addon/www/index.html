@@ -734,14 +734,28 @@
             font-size: 13px;
             fill: #091747;
         }
-        /* font-size hier ist in SVG-Nutzereinheiten (das viewBox skaliert bei width:100% als Ganzes
-           herunter) - auf schmalen Bildschirmen schrumpft der Text dadurch proportional mit der
-           Breite mit und wird unleserlich klein. Auf mobil deutlich groesser ansetzen, damit er nach
-           dem Herunterskalieren noch lesbar bleibt (buildEnergyFlowLabel nutzt em-basierte
-           Zeilenabstaende, die automatisch mitwachsen). */
+        /* Zwei komplett separate Layouts (siehe buildEnergyFlowSvgDesktop/buildEnergyFlowSvgMobile in
+           app.js) statt eines einzigen, das per CSS herunterskaliert wird - das breite Desktop-Layout
+           wuerde auf einem schmalen Bildschirm selbst mit groesserer Schrift unleserlich klein
+           herunterskaliert. Das Mobil-Layout hat dafuer eine eigene, deutlich schmalere viewBox, in
+           der dieselbe Schriftgroesse auf einem schmalen Screen entsprechend groesser wirkt. Welches
+           der beiden <svg>-Elemente sichtbar ist, entscheidet ausschliesslich diese Media Query - kein
+           JS-Resize-Listener noetig, funktioniert auch bei Fenstergroessenaenderung/Rotation. */
+        /* .energyFlowWidget svg (oben) hat als Element+Klasse-Selektor hoehere Spezifitaet als ein
+           einzelner Klassen-Selektor - hier deshalb ebenfalls svg.energyFlow... qualifiziert, sonst
+           gewinnt die allgemeine Regel und display:none greift trotz passender Media Query nicht. */
+        .energyFlowWidget svg.energyFlowSvgMobile {
+            display: none;
+        }
         @media (max-width: 600px) {
+            .energyFlowWidget svg.energyFlowSvgDesktop {
+                display: none;
+            }
+            .energyFlowWidget svg.energyFlowSvgMobile {
+                display: block;
+            }
             .energyFlowLabel {
-                font-size: 16px;
+                font-size: 18px;
             }
         }
         /* Die Leitung selbst ist immer sichtbar (grau, statisch) - siehe buildFlowConduit. Fliesst
