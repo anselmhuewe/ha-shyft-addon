@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.0.44.49
+
+* Energiefluss-Widget (Mobil): Die Icons von Wärmepumpe/Auto/Sonstiges Gerät/Haushaltsstrom stehen weiterhin nebeneinander unter dem Haus, aber die vollständigen Detailwerte (wie auf Desktop, z.B. Ist-Temperatur, WW-Speicher, Heizungsstatus bei der Wärmepumpe bzw. Reichweite/Zeitstempel beim Auto) stehen jetzt untereinander darunter, statt gekürzt zu werden - dafür ist ja nach unten genug Platz. Behebt außerdem einen Layout-Fehler, durch den sich diese Textblöcke bei der größeren Mobil-Schrift teilweise überlappt hätten.
+
 ## 0.0.44.48
 
 * Energiefluss-Widget bekommt jetzt ein eigenes, gedrehtes Layout für schmale Bildschirme (Mobil), statt das breite Desktop-Layout nur herunterzuskalieren (dort bisher kaum lesbar). Auf Mobil steht die Batterie rechts neben dem Haus (dort, wo auf Desktop die Verbraucher-Spalte beginnt), Wärmepumpe/Auto/Sonstiges Gerät/Haushaltsstrom stehen dafür nebeneinander unter dem Haus - weiterhin über animierte Stromleitungen verbunden. Die Schrift ist auf Mobil dadurch spürbar größer/lesbarer als vorher. Wärmepumpe und Auto zeigen dort aus Platzgründen nur die wichtigsten Werte (Status + Soll-Temperatur bzw. Ladestand + Status) statt aller Detailzeilen - das volle Detail bleibt unverändert auf Desktop sichtbar. Desktop-Ansicht selbst ist unverändert.
