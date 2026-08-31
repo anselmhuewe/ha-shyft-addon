@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.0.44.58
+
+* **Navigationsleisten-Logo (In-App-Kopfzeile) mit dem richtigen Quellbild neu erzeugt.** Bisher wurde es aus einer quadratischen Icon-Quelle abgeleitet (mit Rand nachgebessert, siehe 0.0.44.52) - der eigentliche Rand-Effekt war aber nicht das Problem, sondern die falsche Quelle: das Logo ist eigentlich als breites Format gedacht (1280×914, breiter als hoch), nicht quadratisch. `www/assets/shyft-icon.png` nutzt jetzt direkt dieses breite Original - die Kopfzeile selbst (`height: 28px; width: auto`) zeigt es dadurch in seinem echten Seitenverhältnis statt gequetscht/beschnitten. `icon.png` (HA-Supervisor-Icon, muss quadratisch bleiben) ist davon unberührt und bleibt bei der quadratischen Version aus 0.0.44.52 - beide Dateien sind ab jetzt bewusst NICHT mehr byte-identisch, da sie unterschiedliche Seitenverhältnisse brauchen.
+
 ## 0.0.44.57
 
 * Einsatzplan-Kennzahlen nach Nutzer-Feedback verfeinert (siehe 0.0.44.56):
