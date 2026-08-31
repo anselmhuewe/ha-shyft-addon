@@ -3942,14 +3942,16 @@ const FLOW_LABEL_BASELINE_ADJUST = 4;
 // mit demselben Gap landen ihre Labels dadurch auch auf derselben Hoehe.
 const FLOW_LINE_LABEL_GAP = 24;
 
-function buildEnergyFlowLabel(x, centerY, lines, {anchor = 'start'} = {}) {
+function buildEnergyFlowLabel(x, centerY, lines, {anchor = 'start', noWrap = false} = {}) {
     // Ein "(HH:MM)"- bzw. "(D.M. HH:MM)"-Zeitstempel-Suffix (siehe withStaleness/formatTimeHHMM -
     // Datum wird ergaenzt, wenn der Zeitstempel nicht von heute ist) bricht auf eine eigene Zeile
     // um, statt die Zeile beliebig lang werden zu lassen - sonst laufen laengere Werte (z.B.
     // "Ladestand: 36 % (183 km) (28.8. 09:17)") ueber den verfuegbaren Platz neben dem Geraete-Icon
     // hinaus. Zentral hier gelöst statt an jedem der withStaleness-Aufrufe einzeln, da es reine
-    // Layout-Frage ist.
-    const wrappedLines = lines.flatMap(line => {
+    // Layout-Frage ist. noWrap ueberspringt das: fuer die vier reinen Leistungswerte an den
+    // Stromleitungen (Grid/PV/Eigenverbrauch/Batterie) ist neben dem Wert genug Platz, dort soll der
+    // Zeitstempel in derselben Zeile stehen statt darunter.
+    const wrappedLines = noWrap ? lines : lines.flatMap(line => {
         const match = /^(.*) (\((?:\d{1,2}\.\d{1,2}\.\s)?\d{2}:\d{2}\))$/.exec(line);
         return match ? [match[1], match[2]] : [line];
     });
@@ -4084,7 +4086,7 @@ function buildEnergyFlowWidget(data) {
         // dem Mast selbst - er ist kein Leitungs-Fluesswert, sondern eine dem Mast zugeordnete
         // Zusatzinfo.
         const gridLabelX = (pylonCx + 24 + houseX) / 2;
-        svg.appendChild(buildEnergyFlowLabel(gridLabelX, pylonCy - FLOW_LINE_LABEL_GAP, [withStaleness(formatKwValue(data.grid.kw), data.grid.updatedAt, INVERTER_STALE_MINUTES)], {anchor: 'middle'}));
+        svg.appendChild(buildEnergyFlowLabel(gridLabelX, pylonCy - FLOW_LINE_LABEL_GAP, [withStaleness(formatKwValue(data.grid.kw), data.grid.updatedAt, INVERTER_STALE_MINUTES)], {anchor: 'middle', noWrap: true}));
         if (priceText) {
             // Kein Zeitstempel hier - der Strompreis kommt nicht direkt aus HA (siehe
             // _read_current_price_info in app.py), sondern aus dem shyft-Cache.
@@ -4100,7 +4102,7 @@ function buildEnergyFlowWidget(data) {
         const pvLine = buildFlowLine(houseCx, pvLineTopY, houseCx, pvLineBottomY, data.pv.kw);
         if (pvLine) svg.appendChild(pvLine);
         const pvLineCenterY = (pvLineTopY + pvLineBottomY) / 2;
-        svg.appendChild(buildEnergyFlowLabel(houseCx + 30, pvLineCenterY, [withStaleness(formatKwValue(data.pv.kw), data.pv.updatedAt, INVERTER_STALE_MINUTES)]));
+        svg.appendChild(buildEnergyFlowLabel(houseCx + 30, pvLineCenterY, [withStaleness(formatKwValue(data.pv.kw), data.pv.updatedAt, INVERTER_STALE_MINUTES)], {noWrap: true}));
     }
 
     if (data.battery && data.battery.configured) {
@@ -4114,15 +4116,15 @@ function buildEnergyFlowWidget(data) {
         const line = buildFlowLine(houseCx, batteryLineTopY, batteryCx, batteryLineBottomY, data.battery.kw, {reversed: (data.battery.kw || 0) < 0});
         if (line) svg.appendChild(line);
         svg.appendChild(buildFlowImage(batteryImageFor(data.battery.soc), batteryCx, batteryCy, 240, 448, batteryImgW));
-        // Neben dem Icon (nicht ueber der Leitung) - Haus->Batterie ist ein senkrechter Fluss, und
-        // bei vertikalen Fluessen soll die Beschriftung daneben stehen statt darueber (anders als bei
-        // horizontalen Fluessen wie Grid/Trunk).
-        const batteryLines = [withStaleness(formatKwValue(data.battery.kw), data.battery.updatedAt, INVERTER_STALE_MINUTES), `${Math.round(data.battery.soc ?? 0)} %`];
-        if (data.battery.mode) batteryLines.push(data.battery.mode);
-        // Vertikal mittig an der Leitung (Haus->Batterie-Icon) ausgerichtet, nicht am Icon selbst -
-        // die Leitung endet ja bereits oberhalb des Icons (siehe batteryLineTopY/-BottomY).
+        // kW-Wert an der Leitung selbst (vertikal mittig darauf, wie Grid/PV/Eigenverbrauch) - der
+        // Zeitstempel steht bei Bedarf daneben statt darunter (noWrap), hier ist genug Platz dafuer.
         const batteryLineCenterY = (batteryLineTopY + batteryLineBottomY) / 2;
-        svg.appendChild(buildEnergyFlowLabel(batteryCx + batteryImgW / 2 + 10, batteryLineCenterY, batteryLines));
+        svg.appendChild(buildEnergyFlowLabel(batteryCx + batteryImgW / 2 + 10, batteryLineCenterY, [withStaleness(formatKwValue(data.battery.kw), data.battery.updatedAt, INVERTER_STALE_MINUTES)], {noWrap: true}));
+        // SOC + Modus dagegen weiterhin neben dem Icon selbst (nicht an der Leitung) - das war schon
+        // richtig so, nur der kW-Wert gehoert an die Leitung.
+        const batterySocModeLines = [`${Math.round(data.battery.soc ?? 0)} %`];
+        if (data.battery.mode) batterySocModeLines.push(data.battery.mode);
+        svg.appendChild(buildEnergyFlowLabel(batteryCx + batteryImgW / 2 + 10, batteryCy, batterySocModeLines));
     }
 
     const houseRightX = houseX + houseVisibleW;
@@ -4167,7 +4169,7 @@ function buildEnergyFlowWidget(data) {
         // Gleicher Gap wie beim Grid-Label (FLOW_LINE_LABEL_GAP) - Grid- und Trunk-Leitung liegen auf
         // derselben Hoehe (houseCy === pylonCy), damit landen auch beide Beschriftungen auf derselben
         // Hoehe, statt (wie vorher) mit unterschiedlichen Offsets leicht versetzt zu wirken.
-        svg.appendChild(buildEnergyFlowLabel(trunkLabelX, houseCy - FLOW_LINE_LABEL_GAP, [withStaleness(formatKwValue(data.household.kw), data.household.updatedAt, INVERTER_STALE_MINUTES)], {anchor: 'middle'}));
+        svg.appendChild(buildEnergyFlowLabel(trunkLabelX, houseCy - FLOW_LINE_LABEL_GAP, [withStaleness(formatKwValue(data.household.kw), data.household.updatedAt, INVERTER_STALE_MINUTES)], {anchor: 'middle', noWrap: true}));
     }
 
     if (data.heatpump && data.heatpump.configured) {

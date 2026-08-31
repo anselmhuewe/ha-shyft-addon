@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.0.44.47
+
+* Energiefluss-Widget: Bei der Batterie stehen SOC und Modus ("Maximize Self Consumption" o.ä.) wieder wie ursprünglich neben dem Batterie-Icon - nur der kW-Wert ist an der Leitung selbst zentriert (0.0.44.45 hatte versehentlich den ganzen Block inkl. SOC/Modus an die Leitung gehängt).
+* Bei allen vier Leistungswerten an den Stromleitungen (Grid, PV, Eigenverbrauch, Batterie) steht ein Zeitstempel jetzt in derselben Zeile neben dem Wert (z.B. "-1,2 kW (19:41)") statt in einer eigenen Zeile darunter - dort ist genug Platz dafür.
+
 ## 0.0.44.46
 
 * Jedes ausgewählte Gerät im Integrations-Dropdown (z.B. "Wechselrichter", "Batterie", ...) zeigt jetzt ein eigenes "×" zum direkten Entfernen, statt dafür das Dropdown öffnen und die Checkbox abwählen zu müssen. Wird ein Gerät so (oder über die Checkbox) entfernt, bleiben die zugehörigen Sensor-/Steuerungs-Zuordnungen erhalten - wählt man später dasselbe (oder ein anderes) Gerät wieder aus, sind die zuvor eingetragenen Werte weiterhin vorausgefüllt. Ein versehentliches Löschen führt also nicht zu Datenverlust.
