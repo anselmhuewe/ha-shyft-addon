@@ -3145,6 +3145,7 @@ const EINSATZPLAN_STATS = [
     ['netzstrom_preis_cent', 'ø Netzstrom', 'Cent/kWh', 1],
     ['autarkie_pct', 'Autarkie', '%', 0],
     ['eigenverbrauch_pct', 'Eigenverbrauch', '%', 0],
+    ['stromertrag_eur', 'Stromertrag', '€', 2],
 ];
 
 function buildEinsatzplanCard(einsatzplan) {

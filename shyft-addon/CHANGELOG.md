@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.0.44.57
+
+* Einsatzplan-Kennzahlen nach Nutzer-Feedback verfeinert (siehe 0.0.44.56):
+  * **ø Netzstrom**: zählt jetzt nur tatsächlich eingekauften Netzstrom - eingespeister Strom wird nicht gegengerechnet (vorher netto, konnte negativ werden). "-" wenn gar nichts eingekauft wurde.
+  * **Autarkie**: bewusst wieder ungekappt (nutzt den rohen, vorzeichenbehafteten `GR_sum`) - bei Netto-Einspeisung (mehr Ertrag als Bezug) kann Autarkie korrekterweise über 100% liegen; nur nach unten auf 0% begrenzt.
+  * **Neue fünfte Kachel "Stromertrag"** (€): Summe von `profits_opt` aus `output_csv` - der vom Optimierer direkt berechnete Einspeise-Erlös, unabhängig von `GR_sum` ermittelt.
+  * Eigenverbrauch unverändert (weiterhin auf Basis des eingekauften Anteils, auf 100% gedeckelt).
+
 ## 0.0.44.56
 
 * **Fix: Einsatzplan-Kacheln zeigten teils absurde Werte** (z.B. -3,2 Cent/kWh ø Netzstrom, 234% Autarkie). Ursache: `GR_sum` in `output_csv` ist laut Optimierer ein **Netto**-Wert ("net load / feed in from / to the grid", run_SHEMS.jl) und wird in einspeisungsreichen Stunden negativ - die bisherige Berechnung hat das ungefiltert als "eingekaufte Netzenergie" behandelt. Jetzt wird `GR_sum` pro Stunde bei 0 gekappt, bevor es in ø Netzstrom/Autarkie/Eigenverbrauch einfließt (eine Einspeise-Stunde zählt als 0 eingekaufte Energie, nicht negativ); Autarkie/Eigenverbrauch zusätzlich hart auf [0, 100] % gedeckelt.
