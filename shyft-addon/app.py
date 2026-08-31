@@ -3,6 +3,7 @@ from homeassistant_adapter import HomeAssistantAdapter, EntityState
 from shyft_adapter import ShyftAdapter
 from live_entity_watcher import LiveEntityWatcher
 import problem_registry
+import pv_forecast
 
 import os
 from flask import Flask, send_from_directory, jsonify, request, Response
@@ -263,8 +264,13 @@ def sync_site_data(optimizer_period_override=None, _wait_attempt=1):
         _update_input_csv_health(config, live_values)
     except Exception as e:
         print("[Shyft] Problem-Registry-Abgleich (input.csv) fehlgeschlagen:", repr(e))
+    weather_fields = None
+    try:
+        weather_fields = pv_forecast.compute_site_weather_fields(optimizer_period, _pv_sensor_configured(config))
+    except Exception as e:
+        print("[Shyft] Wetter-/PV-Prognosefelder konnten nicht gebaut werden:", repr(e))
     submitted_at = datetime.now(timezone.utc)
-    result = shyft_adapter.send_site_data(payload)
+    result = shyft_adapter.send_site_data(payload, weather_fields)
     try:
         schedule_optimizer_result_wait(submitted_at, optimizer_period, attempt=_wait_attempt)
     except Exception as e:
@@ -2379,6 +2385,7 @@ def writeConfig():
         data.get("sensorMappings", {}).get("photovoltaic_powerflow_battery"),
     )
     old_integration_mappings = data.get("integrationMappings", {})
+    old_pv_sensor = data.get("sensorMappings", {}).get("photovoltaic_powerflow_pv", "")
     data.update(incoming)
 
     script_sync_errors = {}
@@ -2421,6 +2428,15 @@ def writeConfig():
             backfill_car_presence_log()
         except Exception as e:
             print("[Shyft] Anwesenheits-Backfill fehlgeschlagen:", repr(e))
+
+    # Erstmals ein PV-Leistungssensor zugeordnet -> m2-Aequivalent-Profil der PV-Prognose einmalig
+    # aus 7 Tagen Historie kalibrieren (siehe pv_forecast / calibrate_pv_forecast).
+    new_pv_sensor = data.get("sensorMappings", {}).get("photovoltaic_powerflow_pv", "")
+    if new_pv_sensor and not old_pv_sensor:
+        try:
+            calibrate_pv_forecast(from_default=True)
+        except Exception as e:
+            print("[Shyft] Erstkalibrierung der PV-Prognose fehlgeschlagen:", repr(e))
 
     new_battery_sensors = (
         data.get("sensorMappings", {}).get("battery_state_of_charge"),
@@ -3557,6 +3573,87 @@ def sync_dashboard_chart_data():
 
 
 # ============================================================================
+# Wetter-/PV-Erzeugungsprognose (siehe pv_forecast.py) - ersetzt die frueher bubble-seitige
+# "PV Prediction". open-meteo wird alle 3h geholt; die m2-Kalibrierung laeuft taeglich 22:00 lokal
+# (und einmalig bei Erstkonfiguration des PV-Sensors). Die Prognosefelder haengen bei jedem
+# sync_site_data an der update_site_addon-Payload.
+# ============================================================================
+
+WEATHER_FETCH_INTERVAL_HOURS = 3
+
+
+def _home_coordinates():
+    "(latitude, longitude) der Home-Assistant-Installation aus /api/config, oder (None, None)."
+    try:
+        cfg = homeassistant_adapter.get_from_homeassistant("/api/config")
+        return cfg.get("latitude"), cfg.get("longitude")
+    except Exception as e:
+        print("[Shyft] Koordinaten konnten nicht aus /api/config gelesen werden:", repr(e))
+        return None, None
+
+
+def _pv_sensor_configured(config=None):
+    config = config or _read_current_config()
+    return bool(config.get("sensorMappings", {}).get("photovoltaic_powerflow_pv"))
+
+
+def fetch_weather_forecast():
+    "Holt die open-meteo-Prognose in den Cache (siehe pv_forecast.fetch_weather)."
+    lat, lon = _home_coordinates()
+    pv_forecast.fetch_weather(lat, lon)
+
+
+def _pv_power_history_pairs(pv_entity_id, days):
+    "Liste (aware_datetime, kW) der PV-Leistungs-Historie der letzten `days` Tage, in die von pv_forecast erwartete Einheit (kW) konvertiert."
+    end = datetime.now(timezone.utc)
+    start = end - timedelta(days=days)
+    try:
+        unit = homeassistant_adapter.load_entity_state(pv_entity_id).unit
+    except Exception:
+        unit = ""
+    pairs = []
+    try:
+        for last_changed, state in homeassistant_adapter.load_entity_history_raw(pv_entity_id, start, end):
+            try:
+                value, _ = convert_to_expected_unit("photovoltaic_powerflow_pv", state, unit)
+                pairs.append((last_changed, float(value)))
+            except (TypeError, ValueError):
+                continue  # "unknown"/"unavailable" etc.
+    except Exception as e:
+        print("[Shyft] PV-Leistungs-Historie konnte nicht geladen werden:", repr(e))
+    return pairs
+
+
+def calibrate_pv_forecast(from_default=False):
+    """Kalibriert das m2-Aequivalent-Profil neu. Ohne from_default: taeglicher 22:00-Lauf mit den
+    Messwerten des laufenden Tages. Mit from_default: Erstkalibrierung ueber pv_forecast.CALIBRATION_SETUP_DAYS
+    Tage, ausgehend vom Startprofil - getriggert, sobald erstmals ein PV-Sensor zugeordnet wird."""
+    config = _read_current_config()
+    pv_entity_id = config.get("sensorMappings", {}).get("photovoltaic_powerflow_pv", "")
+    if not pv_entity_id:
+        return
+    # Frisches Wetter, damit die zurueckliegenden Stunden (open-meteo aktualisiert die juengste
+    # Vergangenheit) moeglichst genau sind.
+    fetch_weather_forecast()
+    days = pv_forecast.CALIBRATION_SETUP_DAYS if from_default else 1
+    pairs = _pv_power_history_pairs(pv_entity_id, days)
+    if not pairs:
+        print("[Shyft] PV-Kalibrierung: keine Historie, uebersprungen.")
+        return
+    pv_forecast.calibrate(pairs, days=days, from_default=from_default)
+
+
+@app.route("/dashboard/weather", methods=["GET"])
+def readDashboardWeather():
+    "Wetter-/PV-Prognose fuers Dashboard (Icons + Prognosekurve, siehe pv_forecast.dashboard_weather)."
+    try:
+        return jsonify({"status": "success", **pv_forecast.dashboard_weather(_pv_sensor_configured())})
+    except Exception as e:
+        print("[Shyft] Dashboard-Wetter konnte nicht gebaut werden:", repr(e))
+        return jsonify({"status": "error", "message": str(e)})
+
+
+# ============================================================================
 # Warten auf ein frisches Optimierungsergebnis nach /trigger bzw. dem stuendlichen Sync (siehe
 # sync_site_data): der Timer startet, sobald die JSON an die Site geschickt wurde, und fragt
 # provide_input_output_csv (mit since=Absendezeitpunkt) zu festen Zeitpunkten danach nach - nicht
@@ -3722,6 +3819,14 @@ def maybe_detect_battery_flow_sign_convention_periodically():
     with app.app_context():
         maybe_detect_battery_flow_sign_convention()
 
+def fetch_weather_forecast_periodically():
+    with app.app_context():
+        fetch_weather_forecast()
+
+def calibrate_pv_forecast_periodically():
+    with app.app_context():
+        calibrate_pv_forecast()
+
 
 # Live-Reaktion via Websocket (siehe live_entity_watcher.py) - ergaenzt, ersetzt aber nicht die
 # obigen Cron-Jobs (sync_car_presence_log_periodically, run_pv_surplus_charging_tick_periodically),
@@ -3787,6 +3892,10 @@ scheduler.add_job(run_pv_surplus_charging_tick_periodically, 'interval', minutes
 # wurde (siehe maybe_detect_battery_flow_sign_convention) - z.B. weil bei der Ersteinrichtung noch
 # nicht genug Lade-/Entladewechsel in der Historie vorlagen
 scheduler.add_job(maybe_detect_battery_flow_sign_convention_periodically, 'cron', hour="3", minute="30")
+# open-meteo-Wetterprognose alle 3h holen (Minute 2, kurz nach den ueblichen Modell-Publikationen);
+# die m2-Kalibrierung der PV-Prognose laeuft taeglich um 22:00 lokal (siehe pv_forecast.py)
+scheduler.add_job(fetch_weather_forecast_periodically, 'cron', hour="*/3", minute="2")
+scheduler.add_job(calibrate_pv_forecast_periodically, 'cron', hour="22", minute="0")
 scheduler.start()
 
 
@@ -3841,6 +3950,13 @@ if __name__ == "__main__":
         maybe_detect_battery_flow_sign_convention()
     except Exception as e:
         print("Failed to detect battery flow sign convention at startup:", repr(e))
+
+    try:
+        # damit das Dashboard sofort eine Wetterprognose zeigen kann, auch bevor der erste
+        # 3h-Cron-Lauf greift (siehe pv_forecast.py)
+        fetch_weather_forecast()
+    except Exception as e:
+        print("Failed to fetch weather forecast at startup:", repr(e))
 
     live_entity_watcher.start()
 

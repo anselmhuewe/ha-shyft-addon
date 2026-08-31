@@ -37,9 +37,20 @@ class ShyftAdapter:
         payload = self._map_to_json(pv_history)
         return self._call_workflow("addon_pv_history", payload)
 
-    def send_site_data(self, addon_sensor_data_json: str):
-        "Sends the consolidated staticConfig+liveValues+EV-forecast JSON to shyft-power (update_site_addon workflow) - replaces the old per-sensor addon_sensor_data workflow (send_sensor_values/sensor_list)."
-        return self._call_workflow("update_site_addon", json.dumps({"addon_sensor_data_JSON": addon_sensor_data_json}))
+    def send_site_data(self, addon_sensor_data_json: str, weather_fields: dict = None):
+        """Sends the consolidated staticConfig+liveValues+EV-forecast JSON to shyft-power
+        (update_site_addon workflow) - replaces the old per-sensor addon_sensor_data workflow.
+
+        weather_fields (optional, see pv_forecast.compute_site_weather_fields) fills the three
+        additional endpoint parameters the Java optimizer now reads instead of the separate
+        "PV Prediction" Bubble object: comma-separated "Temperature"/"PV Prediction" strings and
+        the "Datetime Weather" list of Bubble timestamps (Unix ms)."""
+        body = {"addon_sensor_data_JSON": addon_sensor_data_json}
+        if weather_fields:
+            body["Temperature"] = weather_fields["temperature"]
+            body["PV Prediction"] = weather_fields["pvPrediction"]
+            body["Datetime Weather"] = weather_fields["datetimeWeatherMs"]
+        return self._call_workflow("update_site_addon", json.dumps(body))
 
     def send_location(self, latitude, longitude):
         "Sends Home Assistant's zone.home coordinates to shyft-power (update_location_addon workflow) - called on location change or first setup (Verbindung testen), not on the hourly sync."

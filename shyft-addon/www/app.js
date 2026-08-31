@@ -4501,6 +4501,56 @@ function buildEnergyFlowWidget(data) {
     return wrapper;
 }
 
+// WMO-Wettercode -> Emoji (grobe Gruppen). Siehe open-meteo-Doku / pv_forecast.py.
+function weatherCodeemoji(code) {
+    if (code === null || code === undefined) return '';
+    if (code === 0) return '☀️';                 // klar
+    if (code === 1 || code === 2) return '🌤️'; // leicht bewölkt
+    if (code === 3) return '☁️';                 // bedeckt
+    if (code === 45 || code === 48) return '🌫️'; // Nebel
+    if (code >= 51 && code <= 57) return '🌦️';   // Niesel
+    if (code >= 61 && code <= 67) return '🌧️';   // Regen
+    if (code >= 71 && code <= 77) return '🌨️';   // Schnee
+    if (code >= 80 && code <= 82) return '🌦️';   // Regenschauer
+    if (code === 85 || code === 86) return '🌨️'; // Schneeschauer
+    if (code >= 95) return '⛈️';                 // Gewitter
+    return '';
+}
+
+// Kompakter, horizontal scrollbarer Wetter-Streifen ueber dem PV-Chart (nur Addon-Anzeige,
+// speist sich aus /dashboard/weather bzw. pv_forecast.py). Zeigt ab "jetzt" die naechsten Stunden.
+function buildWeatherStrip(weather) {
+    const datetimes = weather.datetimes || [];
+    const codes = weather.weatherCode || [];
+    const temps = weather.temperature || [];
+    if (!datetimes.length || codes.every(c => c === null || c === undefined)) return null;
+    const nowMs = Date.now();
+    const wrap = document.createElement('div');
+    wrap.className = 'weatherStrip';
+    let shown = 0;
+    for (let i = 0; i < datetimes.length && shown < 24; i++) {
+        if (datetimes[i] < nowMs - 3600 * 1000) continue; // vergangene Stunden ueberspringen
+        const cell = document.createElement('div');
+        cell.className = 'weatherCell';
+        const d = new Date(datetimes[i]);
+        const hh = document.createElement('div');
+        hh.className = 'weatherCellHour';
+        hh.textContent = d.getHours() + ' Uhr';
+        const ic = document.createElement('div');
+        ic.className = 'weatherCellIcon';
+        ic.textContent = weatherCodeemoji(codes[i]);
+        const tp = document.createElement('div');
+        tp.className = 'weatherCellTemp';
+        tp.textContent = (temps[i] === null || temps[i] === undefined) ? '' : Math.round(temps[i]) + '°';
+        cell.appendChild(hh);
+        cell.appendChild(ic);
+        cell.appendChild(tp);
+        wrap.appendChild(cell);
+        shown++;
+    }
+    return shown ? wrap : null;
+}
+
 async function loadDashboard() {
     const container = document.getElementById('dashboardBody');
     if (!container) return;
@@ -4534,6 +4584,15 @@ async function loadDashboard() {
         // (heute eingefroren + ab morgen live) gegen tatsaechliche Ist-Werte (siehe
         // readPvForecastVsActual) - best-effort, faellt auf den einfachen Prognose-Chart zurueck,
         // falls der neue Endpunkt (noch) nichts liefert (z.B. frische Installation ohne Snapshot).
+        try {
+            const weather = await getJson(insideHomeAssistant + '/dashboard/weather');
+            if (weather.status === 'success') {
+                const strip = buildWeatherStrip(weather);
+                if (strip) container.appendChild(strip);
+            }
+        } catch (err) {
+            console.log(err);
+        }
         let pvChartRendered = false;
         try {
             const pvComparison = await getJson(insideHomeAssistant + '/dashboard/pv-forecast-vs-actual');

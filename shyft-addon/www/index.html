@@ -715,6 +715,39 @@
         .dashboardChart {
             margin-bottom: 2em;
         }
+
+        /* Wetter-Streifen ueber dem PV-Chart (siehe buildWeatherStrip / pv_forecast.py) */
+        .weatherStrip {
+            display: flex;
+            gap: 0.4em;
+            overflow-x: auto;
+            -webkit-overflow-scrolling: touch;
+            scrollbar-width: thin;
+            padding-bottom: 0.4em;
+            margin-bottom: 1.2em;
+        }
+        .weatherCell {
+            flex: 0 0 auto;
+            width: 3.2em;
+            text-align: center;
+            padding: 0.4em 0.2em;
+            border: 1px solid var(--color-border);
+            border-radius: 8px;
+            background: var(--color-bg-card);
+        }
+        .weatherCellHour {
+            font-size: 0.7em;
+            color: var(--color-text-secondary);
+        }
+        .weatherCellIcon {
+            font-size: 1.25em;
+            line-height: 1.4;
+        }
+        .weatherCellTemp {
+            font-size: 0.8em;
+            font-weight: 600;
+            color: var(--color-text);
+        }
         /* Die Bild-Assets (Haus/Batterie/Waermepumpe/Auto) haben einen weissen Hintergrund
            eingebrannt (keine Transparenz) - das Widget bleibt deshalb bewusst immer hell, statt
            mit dem Rest der Seite in den Dark Mode zu wechseln (sonst wirkt es wie weisse Kaesten

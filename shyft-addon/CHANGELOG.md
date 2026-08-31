@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.0.44.54
+
+* **PV-Erzeugungsprognose ins Addon verlagert** (`pv_forecast.py`, ersetzt die frühere bubble-seitige „PV Prediction").
+  * Holt alle 3 h `global_tilted_irradiance` (fest 35°/Süd), `temperature_2m` und `weather_code` von open-meteo (7 Tage Rückschau + 3 Tage Vorhersage, `timezone=Europe/Berlin`). Cache in `/data/weather_forecast.json`. Koordinaten aus HA `/api/config`. Erster Abruf beim Addon-Start.
+  * Lernt pro Anlage ein „m²-Äquivalent" je Tagesstunde (0–23) in `/data/pv_calibration.json`: `Prognose_kW = (irr[i]+irr[i+1])/2 / 1000 · m²[h] · 0,2`, 0 unter 4 W/m², minus 5 % + 100 W Sicherheitsabschlag. Kalibrierung per EWMA (α = 0,25, robust gegen Ausreißertage): täglich 22:00 lokal mit den Messwerten des Tages, sowie einmalig aus 7 Tagen Historie, sobald erstmals ein PV-Leistungssensor zugeordnet wird. Startprofil ~50 m² tagsüber.
+  * `update_site_addon` sendet jetzt zusätzlich die neuen Endpunkt-Parameter `Temperature`, `PV Prediction` (je `optimizationPeriodsSite` kommaseparierte Werte) und `Datetime Weather` (Bubble-Timestamps in ms, ab heute 0:00 Berlin). Ohne PV-Sensor werden Nullen gesendet.
+  * Neuer Endpunkt `GET /dashboard/weather` + Wetter-Icon-Streifen über dem PV-Chart im Dashboard.
+  * Der bisherige, bubble-seitige Temperatur-Weg wird damit abgelöst (Server-Änderung separat).
+
 ## 0.0.44.53
 
 * Energiefluss-Widget (Mobil), drei Layout-Korrekturen:
