@@ -1,6 +1,8 @@
 # Changelog
 
-## 0.0.44.51
+## 0.0.44.52
+
+* **Fix: Navigationsleisten-Icon wirklich nicht mehr abgeschnitten.** Die bisherigen Deploys (u.a. 0.0.44.43) hatten das Icon zwar korrekt aus dem Original-Logo erzeugt, aber randlos gefüllt - die Sonnenstrahlen/der Bogen berührten dadurch exakt die Bildkante, was in jeder Navigationsleiste "abgeschnitten" wirkte, obwohl die Datei technisch vollständig war. Icon jetzt mit echtem Sicherheitsabstand (aus der unbeschnittenen Quelle `assets/IconOnly_Transparent_NoBuffer_32px.png` neu erzeugt, auf 84% verkleinert und zentriert) - berührt jetzt keine Kante mehr. Betrifft sowohl `icon.png` (HA-Supervisor-Seite) als auch `www/assets/shyft-icon.png` (In-App-Navigationsleiste), weiterhin byte-identisch. Quelldatei erstmals ins Repo aufgenommen, damit sich das Icon künftig aus derselben Quelle neu erzeugen lässt.
 
 * **Fix: Dashboard-Charts standen seit Samstag.** `provide_input_output_csv` liefert den Erstellzeitpunkt des Optimierungslaufs als Bubbles natives Feld **`Created Date`** (ms), nicht als `creation_date`. Das Add-on las nur `optimizer_run.get("creation_date")` → `None` → verwarf jeden Lauf mit „input_csv oder creation_date fehlt", obwohl `input_csv`/`output_csv` voll befüllt waren. Neuer Helfer `_optimizer_run_creation_ms` akzeptiert `Created Date` **und** `creation_date`; angewandt im stündlichen Dashboard-Sync und im Warte-Poll nach „Verbindung testen" (der aus demselben Grund nie aktualisiert hat). Per MCP am Live-System verifiziert: der Optimizer lief die ganze Zeit (heute 21:06 CEST, Laufzeit 203 s, kein Timeout) - nur die Antwort wurde add-on-seitig weggeworfen.
 
