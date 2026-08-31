@@ -3507,6 +3507,15 @@ def _write_dashboard_cache(input_csv, output_csv, creation_date_ms, optimizer_ru
 DASHBOARD_SYNC_FALLBACK_LOOKBACK_HOURS = 3
 
 
+def _optimizer_run_creation_ms(optimizer_run):
+    """Erstellzeitpunkt (Unix-ms) eines optimizer_run aus der provide_input_output_csv-Antwort.
+    Bubble liefert ihn als natives Feld 'Created Date'; aeltere/andere Serialisierungen benannten
+    ihn 'creation_date'. Beide Namen werden akzeptiert, damit ein Umbenennen bubble-seitig den
+    Dashboard-Sync nicht wieder stumm ausbremst (Symptom: 'input_csv oder creation_date fehlt',
+    obwohl input_csv/output_csv voll befuellt sind)."""
+    return optimizer_run.get("creation_date") or optimizer_run.get("Created Date")
+
+
 def _dashboard_sync_since():
     """Untere Zeitgrenze fuer den stuendlichen Dashboard-Refresh: der creation_date des zuletzt
     gecachten Optimierungslaufs. Alles Aeltere haben wir bereits, und ein Output kann ohnehin nur
@@ -3540,7 +3549,7 @@ def sync_dashboard_chart_data():
     optimizer_run = response_data.get("optimizer_run") or {}
     input_csv = optimizer_run.get("input_csv")
     output_csv = optimizer_run.get("output_csv")
-    creation_date_ms = optimizer_run.get("creation_date")
+    creation_date_ms = _optimizer_run_creation_ms(optimizer_run)
     if not input_csv or creation_date_ms is None:
         print("[Shyft] Dashboard-Chart-Daten: input_csv oder creation_date fehlt in der Antwort von shyft-power.")
         return
@@ -3627,7 +3636,7 @@ def _check_optimizer_result(submitted_at, optimizer_period, attempt, is_last, si
 
     output_csv = optimizer_run.get("output_csv")
     input_csv = optimizer_run.get("input_csv")
-    creation_date_ms = optimizer_run.get("creation_date")
+    creation_date_ms = _optimizer_run_creation_ms(optimizer_run)
 
     output_empty = not output_csv or not str(output_csv).strip()
     if _optimizer_run_indicates_timeout(optimizer_run) or output_empty:

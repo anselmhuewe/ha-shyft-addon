@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.0.44.51
+
+* **Fix: Dashboard-Charts standen seit Samstag.** `provide_input_output_csv` liefert den Erstellzeitpunkt des Optimierungslaufs als Bubbles natives Feld **`Created Date`** (ms), nicht als `creation_date`. Das Add-on las nur `optimizer_run.get("creation_date")` → `None` → verwarf jeden Lauf mit „input_csv oder creation_date fehlt", obwohl `input_csv`/`output_csv` voll befüllt waren. Neuer Helfer `_optimizer_run_creation_ms` akzeptiert `Created Date` **und** `creation_date`; angewandt im stündlichen Dashboard-Sync und im Warte-Poll nach „Verbindung testen" (der aus demselben Grund nie aktualisiert hat). Per MCP am Live-System verifiziert: der Optimizer lief die ganze Zeit (heute 21:06 CEST, Laufzeit 203 s, kein Timeout) - nur die Antwort wurde add-on-seitig weggeworfen.
+
 ## 0.0.44.50
 
 * `provide_input_output_csv`-Abruf, Diagnose des seit Samstag stehengebliebenen Dashboards:
