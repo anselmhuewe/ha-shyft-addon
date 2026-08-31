@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.0.44.59
+
+* PV-Prognose: **Self-Heal beim Addon-Start** – ist ein PV-Leistungssensor zugeordnet, aber noch keine `pv_calibration.json` vorhanden (z.B. weil der Sensor schon vor Einführung der PV-Prognose konfiguriert war oder die Datei verloren ging), wird das m²-Äquivalent-Profil sofort einmalig aus 7 Tagen Historie kalibriert, statt bis zum nächsten 22:00-Lauf zu warten. `pv_forecast.is_calibrated()` neu.
+* Energiefluss-Widget: Das Himmels-Icon über dem Haus zeigt jetzt das **aktuelle Wetter** (open-meteo `weather_code`, gleiche Icon-Zuordnung wie der Wetter-Streifen) statt nur Sonne/Mond nach Uhrzeit. Bei klarem Himmel bzw. ohne Wetterdaten weiterhin die gezeichnete Sonne/Mond. Das Dashboard holt `/dashboard/weather` jetzt einmalig vor dem Widget-Aufbau und verwendet die Daten für Icon **und** Streifen.
+
 ## 0.0.44.58
 
 * **Navigationsleisten-Logo (In-App-Kopfzeile) mit dem richtigen Quellbild neu erzeugt.** Bisher wurde es aus einer quadratischen Icon-Quelle abgeleitet (mit Rand nachgebessert, siehe 0.0.44.52) - der eigentliche Rand-Effekt war aber nicht das Problem, sondern die falsche Quelle: das Logo ist eigentlich als breites Format gedacht (1280×914, breiter als hoch), nicht quadratisch. `www/assets/shyft-icon.png` nutzt jetzt direkt dieses breite Original - die Kopfzeile selbst (`height: 28px; width: auto`) zeigt es dadurch in seinem echten Seitenverhältnis statt gequetscht/beschnitten. `icon.png` (HA-Supervisor-Icon, muss quadratisch bleiben) ist davon unberührt und bleibt bei der quadratischen Version aus 0.0.44.52 - beide Dateien sind ab jetzt bewusst NICHT mehr byte-identisch, da sie unterschiedliche Seitenverhältnisse brauchen.

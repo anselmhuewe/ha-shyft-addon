@@ -3134,7 +3134,11 @@ function showShyftActionsError(container) {
 // aus /dashboard/chart-data gelesen (keine eigene Live-Berechnung im Frontend noetig).
 function formatEinsatzplanValue(value, unit, decimals) {
     if (value === null || value === undefined) return '-';
-    return `${decimals ? value.toFixed(decimals) : Math.round(value)} ${unit}`;
+    const formatted = decimals ? value.toFixed(decimals) : Math.round(value);
+    // unit optional (leer/null) - fuer die Heute|Morgen-Kurzwerte hinter der grossen Zahl (siehe
+    // buildEinsatzplanCard), wo die Einheit schon einmal an der grossen Zahl steht und nicht noch
+    // zweimal wiederholt werden soll (v.a. bei "Cent/kWh" faellt das unnoetig lang aus).
+    return unit ? `${formatted} ${unit}` : `${formatted}`;
 }
 
 // Reihenfolge/Einheiten/Nachkommastellen der vier Kacheln - dieselben Keys stehen sowohl auf
@@ -3168,15 +3172,22 @@ function buildEinsatzplanCard(einsatzplan) {
         const labelEl = document.createElement('div');
         labelEl.className = 'einsatzplanStatLabel';
         labelEl.textContent = label;
-        const valueEl = document.createElement('div');
+        // Heute|Morgen jetzt HINTER der grossen Zahl (statt einer eigenen Zeile darunter) - macht
+        // die Kachel spuerbar kompakter. Ohne Einheit (siehe formatEinsatzplanValue) - die steht ja
+        // schon einmal an der grossen Zahl, "12,3 Cent/kWh (11,0 | 13,5)" statt sie noch zweimal zu
+        // wiederholen.
+        const valueRow = document.createElement('div');
+        valueRow.className = 'einsatzplanStatValueRow';
+        const valueEl = document.createElement('span');
         valueEl.className = 'einsatzplanStatValue';
         valueEl.textContent = formatEinsatzplanValue(einsatzplan[key], unit, decimals);
-        const subEl = document.createElement('div');
+        const subEl = document.createElement('span');
         subEl.className = 'einsatzplanStatSub';
-        subEl.textContent = `${formatEinsatzplanValue(heute[key], unit, decimals)} | ${formatEinsatzplanValue(morgen[key], unit, decimals)}`;
+        subEl.textContent = `(${formatEinsatzplanValue(heute[key], null, decimals)} | ${formatEinsatzplanValue(morgen[key], null, decimals)})`;
+        valueRow.appendChild(valueEl);
+        valueRow.appendChild(subEl);
         stat.appendChild(labelEl);
-        stat.appendChild(valueEl);
-        stat.appendChild(subEl);
+        stat.appendChild(valueRow);
         grid.appendChild(stat);
     }
     card.appendChild(grid);
@@ -3928,11 +3939,31 @@ function buildLightningIcon(cx, cy) {
     });
 }
 
-// Reiner Tag/Nacht-Indikator nach lokaler Uhrzeit - Platzhalter, bis ein Mapping von shyft's
-// Wetterdaten auf Icons vorliegt (dann ersetzt diese Funktion, der Rest des Widgets bleibt gleich).
+// Himmels-Icon ueber dem Haus: bei klarem Himmel (oder wenn keine Wetterdaten vorliegen) die
+// gezeichnete Sonne bzw. der Mond je nach Uhrzeit; sonst das Emoji des aktuellen open-meteo-
+// Wettercodes (currentWeatherCode, gesetzt in loadDashboard - dieselbe Zuordnung wie der
+// Wetter-Streifen, siehe weatherCodeemoji).
 function renderSkyIcon(cx, cy) {
     const hour = new Date().getHours();
     const isDaytime = hour >= 6 && hour < 20;
+    const code = currentWeatherCode;
+
+    // 0 = klar, 1 = ueberwiegend klar -> weiterhin die gezeichnete Sonne/Mond (passt optisch besser
+    // als ein Emoji und entspricht der bisherigen Darstellung)
+    if (code === null || code === undefined || code === 0 || (isDaytime && code === 1)) {
+        return renderDrawnSunOrMoon(cx, cy, isDaytime);
+    }
+
+    const g = svgEl('g');
+    const text = svgEl('text', {
+        x: cx, y: cy, 'text-anchor': 'middle', 'dominant-baseline': 'central', 'font-size': 46,
+    });
+    text.textContent = weatherCodeemoji(code) || (isDaytime ? '☀️' : '🌙');
+    g.appendChild(text);
+    return g;
+}
+
+function renderDrawnSunOrMoon(cx, cy, isDaytime) {
     const g = svgEl('g');
     if (isDaytime) {
         g.appendChild(svgEl('circle', {cx, cy, r: 20, fill: '#f4c542'}));
@@ -4548,6 +4579,25 @@ function weatherCodeemoji(code) {
     return '';
 }
 
+// Aktueller Wettercode (WMO) fuer "jetzt" - gesetzt in loadDashboard aus /dashboard/weather,
+// gelesen von renderSkyIcon (Himmels-Icon ueber dem Haus im Energiefluss-Widget). null = unbekannt.
+let currentWeatherCode = null;
+
+function weatherCodeForNow(weather) {
+    const datetimes = (weather && weather.datetimes) || [];
+    const codes = (weather && weather.weatherCode) || [];
+    const nowMs = Date.now();
+    let best = null;
+    for (let i = 0; i < datetimes.length; i++) {
+        // Stunden-Bucket [datetimes[i], datetimes[i] + 1h): der, in den "jetzt" faellt
+        if (datetimes[i] <= nowMs && nowMs < datetimes[i] + 3600 * 1000) {
+            best = codes[i];
+            break;
+        }
+    }
+    return (best === undefined) ? null : best;
+}
+
 // Kompakter, horizontal scrollbarer Wetter-Streifen ueber dem PV-Chart (nur Addon-Anzeige,
 // speist sich aus /dashboard/weather bzw. pv_forecast.py). Zeigt ab "jetzt" die naechsten Stunden.
 function buildWeatherStrip(weather) {
@@ -4596,6 +4646,18 @@ async function loadDashboard() {
             return;
         }
         container.innerHTML = '';
+        // Wetter zuerst holen: der aktuelle Wettercode fliesst ins Himmels-Icon des Energiefluss-
+        // Widgets (renderSkyIcon) und wird weiter unten fuer den Wetter-Streifen wiederverwendet.
+        let weather = null;
+        try {
+            const weatherResponse = await getJson(insideHomeAssistant + '/dashboard/weather');
+            if (weatherResponse.status === 'success') {
+                weather = weatherResponse;
+                currentWeatherCode = weatherCodeForNow(weather);
+            }
+        } catch (err) {
+            console.log(err);
+        }
         try {
             const flowData = await getJson(insideHomeAssistant + '/dashboard/energy-flow');
             container.appendChild(buildEnergyFlowWidget(flowData));
@@ -4615,14 +4677,9 @@ async function loadDashboard() {
         // (heute eingefroren + ab morgen live) gegen tatsaechliche Ist-Werte (siehe
         // readPvForecastVsActual) - best-effort, faellt auf den einfachen Prognose-Chart zurueck,
         // falls der neue Endpunkt (noch) nichts liefert (z.B. frische Installation ohne Snapshot).
-        try {
-            const weather = await getJson(insideHomeAssistant + '/dashboard/weather');
-            if (weather.status === 'success') {
-                const strip = buildWeatherStrip(weather);
-                if (strip) container.appendChild(strip);
-            }
-        } catch (err) {
-            console.log(err);
+        if (weather) {
+            const strip = buildWeatherStrip(weather);
+            if (strip) container.appendChild(strip);
         }
         let pvChartRendered = false;
         try {

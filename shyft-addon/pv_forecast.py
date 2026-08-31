@@ -167,6 +167,11 @@ def _cache_index_for(cache, dt_local):
 # Prognose
 # ---------------------------------------------------------------------------
 
+def is_calibrated():
+    "True, wenn bereits eine gueltige m2-Kalibrierung persistiert ist (siehe _read_calibration)."
+    return _read_calibration()[1] is not None
+
+
 def _read_calibration():
     "Gibt (m2[24], last_calibrated_date_or_None) zurueck - Startprofil, falls noch nicht kalibriert."
     data = _read_json(PV_CALIBRATION_PATH) or {}

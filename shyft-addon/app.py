@@ -4010,6 +4010,16 @@ if __name__ == "__main__":
     except Exception as e:
         print("Failed to fetch weather forecast at startup:", repr(e))
 
+    try:
+        # Self-Heal: PV-Sensor zugeordnet, aber noch keine m2-Kalibrierung vorhanden (z.B. weil der
+        # Sensor schon vor Einfuehrung der PV-Prognose konfiguriert war, oder die Datei verloren
+        # ging) -> einmalig aus der Historie kalibrieren, statt bis 22:00 zu warten.
+        if _pv_sensor_configured() and not pv_forecast.is_calibrated():
+            print("[Shyft] Keine PV-Kalibrierung vorhanden - einmalige Erstkalibrierung aus der Historie.")
+            calibrate_pv_forecast(from_default=True)
+    except Exception as e:
+        print("Failed to run initial PV forecast calibration at startup:", repr(e))
+
     live_entity_watcher.start()
 
     app.run(host="0.0.0.0", port=8080)
