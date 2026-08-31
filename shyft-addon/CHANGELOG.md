@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.0.44.56
+
+* **Fix: Einsatzplan-Kacheln zeigten teils absurde Werte** (z.B. -3,2 Cent/kWh ø Netzstrom, 234% Autarkie). Ursache: `GR_sum` in `output_csv` ist laut Optimierer ein **Netto**-Wert ("net load / feed in from / to the grid", run_SHEMS.jl) und wird in einspeisungsreichen Stunden negativ - die bisherige Berechnung hat das ungefiltert als "eingekaufte Netzenergie" behandelt. Jetzt wird `GR_sum` pro Stunde bei 0 gekappt, bevor es in ø Netzstrom/Autarkie/Eigenverbrauch einfließt (eine Einspeise-Stunde zählt als 0 eingekaufte Energie, nicht negativ); Autarkie/Eigenverbrauch zusätzlich hart auf [0, 100] % gedeckelt.
+* Einsatzplan-Kacheln zeigen jetzt zusätzlich eine kleine "Rest heute (inkl. laufender Stunde) | Morgen"-Aufschlüsselung unter der großen Kennzahl (ohne Beschriftung, passt sonst nicht in die Kachel) - die Erklärung dazu steht jetzt als Legende unter den Kacheln statt in der Überschrift: "(berechnet um HH:MM Uhr, Kennzahlen jeweils über die nächsten N Stunden bzw. restliche Stunden Heute | Morgen)".
+* PV-Erzeugungs-Zusammenfassung unter dem PV-Prognose-Chart zeigt nur noch Heute/Morgen, kein "Übermorgen" mehr - das 48h-Fenster deckt diesen Tag nie vollständig ab, die Summe wirkte irreführend unvollständig.
+
 ## 0.0.44.55
 
 * **Fix: Mast aus dem Hausbild war auf Mobil wieder sichtbar.** `buildCroppedHouseImage` (blendet den im Hausfoto eingezeichneten Strommasten per `clipPath` aus) hat eine fest verdrahtete `id` benutzt - seit es Desktop- UND Mobil-`<svg>` gleichzeitig im selben Dokument gibt (0.0.44.48), gab es diese ID doppelt. Der Browser löst `url(#...)` dokumentweit auf, nicht pro `<svg>` - das Mobil-Hausbild bekam dadurch fälschlich den Desktop-Zuschnitt (andere Koordinaten) und der eigentlich ausgeblendete Mast blitzte wieder durch. IDs sind jetzt pro Aufruf eindeutig.

@@ -3120,17 +3120,33 @@ function showShyftActionsError(container) {
 // Kalendertag (lokale Zeit), summiert aus den stündlichen kW-Werten (ein kW-Wert über eine Stunde
 // ist per Definition eine kWh). "Heute" zählt nur noch nicht vergangene Stunden.
 //
-// Ein 48h-Fenster kann rechnerisch NIE alle 24 Kalenderstunden von "Übermorgen" enthalten (Heute
-// + Morgen allein verbrauchen schon mindestens 24h davon) - "vollständig" heißt hier deshalb
-// nicht "Mitternacht bis Mitternacht", sondern "die PV-Erzeugung ist erkennbar auf 0 gefallen":
-// sobald ab PV_COMPLETE_CHECK_FROM_HOUR (17 Uhr - spätestens 21 Uhr wäre auch im Hochsommer sicher,
-// im Winter geht die Sonne aber teils schon um 17 Uhr unter) ein Wert nahe 0 auftaucht, gilt der
-// Tag als abgeschlossen; ein erneuter Anstieg danach ist im selben Kalendertag praktisch
-// ausgeschlossen. "Morgen" bekommt dieselbe Prüfung (schadet nicht, greift im 48h-Fenster aber
-// nie), nur "Heute" ist bewusst ausgenommen, da dort absichtlich nur die Teilsumme gezeigt wird.
+// "Übermorgen" wird bewusst nicht mehr ausgewiesen (nur Heute/Morgen) - ein 48h-Fenster deckt
+// diesen Tag rechnerisch nie vollstaendig ab (Heute + Morgen allein verbrauchen schon mindestens
+// 24h davon), die Summe wirkte dadurch irrefuehrend unvollstaendig. "Vollstaendig" heißt hier
+// ohnehin nicht "Mitternacht bis Mitternacht", sondern "die PV-Erzeugung ist erkennbar auf 0
+// gefallen": sobald ab PV_COMPLETE_CHECK_FROM_HOUR (17 Uhr - spätestens 21 Uhr wäre auch im
+// Hochsommer sicher, im Winter geht die Sonne aber teils schon um 17 Uhr unter) ein Wert nahe 0
+// auftaucht, gilt der Tag als abgeschlossen; ein erneuter Anstieg danach ist im selben Kalendertag
+// praktisch ausgeschlossen. Nur "Heute" ist von dieser Prüfung ausgenommen, da dort absichtlich
+// nur die Teilsumme gezeigt wird.
 // Die "Einsatzplan"-Karte direkt unter dem PV-Prognose-Chart: Kennzahlen des aktuellen
 // Optimierungslaufs (siehe _compute_einsatzplan_summary in app.py), einmal pro Dashboard-Ladung
 // aus /dashboard/chart-data gelesen (keine eigene Live-Berechnung im Frontend noetig).
+function formatEinsatzplanValue(value, unit, decimals) {
+    if (value === null || value === undefined) return '-';
+    return `${decimals ? value.toFixed(decimals) : Math.round(value)} ${unit}`;
+}
+
+// Reihenfolge/Einheiten/Nachkommastellen der vier Kacheln - dieselben Keys stehen sowohl auf
+// Top-Level von 'einsatzplan' (voller Zeitraum) als auch unter 'einsatzplan.heute'/'.morgen'
+// (siehe _compute_einsatzplan_kpis in app.py).
+const EINSATZPLAN_STATS = [
+    ['stromverbrauch_kwh', 'Stromverbrauch', 'kWh', 0],
+    ['netzstrom_preis_cent', 'ø Netzstrom', 'Cent/kWh', 1],
+    ['autarkie_pct', 'Autarkie', '%', 0],
+    ['eigenverbrauch_pct', 'Eigenverbrauch', '%', 0],
+];
+
 function buildEinsatzplanCard(einsatzplan) {
     const card = document.createElement('div');
     card.className = 'einsatzplanCard';
@@ -3138,21 +3154,14 @@ function buildEinsatzplanCard(einsatzplan) {
     const title = document.createElement('div');
     title.className = 'einsatzplanTitle';
     title.textContent = 'Einsatzplan';
-    const subtitle = document.createElement('span');
-    subtitle.className = 'einsatzplanSubtitle';
-    subtitle.textContent = `(berechnet um ${formatShyftTime(einsatzplan.creation_date)} Uhr, Kennzahlen jeweils über die nächsten ${einsatzplan.hours} Stunden)`;
-    title.appendChild(subtitle);
     card.appendChild(title);
+
+    const heute = einsatzplan.heute || {};
+    const morgen = einsatzplan.morgen || {};
 
     const grid = document.createElement('div');
     grid.className = 'einsatzplanGrid';
-    const stats = [
-        ['Stromverbrauch', einsatzplan.stromverbrauch_kwh === null || einsatzplan.stromverbrauch_kwh === undefined ? '-' : `${Math.round(einsatzplan.stromverbrauch_kwh)} kWh`],
-        ['ø Netzstrom', einsatzplan.netzstrom_preis_cent === null || einsatzplan.netzstrom_preis_cent === undefined ? '-' : `${einsatzplan.netzstrom_preis_cent} Cent/kWh`],
-        ['Autarkie', einsatzplan.autarkie_pct === null || einsatzplan.autarkie_pct === undefined ? '-' : `${einsatzplan.autarkie_pct} %`],
-        ['Eigenverbrauch', einsatzplan.eigenverbrauch_pct === null || einsatzplan.eigenverbrauch_pct === undefined ? '-' : `${einsatzplan.eigenverbrauch_pct} %`],
-    ];
-    for (const [label, value] of stats) {
+    for (const [key, label, unit, decimals] of EINSATZPLAN_STATS) {
         const stat = document.createElement('div');
         stat.className = 'einsatzplanStat';
         const labelEl = document.createElement('div');
@@ -3160,12 +3169,22 @@ function buildEinsatzplanCard(einsatzplan) {
         labelEl.textContent = label;
         const valueEl = document.createElement('div');
         valueEl.className = 'einsatzplanStatValue';
-        valueEl.textContent = value;
+        valueEl.textContent = formatEinsatzplanValue(einsatzplan[key], unit, decimals);
+        const subEl = document.createElement('div');
+        subEl.className = 'einsatzplanStatSub';
+        subEl.textContent = `${formatEinsatzplanValue(heute[key], unit, decimals)} | ${formatEinsatzplanValue(morgen[key], unit, decimals)}`;
         stat.appendChild(labelEl);
         stat.appendChild(valueEl);
+        stat.appendChild(subEl);
         grid.appendChild(stat);
     }
     card.appendChild(grid);
+
+    const legend = document.createElement('div');
+    legend.className = 'einsatzplanLegend';
+    legend.textContent = `(berechnet um ${formatShyftTime(einsatzplan.creation_date)} Uhr, Kennzahlen jeweils über die nächsten ${einsatzplan.hours} Stunden bzw. restliche Stunden Heute | Morgen)`;
+    card.appendChild(legend);
+
     return card;
 }
 
@@ -3175,16 +3194,19 @@ function formatPvEnergySummary(labels, values) {
     const now = new Date();
     const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
     const currentHourStart = new Date(now.getFullYear(), now.getMonth(), now.getDate(), now.getHours());
-    const dayLabels = ['Heute', 'Morgen', 'Übermorgen'];
-    const sums = [0, 0, 0];
-    const hasData = [false, false, false];
-    const reachedZeroInEvening = [false, false, false];
+    // Nur Heute/Morgen - "Übermorgen" wird bewusst nicht ausgewiesen, das 48h-Fenster deckt diesen
+    // Tag ohnehin nie vollstaendig ab (siehe reachedZeroInEvening-Kommentar oben), die Summe wirkte
+    // dadurch irrefuehrend unvollstaendig.
+    const dayLabels = ['Heute', 'Morgen'];
+    const sums = [0, 0];
+    const hasData = [false, false];
+    const reachedZeroInEvening = [false, false];
 
     for (let i = 0; i < labels.length; i++) {
         const d = new Date(labels[i]);
         const startOfThatDay = new Date(d.getFullYear(), d.getMonth(), d.getDate());
         const dayOffset = Math.round((startOfThatDay - startOfToday) / (24 * 60 * 60 * 1000));
-        if (dayOffset < 0 || dayOffset > 2) continue;
+        if (dayOffset < 0 || dayOffset > 1) continue;
         if (dayOffset === 0 && d < currentHourStart) continue; // schon vergangene Stunde
         sums[dayOffset] += values[i];
         hasData[dayOffset] = true;
@@ -3194,7 +3216,7 @@ function formatPvEnergySummary(labels, values) {
     }
 
     const parts = [];
-    for (let offset = 0; offset < 3; offset++) {
+    for (let offset = 0; offset < 2; offset++) {
         if (!hasData[offset]) continue;
         if (offset > 0 && !reachedZeroInEvening[offset]) continue;
         parts.push(`${dayLabels[offset]}: ${Math.round(sums[offset])} kWh`);
