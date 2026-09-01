@@ -266,7 +266,11 @@ def sync_site_data(optimizer_period_override=None, _wait_attempt=1):
         print("[Shyft] Problem-Registry-Abgleich (input.csv) fehlgeschlagen:", repr(e))
     weather_fields = None
     try:
-        weather_fields = pv_forecast.compute_site_weather_fields(optimizer_period, _pv_sensor_configured(config))
+        # optimizer_period + 24: ein Lauf startet an der aktuellen Stunde (baseTime), nicht um
+        # Mitternacht - mit nur optimizer_period Stunden ab heute 0:00 fehlt dem Optimizer sonst
+        # das letzte Stueck seines Horizonts (er haelt dann den letzten Wert konstant). 24 h Puffer
+        # decken jede Tageszeit ab. Der open-meteo-Cache reicht dafuer (siehe OPEN_METEO_FORECAST_DAYS).
+        weather_fields = pv_forecast.compute_site_weather_fields(optimizer_period + 24, _pv_sensor_configured(config))
     except Exception as e:
         print("[Shyft] Wetter-/PV-Prognosefelder konnten nicht gebaut werden:", repr(e))
     submitted_at = datetime.now(timezone.utc)

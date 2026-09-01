@@ -36,7 +36,10 @@ OPEN_METEO_URL = "https://api.open-meteo.com/v1/forecast"
 PV_TILT_DEG = 35
 PV_AZIMUTH_DEG = 0
 OPEN_METEO_PAST_DAYS = 7
-OPEN_METEO_FORECAST_DAYS = 3
+# 4 Tage (96 h) Vorhersage: an die Site gehen "optimizationPeriodsSite + 24" Stunden ab heute
+# 0:00 (siehe sync_site_data) - bei Default 48 also 72, plus 1 h Vorgriff fuer den
+# (irr[i]+irr[i+1])/2-Mittelwert. 96 h decken das mit Reserve.
+OPEN_METEO_FORECAST_DAYS = 4
 
 # kW = W/m^2 / 1000 * m^2 * WIRKUNGSGRAD. Der Wirkungsgrad ist bewusst grob und konstant - die
 # eigentliche Anpassung an die Anlage passiert ueber das gelernte m2[].

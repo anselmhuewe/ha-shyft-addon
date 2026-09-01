@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.0.44.62
+
+* PV-/Wetterprognose an die Site: statt `optimizationPeriodsSite` Stunden werden jetzt **`optimizationPeriodsSite + 24`** Stunden gesendet (`Temperature` / `PV Prediction` / `Datetime Weather`). Ein Optimierungslauf startet an der aktuellen Stunde, nicht um Mitternacht - mit nur `optimizationPeriodsSite` Stunden ab heute 0:00 fehlte dem Optimizer sonst das letzte Stück seines Horizonts (er hält dann den letzten Wert konstant, im `input_csv` z.B. als über Stunden gleichbleibende Temperatur sichtbar). open-meteo-Abruf entsprechend auf 4 Tage Vorhersage erhöht.
+
 ## 0.0.44.61
 
 * Einleitungstext oben auf dem Konfiguration-Tab ("So richtest du das Add-on ein: ...") entfernt.
