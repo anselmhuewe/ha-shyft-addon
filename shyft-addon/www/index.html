@@ -815,12 +815,6 @@
         .energyFlowPulse {
             animation: energyFlowPulse 1.8s ease-in-out infinite;
         }
-        .dashboardPvEnergySummary {
-            font-weight: 600;
-            color: var(--color-text);
-            margin-top: -1.5em;
-            margin-bottom: 2em;
-        }
         .einsatzplanCard {
             margin-bottom: 2em;
         }
@@ -845,28 +839,30 @@
         .einsatzplanStat {
             background: var(--color-accent);
             border-radius: 10px;
-            padding: 0.9em 1em;
+            padding: 0.6em 0.8em;
             color: #ffffff;
         }
         .einsatzplanStatLabel {
-            font-size: 0.85em;
+            font-size: 0.8em;
             opacity: 0.9;
-            margin-bottom: 0.4em;
+            margin-bottom: 0.25em;
         }
-        /* Heute|Morgen (.einsatzplanStatSub) steht jetzt in derselben Zeile hinter der grossen Zahl
-           statt darunter - baseline-Ausrichtung, damit die kleinere Sub-Schrift nicht mittig neben
-           der grossen Zahl "schwebt". flex-wrap fuer sehr schmale Kacheln/lange Werte. */
+        /* Heute|Morgen (.einsatzplanStatSub) und die Einheit (.einsatzplanStatUnit) stehen in
+           derselben Zeile hinter der grossen Zahl statt darunter bzw. an der grossen Zahl selbst -
+           baseline-Ausrichtung, damit die kleinere Schrift nicht mittig neben der grossen Zahl
+           "schwebt". flex-wrap fuer sehr schmale Kacheln/lange Werte. */
         .einsatzplanStatValueRow {
             display: flex;
             align-items: baseline;
             flex-wrap: wrap;
-            gap: 0.4em;
+            gap: 0.35em;
         }
         .einsatzplanStatValue {
-            font-size: 1.3em;
+            font-size: 1.15em;
             font-weight: 700;
         }
-        .einsatzplanStatSub {
+        .einsatzplanStatSub,
+        .einsatzplanStatUnit {
             font-size: 0.75em;
             opacity: 0.85;
         }
@@ -874,6 +870,15 @@
             font-size: 0.75em;
             color: var(--color-text-secondary);
             margin-top: 0.6em;
+        }
+        .einsatzplanLegendRunning {
+            color: var(--color-accent);
+            font-weight: 600;
+            animation: einsatzplanLegendPulse 1.6s ease-in-out infinite;
+        }
+        @keyframes einsatzplanLegendPulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.45; }
         }
         .dashboardConsumptionForecast {
             margin-top: -1.2em;

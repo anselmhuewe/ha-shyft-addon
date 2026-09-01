@@ -3152,7 +3152,7 @@ const EINSATZPLAN_STATS = [
     ['stromertrag_eur', 'Stromertrag', '€', 2],
 ];
 
-function buildEinsatzplanCard(einsatzplan) {
+function buildEinsatzplanCard(einsatzplan, optimizerRunning) {
     const card = document.createElement('div');
     card.className = 'einsatzplanCard';
 
@@ -3172,20 +3172,24 @@ function buildEinsatzplanCard(einsatzplan) {
         const labelEl = document.createElement('div');
         labelEl.className = 'einsatzplanStatLabel';
         labelEl.textContent = label;
-        // Heute|Morgen jetzt HINTER der grossen Zahl (statt einer eigenen Zeile darunter) - macht
-        // die Kachel spuerbar kompakter. Ohne Einheit (siehe formatEinsatzplanValue) - die steht ja
-        // schon einmal an der grossen Zahl, "12,3 Cent/kWh (11,0 | 13,5)" statt sie noch zweimal zu
-        // wiederholen.
+        // Kompakte Kachel: grosse Hauptzahl OHNE Einheit, dahinter klein die Heute|Morgen-Werte in
+        // Klammern, dahinter klein die Einheit - "47 (2 | 30) kWh" statt vorher "47 kWh (2 | 30)"
+        // (Einheit doppelt so gross wie noetig mitgezogen) bzw. noch frueher einer eigenen Zeile
+        // darunter.
         const valueRow = document.createElement('div');
         valueRow.className = 'einsatzplanStatValueRow';
         const valueEl = document.createElement('span');
         valueEl.className = 'einsatzplanStatValue';
-        valueEl.textContent = formatEinsatzplanValue(einsatzplan[key], unit, decimals);
+        valueEl.textContent = formatEinsatzplanValue(einsatzplan[key], null, decimals);
         const subEl = document.createElement('span');
         subEl.className = 'einsatzplanStatSub';
         subEl.textContent = `(${formatEinsatzplanValue(heute[key], null, decimals)} | ${formatEinsatzplanValue(morgen[key], null, decimals)})`;
+        const unitEl = document.createElement('span');
+        unitEl.className = 'einsatzplanStatUnit';
+        unitEl.textContent = unit;
         valueRow.appendChild(valueEl);
         valueRow.appendChild(subEl);
+        valueRow.appendChild(unitEl);
         stat.appendChild(labelEl);
         stat.appendChild(valueRow);
         grid.appendChild(stat);
@@ -3194,21 +3198,34 @@ function buildEinsatzplanCard(einsatzplan) {
 
     const legend = document.createElement('div');
     legend.className = 'einsatzplanLegend';
-    legend.textContent = `(berechnet um ${formatShyftTime(einsatzplan.creation_date)} Uhr, Kennzahlen jeweils über die nächsten ${einsatzplan.hours} Stunden. Dahinter: Restliche Stunden heute | morgen)`;
+    legend.textContent = `Berechnet um ${formatShyftTime(einsatzplan.creation_date)} Uhr, Kennzahlen jeweils für die nächsten ${einsatzplan.hours} Stunden (bzw. in Klammern für die restlichen heutigen Stunden | für morgen).`;
+    if (optimizerRunning) {
+        const running = document.createElement('span');
+        running.className = 'einsatzplanLegendRunning';
+        running.textContent = ' Neue Optimierung läuft…';
+        legend.appendChild(running);
+    }
     card.appendChild(legend);
 
     return card;
 }
 
-function formatPvEnergySummary(labels, values) {
+// Restliche/volle PV-Ertrag pro Kalendertag (lokale Zeit), summiert aus den stuendlichen kW-Werten
+// (ein kW-Wert ueber eine Stunde ist per Definition eine kWh). "Heute" zaehlt nur noch nicht
+// vergangene Stunden. Wird direkt IN buildPvForecastActualChart eingezeichnet (neben der
+// "Jetzt"-Linie bzw. der jeweiligen Tagesgrenze), nicht mehr als eigener Text unter dem Chart -
+// stand dort vorher ohne erkennbaren Bezug zum Chart direkt neben der (inhaltlich anderen)
+// Einsatzplan-Karte und wurde faelschlich fuer deren "Stromverbrauch"-Kennzahl gehalten.
+//
+// Nur Heute/Morgen - "Übermorgen" wird bewusst nicht ausgewiesen, das 48h-Fenster deckt diesen
+// Tag ohnehin nie vollstaendig ab (siehe reachedZeroInEvening-Kommentar unten), die Summe wirkte
+// dadurch irrefuehrend unvollstaendig.
+function computePvEnergySummary(labels, values) {
     const PV_ZERO_THRESHOLD_KW = 0.05;
     const PV_COMPLETE_CHECK_FROM_HOUR = 17;
     const now = new Date();
     const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
     const currentHourStart = new Date(now.getFullYear(), now.getMonth(), now.getDate(), now.getHours());
-    // Nur Heute/Morgen - "Übermorgen" wird bewusst nicht ausgewiesen, das 48h-Fenster deckt diesen
-    // Tag ohnehin nie vollstaendig ab (siehe reachedZeroInEvening-Kommentar oben), die Summe wirkte
-    // dadurch irrefuehrend unvollstaendig.
     const dayLabels = ['Heute', 'Morgen'];
     const sums = [0, 0];
     const hasData = [false, false];
@@ -3227,13 +3244,15 @@ function formatPvEnergySummary(labels, values) {
         }
     }
 
-    const parts = [];
+    // offset 0 = Heute (neben der "Jetzt"-Linie), offset 1 = Morgen (neben der 1. Tagesgrenze) -
+    // der Aufrufer (buildPvForecastActualChart) ordnet ueber offset den passenden x-Koordinaten zu.
+    const result = [];
     for (let offset = 0; offset < 2; offset++) {
         if (!hasData[offset]) continue;
         if (offset > 0 && !reachedZeroInEvening[offset]) continue;
-        parts.push(`${dayLabels[offset]}: ${Math.round(sums[offset])} kWh`);
+        result.push({offset, label: dayLabels[offset], kwh: Math.round(sums[offset])});
     }
-    return parts.join(' | ');
+    return result;
 }
 
 // Renders one hourly time series as an interactive inline SVG line chart (no charting library).
@@ -3599,7 +3618,11 @@ function buildPvForecastActualChart(labels, forecast, actual) {
         nowMarkup = `<line x1="${x}" y1="${paddingTop}" x2="${x}" y2="${baseline.toFixed(1)}" stroke="var(--color-text)" stroke-width="1" stroke-dasharray="2,3" opacity="0.6" />`;
     }
 
+    // dayBoundaryXs[0] = x der ERSTEN Tagesgrenze (Start "Morgen"), [1] = der zweiten (Start
+    // "Uebermorgen", aktuell ungenutzt, computePvEnergySummary liefert dafuer keinen Wert) usw. -
+    // offset in computePvEnergySummary ist 1-basiert dazu (offset 1 -> dayBoundaryXs[0]).
     let dayBoundaryMarkup = '';
+    const dayBoundaryXs = [];
     for (let i = 1; i < labels.length; i++) {
         const prevDate = new Date(labels[i - 1]);
         const curDate = new Date(labels[i]);
@@ -3608,7 +3631,32 @@ function buildPvForecastActualChart(labels, forecast, actual) {
             const dateText = curDate.toLocaleDateString('de-DE', {day: '2-digit', month: '2-digit'});
             dayBoundaryMarkup += `<line x1="${x}" y1="${paddingTop}" x2="${x}" y2="${baseline.toFixed(1)}" stroke="var(--color-text-secondary)" stroke-width="1.5" stroke-dasharray="4,3" />`;
             dayBoundaryMarkup += `<text x="${x}" y="${paddingTop - 4}" fill="var(--color-text)" font-weight="700" text-anchor="middle">${dateText}</text>`;
+            dayBoundaryXs.push(parseFloat(x));
         }
+    }
+
+    // PV-Ertrag Heute/Morgen (siehe computePvEnergySummary) direkt im Chart neben der jeweiligen
+    // Linie eingezeichnet, statt als separater Text unter dem Chart (frueher dort ohne erkennbaren
+    // Bezug, wurde faelschlich fuer die "Stromverbrauch"-Kennzahl der Einsatzplan-Karte gehalten).
+    // "Heute" rechts neben der "Jetzt"-Linie, "Morgen" rechts neben der 1. Tagesgrenze. Liegt "Jetzt"
+    // (z.B. spaetabends) dicht vor der naechsten Tagesgrenze, ruecken beide Markierungen x-maessig
+    // so nah zusammen, dass sich ihr Text ueberlappen wuerde - dann rutscht die zweite stattdessen
+    // eine Zeile tiefer statt sie einfach uebereinander zu schreiben.
+    const PV_SUMMARY_MIN_X_GAP = 70;
+    let pvSummaryMarkup = '';
+    const placedPvSummaryXs = [];
+    for (const {offset, label, kwh} of computePvEnergySummary(labels, forecast)) {
+        let x = null;
+        if (offset === 0) {
+            if (nowMarkup) x = xFor(lastActualIndex);
+        } else {
+            x = dayBoundaryXs[offset - 1];
+        }
+        if (x === null || x === undefined) continue;
+        const overlapsPrevious = placedPvSummaryXs.some(prevX => Math.abs(prevX - x) < PV_SUMMARY_MIN_X_GAP);
+        const y = paddingTop + 14 + (overlapsPrevious ? 14 : 0);
+        pvSummaryMarkup += `<text x="${(x + 8).toFixed(1)}" y="${y.toFixed(1)}" fill="var(--color-text)" font-weight="700">${label}: ${kwh} kWh</text>`;
+        placedPvSummaryXs.push(x);
     }
 
     const chartContainer = document.createElement('div');
@@ -3621,6 +3669,7 @@ function buildPvForecastActualChart(labels, forecast, actual) {
             ${forecastPath}
             ${actualPath}
             ${dayBoundaryMarkup}
+            ${pvSummaryMarkup}
             ${yLabels}
             ${xLabels}
         </svg>`;
@@ -4695,14 +4744,7 @@ async function loadDashboard() {
             container.appendChild(buildLineChart('PV-Leistung', 'kW', data.labels, data.pv_generation, {minY: 0}));
         }
         if (data.einsatzplan) {
-            container.appendChild(buildEinsatzplanCard(data.einsatzplan));
-        }
-        const pvEnergySummaryText = formatPvEnergySummary(data.labels, data.pv_generation);
-        if (pvEnergySummaryText) {
-            const pvEnergySummary = document.createElement('div');
-            pvEnergySummary.className = 'dashboardPvEnergySummary';
-            pvEnergySummary.textContent = pvEnergySummaryText;
-            container.appendChild(pvEnergySummary);
+            container.appendChild(buildEinsatzplanCard(data.einsatzplan, data.optimizer_running));
         }
         container.appendChild(buildLineChart('Raumtemperatur', '°C', data.output_labels, data.t_i_target, {
             subtitle: 'Ziel',

@@ -232,6 +232,24 @@ def maybe_create_real_account(old_integration_mappings, new_integration_mappings
     except Exception as e:
         print("[Shyft] Zugangstoken nach automatischer Konto-Erstellung konnte nicht gespeichert werden:", repr(e))
 
+# Zeitpunkt (UTC) des letzten update_site_addon-Sends - fuer die "Neue Optimierung laeuft..."-Anzeige
+# im Dashboard (siehe _optimizer_result_pending / readDashboardChartData). Nur In-Memory: nach einem
+# Addon-Neustart ist eine evtl. laufende Optimierung ohnehin nicht mehr sinnvoll anzeigbar.
+_last_site_data_submit = {"at": None}
+
+
+def _optimizer_result_pending(cached_creation_date_ms):
+    "True, solange nach dem letzten Send noch auf ein frisches Optimierungsergebnis gewartet wird (innerhalb des Nachfrage-Fensters und der Cache noch aelter als der Absendezeitpunkt)."
+    submitted = _last_site_data_submit["at"]
+    if submitted is None:
+        return False
+    if datetime.now(timezone.utc) - submitted > timedelta(minutes=OPTIMIZER_WAIT_POLL_DELAYS_MINUTES[-1] + 3):
+        return False  # Nachfrage-Fenster abgelaufen - es kommt nichts mehr
+    if cached_creation_date_ms and datetime.fromtimestamp(cached_creation_date_ms / 1000, tz=timezone.utc) >= submitted:
+        return False  # das gecachte Ergebnis ist bereits neuer als der letzte Send
+    return True
+
+
 def sync_site_data(optimizer_period_override=None, _wait_attempt=1):
     """Hourly addon->Bubble sync (also the manual 'Verbindung testen' trigger): builds the
     consolidated staticConfig+liveValues+EV-forecast JSON and sends it via update_site_addon -
@@ -275,6 +293,7 @@ def sync_site_data(optimizer_period_override=None, _wait_attempt=1):
         print("[Shyft] Wetter-/PV-Prognosefelder konnten nicht gebaut werden:", repr(e))
     submitted_at = datetime.now(timezone.utc)
     result = shyft_adapter.send_site_data(payload, weather_fields)
+    _last_site_data_submit["at"] = submitted_at
     try:
         schedule_optimizer_result_wait(submitted_at, optimizer_period, attempt=_wait_attempt)
     except Exception as e:
@@ -395,6 +414,7 @@ def readDashboardChartData():
         "soc_b": soc_b,
         "soc_ev": soc_ev,
         "einsatzplan": einsatzplan,
+        "optimizer_running": _optimizer_result_pending(creation_date_ms),
     })
 
 

@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.0.44.63
+
+* Einsatzplan-Karte: Beschriftung umformuliert („Berechnet um … Uhr, Kennzahlen jeweils für die nächsten 48 Stunden (bzw. in Klammern für die restlichen heutigen Stunden | für morgen).") und ein dezent pulsierendes **„Neue Optimierung läuft…"** ergänzt, solange nach einem Sync noch auf ein frisches Optimierungsergebnis gewartet wird (`optimizer_running` in `/dashboard/chart-data`, aus dem letzten `update_site_addon`-Absendezeitpunkt vs. `creation_date` des gecachten Laufs bzw. dem Ablauf des Nachfrage-Fensters).
+
 ## 0.0.44.62
 
 * PV-/Wetterprognose an die Site: statt `optimizationPeriodsSite` Stunden werden jetzt **`optimizationPeriodsSite + 24`** Stunden gesendet (`Temperature` / `PV Prediction` / `Datetime Weather`). Ein Optimierungslauf startet an der aktuellen Stunde, nicht um Mitternacht - mit nur `optimizationPeriodsSite` Stunden ab heute 0:00 fehlte dem Optimizer sonst das letzte Stück seines Horizonts (er hält dann den letzten Wert konstant, im `input_csv` z.B. als über Stunden gleichbleibende Temperatur sichtbar). open-meteo-Abruf entsprechend auf 4 Tage Vorhersage erhöht.
