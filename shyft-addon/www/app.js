@@ -3618,11 +3618,7 @@ function buildPvForecastActualChart(labels, forecast, actual) {
         nowMarkup = `<line x1="${x}" y1="${paddingTop}" x2="${x}" y2="${baseline.toFixed(1)}" stroke="var(--color-text)" stroke-width="1" stroke-dasharray="2,3" opacity="0.6" />`;
     }
 
-    // dayBoundaryXs[0] = x der ERSTEN Tagesgrenze (Start "Morgen"), [1] = der zweiten (Start
-    // "Uebermorgen", aktuell ungenutzt, computePvEnergySummary liefert dafuer keinen Wert) usw. -
-    // offset in computePvEnergySummary ist 1-basiert dazu (offset 1 -> dayBoundaryXs[0]).
     let dayBoundaryMarkup = '';
-    const dayBoundaryXs = [];
     for (let i = 1; i < labels.length; i++) {
         const prevDate = new Date(labels[i - 1]);
         const curDate = new Date(labels[i]);
@@ -3631,32 +3627,7 @@ function buildPvForecastActualChart(labels, forecast, actual) {
             const dateText = curDate.toLocaleDateString('de-DE', {day: '2-digit', month: '2-digit'});
             dayBoundaryMarkup += `<line x1="${x}" y1="${paddingTop}" x2="${x}" y2="${baseline.toFixed(1)}" stroke="var(--color-text-secondary)" stroke-width="1.5" stroke-dasharray="4,3" />`;
             dayBoundaryMarkup += `<text x="${x}" y="${paddingTop - 4}" fill="var(--color-text)" font-weight="700" text-anchor="middle">${dateText}</text>`;
-            dayBoundaryXs.push(parseFloat(x));
         }
-    }
-
-    // PV-Ertrag Heute/Morgen (siehe computePvEnergySummary) direkt im Chart neben der jeweiligen
-    // Linie eingezeichnet, statt als separater Text unter dem Chart (frueher dort ohne erkennbaren
-    // Bezug, wurde faelschlich fuer die "Stromverbrauch"-Kennzahl der Einsatzplan-Karte gehalten).
-    // "Heute" rechts neben der "Jetzt"-Linie, "Morgen" rechts neben der 1. Tagesgrenze. Liegt "Jetzt"
-    // (z.B. spaetabends) dicht vor der naechsten Tagesgrenze, ruecken beide Markierungen x-maessig
-    // so nah zusammen, dass sich ihr Text ueberlappen wuerde - dann rutscht die zweite stattdessen
-    // eine Zeile tiefer statt sie einfach uebereinander zu schreiben.
-    const PV_SUMMARY_MIN_X_GAP = 70;
-    let pvSummaryMarkup = '';
-    const placedPvSummaryXs = [];
-    for (const {offset, label, kwh} of computePvEnergySummary(labels, forecast)) {
-        let x = null;
-        if (offset === 0) {
-            if (nowMarkup) x = xFor(lastActualIndex);
-        } else {
-            x = dayBoundaryXs[offset - 1];
-        }
-        if (x === null || x === undefined) continue;
-        const overlapsPrevious = placedPvSummaryXs.some(prevX => Math.abs(prevX - x) < PV_SUMMARY_MIN_X_GAP);
-        const y = paddingTop + 14 + (overlapsPrevious ? 14 : 0);
-        pvSummaryMarkup += `<text x="${(x + 8).toFixed(1)}" y="${y.toFixed(1)}" fill="var(--color-text)" font-weight="700">${label}: ${kwh} kWh</text>`;
-        placedPvSummaryXs.push(x);
     }
 
     const chartContainer = document.createElement('div');
@@ -3669,11 +3640,22 @@ function buildPvForecastActualChart(labels, forecast, actual) {
             ${forecastPath}
             ${actualPath}
             ${dayBoundaryMarkup}
-            ${pvSummaryMarkup}
             ${yLabels}
             ${xLabels}
         </svg>`;
     wrapper.appendChild(chartContainer);
+
+    // PV-Ertrag Heute|Morgen (siehe computePvEnergySummary) als schlichter Text UNTER diesem Chart -
+    // ein Versuch, die Werte stattdessen platzsparend IN den Chart einzuzeichnen (neben "Jetzt"-Linie/
+    // Tagesgrenze) wirkte trotz Kollisionsvermeidung nicht sauber genug. Direkt hier (statt weiter
+    // unten separat im Dashboard-Flow) verankert, damit der Bezug zu DIESEM Chart eindeutig bleibt.
+    const pvSummaryParts = computePvEnergySummary(labels, forecast).map(({label, kwh}) => `${label}: ${kwh} kWh`);
+    if (pvSummaryParts.length > 0) {
+        const pvSummary = document.createElement('div');
+        pvSummary.className = 'dashboardPvEnergySummary';
+        pvSummary.textContent = pvSummaryParts.join(' | ');
+        wrapper.appendChild(pvSummary);
+    }
 
     const tooltip = document.createElement('div');
     tooltip.className = 'dashboardChartTooltip';
@@ -4827,6 +4809,30 @@ async function refreshEnergyFlowWidget() {
 }
 
 setInterval(refreshEnergyFlowWidget, ENERGY_FLOW_REFRESH_INTERVAL_MS);
+
+// Wie refreshEnergyFlowWidget oben, nur fuer die Einsatzplan-Karte - die zeigt u.a. "Neue
+// Optimierung laeuft..." (siehe buildEinsatzplanCard/optimizer_running), einen per Definition
+// voruebergehenden Zustand. Ohne eigenen Refresh wuerde die Karte einmalig beim Seitenaufruf gebaut
+// und danach nie wieder aktualisiert - eine erst NACH dem Laden gestartete Optimierung (oder ihr
+// Abschluss) waere dann nie sichtbar, ohne die Seite manuell neu zu laden.
+async function refreshEinsatzplanCard() {
+    if (document.visibilityState !== 'visible') return;
+    const dashboardTab = document.getElementById('tab-dashboard');
+    if (!dashboardTab || !dashboardTab.classList.contains('active')) return;
+    const container = document.getElementById('dashboardBody');
+    const existing = container ? container.querySelector('.einsatzplanCard') : null;
+    if (!existing) return;
+    try {
+        const data = await getJson(insideHomeAssistant + '/dashboard/chart-data');
+        if (data.einsatzplan) {
+            existing.replaceWith(buildEinsatzplanCard(data.einsatzplan, data.optimizer_running));
+        }
+    } catch (err) {
+        console.log(err);
+    }
+}
+
+setInterval(refreshEinsatzplanCard, ENERGY_FLOW_REFRESH_INTERVAL_MS);
 
 function setupTabs() {
     const buttons = document.querySelectorAll('.tabButton');

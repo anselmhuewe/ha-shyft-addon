@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.0.44.64
+
+* PV-Ertrag Heute|Morgen (siehe 0.0.44.61-Versuch, Werte neben "Jetzt"-Linie/Tagesgrenze in den PV-Prognose-Chart einzuzeichnen) zurückgebaut: stand trotz Kollisionsvermeidung nicht sauber genug im Chart. Wieder schlichter Text, jetzt aber direkt unter dem PV-Chart selbst verankert statt lose im Dashboard-Flow (dort vorher mit der "Stromverbrauch"-Kennzahl der Einsatzplan-Karte verwechselt worden).
+* **Fix: "Neue Optimierung läuft…" aktualisierte sich nie von selbst.** Die Einsatzplan-Karte wurde nur einmal beim Laden der Dashboard-Seite gebaut - eine erst danach gestartete (oder zwischenzeitlich abgeschlossene) Optimierung blieb dadurch unsichtbar, ohne die Seite manuell neu zu laden. Die Karte aktualisiert sich jetzt wie das Energiefluss-Widget alle 30s selbst.
+
 ## 0.0.44.63
 
 * Einsatzplan-Karte: Beschriftung umformuliert („Berechnet um … Uhr, Kennzahlen jeweils für die nächsten 48 Stunden (bzw. in Klammern für die restlichen heutigen Stunden | für morgen).") und ein dezent pulsierendes **„Neue Optimierung läuft…"** ergänzt, solange nach einem Sync noch auf ein frisches Optimierungsergebnis gewartet wird (`optimizer_running` in `/dashboard/chart-data`, aus dem letzten `update_site_addon`-Absendezeitpunkt vs. `creation_date` des gecachten Laufs bzw. dem Ablauf des Nachfrage-Fensters).

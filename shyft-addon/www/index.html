@@ -815,6 +815,14 @@
         .energyFlowPulse {
             animation: energyFlowPulse 1.8s ease-in-out infinite;
         }
+        /* PV-Ertrag Heute|Morgen unter dem PV-Prognose-Chart (siehe buildPvForecastActualChart) -
+           direkt im Chart-Wrapper verankert (statt frueher lose irgendwo im Dashboard-Flow), damit
+           der Bezug zu diesem einen Chart eindeutig bleibt. */
+        .dashboardPvEnergySummary {
+            font-weight: 600;
+            color: var(--color-text);
+            margin-top: 0.6em;
+        }
         .einsatzplanCard {
             margin-bottom: 2em;
         }
