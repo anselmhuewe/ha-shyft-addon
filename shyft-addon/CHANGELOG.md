@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.0.44.61
+
+* Einleitungstext oben auf dem Konfiguration-Tab ("So richtest du das Add-on ein: ...") entfernt.
+
 ## 0.0.44.60
 
 * Einsatzplan-Kacheln kompakter: Die Heute|Morgen-Kurzwerte stehen jetzt hinter der großen Zahl in derselben Zeile statt in einer eigenen Zeile darunter - die Kacheln wirkten dadurch unnötig groß. Die Einheit (z.B. "Cent/kWh") steht dabei nur noch einmal an der großen Zahl, nicht zusätzlich bei jedem der beiden Kurzwerte.
