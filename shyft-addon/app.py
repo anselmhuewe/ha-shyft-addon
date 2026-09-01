@@ -459,7 +459,10 @@ def _compute_einsatzplan_kpis(rows, pv_values):
     if x_sum > EINSATZPLAN_ZERO_THRESHOLD:
         autarkie_pct = round(max(0.0, (x_sum - gr_sum_net) / x_sum * 100))
 
-    eigenverbrauch_pct = None
+    # Anders als bei Netzstrom-Preis/Autarkie ist "keine PV-Erzeugung" hier kein undefinierter Fall,
+    # sondern eindeutig 0% Eigenverbrauch (von nichts kann nichts selbst verbraucht worden sein) -
+    # deshalb 0 statt None/"-".
+    eigenverbrauch_pct = 0
     if pv_sum > EINSATZPLAN_ZERO_THRESHOLD:
         self_consumed = max(0.0, min(x_sum - gr_purchased_sum, pv_sum))
         eigenverbrauch_pct = round(max(0.0, min(100.0, self_consumed / pv_sum * 100)))

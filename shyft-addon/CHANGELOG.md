@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.0.44.60
+
+* Einsatzplan-Kacheln kompakter: Die Heute|Morgen-Kurzwerte stehen jetzt hinter der großen Zahl in derselben Zeile statt in einer eigenen Zeile darunter - die Kacheln wirkten dadurch unnötig groß. Die Einheit (z.B. "Cent/kWh") steht dabei nur noch einmal an der großen Zahl, nicht zusätzlich bei jedem der beiden Kurzwerte.
+* Legendentext der Einsatzplan-Karte umformuliert: "(berechnet um HH:MM Uhr, Kennzahlen jeweils über die nächsten 48 Stunden. Dahinter: Restliche Stunden heute | morgen)".
+* Fix: "Eigenverbrauch" zeigte "-" statt "0 %", wenn im betrachteten Zeitraum keine PV-Erzeugung stattfand - anders als bei Netzstrom-Preis/Autarkie ist das hier kein undefinierter Fall (von 0 kWh PV-Ertrag können auch 0% selbst verbraucht worden sein), sondern eindeutig 0.
+
 ## 0.0.44.59
 
 * PV-Prognose: **Self-Heal beim Addon-Start** – ist ein PV-Leistungssensor zugeordnet, aber noch keine `pv_calibration.json` vorhanden (z.B. weil der Sensor schon vor Einführung der PV-Prognose konfiguriert war oder die Datei verloren ging), wird das m²-Äquivalent-Profil sofort einmalig aus 7 Tagen Historie kalibriert, statt bis zum nächsten 22:00-Lauf zu warten. `pv_forecast.is_calibrated()` neu.

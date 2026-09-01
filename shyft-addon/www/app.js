@@ -3194,7 +3194,7 @@ function buildEinsatzplanCard(einsatzplan) {
 
     const legend = document.createElement('div');
     legend.className = 'einsatzplanLegend';
-    legend.textContent = `(berechnet um ${formatShyftTime(einsatzplan.creation_date)} Uhr, Kennzahlen jeweils über die nächsten ${einsatzplan.hours} Stunden bzw. restliche Stunden Heute | Morgen)`;
+    legend.textContent = `(berechnet um ${formatShyftTime(einsatzplan.creation_date)} Uhr, Kennzahlen jeweils über die nächsten ${einsatzplan.hours} Stunden. Dahinter: Restliche Stunden heute | morgen)`;
     card.appendChild(legend);
 
     return card;

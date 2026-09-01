@@ -853,6 +853,15 @@
             opacity: 0.9;
             margin-bottom: 0.4em;
         }
+        /* Heute|Morgen (.einsatzplanStatSub) steht jetzt in derselben Zeile hinter der grossen Zahl
+           statt darunter - baseline-Ausrichtung, damit die kleinere Sub-Schrift nicht mittig neben
+           der grossen Zahl "schwebt". flex-wrap fuer sehr schmale Kacheln/lange Werte. */
+        .einsatzplanStatValueRow {
+            display: flex;
+            align-items: baseline;
+            flex-wrap: wrap;
+            gap: 0.4em;
+        }
         .einsatzplanStatValue {
             font-size: 1.3em;
             font-weight: 700;
@@ -860,7 +869,6 @@
         .einsatzplanStatSub {
             font-size: 0.75em;
             opacity: 0.85;
-            margin-top: 0.3em;
         }
         .einsatzplanLegend {
             font-size: 0.75em;
