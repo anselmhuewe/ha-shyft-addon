@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.0.44.72
+
+* **Fix: EV-Ladestand wird jetzt als Bruch 0..1 an die Site geschickt statt als Prozentzahl.** Der Julia-Optimierer verrechnet `ev_soc_0` als `SOC_ev_0 * ev_b_size` zu kWh (ohne eigenes `/100`). Ein HA-SoC-Sensor mit z.B. `79` (%) ergab so `SOC_EV[1] = 79 * 90 = 7110 kWh` und verletzte die harte Nebenbedingung `SOC_EV[h] <= ev.soc_max`, sobald das Auto Fahrten hat (`ev_usage_h` nicht leer) → Modell unlösbar → alle Optimierer-Ausgaben `NaN` (`optimizer output column 'profits_net_opt' has non-numeric value 'NaN'`). `collect_live_values` teilt `EV - SOC` jetzt durch 100 (Guard auf `> 1`). Der Hausspeicher-Ladestand `B - SOC` bleibt bewusst Prozent - dessen Server-Spalte heißt `SOC_b_0_percent` und wird erst im Optimierer geteilt. Kein Server-Deployment nötig (die serverseitige Normalisierung 0.46.12.0 wurde zugunsten dieser Addon-Lösung zurückgenommen).
+
 ## 0.0.44.71
 
 * **Fehlerhinweis auf der Konfigurationsseite, wenn der Innenraumtemperatur-Sensor veraltet ist.** Aktualisiert sich der zugeordnete Sensor länger als 1 Stunde nicht, erscheint auf der Fehler-/Statuskarte `sensor_stale:<entity_id>` mit Angabe, seit wann. shyft-power rechnet solange mit der Prognose des letzten Laufs bzw. der gewünschten Mindest-Raumtemperatur statt mit dem (eingefrorenen) Messwert. Der Hinweis verschwindet automatisch, sobald der Sensor wieder aktuelle Werte liefert. (`_note_indoor_temp_staleness` in `compute_ti0_field`.)

@@ -280,6 +280,20 @@ class SyncService:
             entry = self._load_sensor_value(key, bubble_name, data)
             if entry != "":
                 live_values[entry["sensor"]] = entry["state"]
+        # shyft-power / der Julia-Optimierer erwartet den EV-Ladestand als Bruch 0..1: dort wird
+        # ev_soc_0 als SOC_ev_0 * ev_b_size zu kWh verrechnet, ohne eigenes /100. HA-SoC-Sensoren
+        # liefern Prozent (0..100) -> hier auf 0.xx bringen (Guard auf > 1, damit ein bereits als
+        # Bruch gelieferter Wert unangetastet bleibt). Der Hausspeicher-Ladestand "B - SOC" bleibt
+        # bewusst Prozent: dessen Server-Spalte heisst SOC_b_0_percent und wird erst im Optimierer
+        # durch 100 geteilt.
+        ev_soc = live_values.get("EV - SOC")
+        if ev_soc is not None:
+            try:
+                ev_soc = float(ev_soc)
+                if ev_soc > 1:
+                    live_values["EV - SOC"] = round(ev_soc / 100, 4)
+            except (TypeError, ValueError):
+                pass
         return live_values
 
     def _load_sensor_value(self, key, bubbleSensorIdentifier, data):
