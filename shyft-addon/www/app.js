@@ -1382,7 +1382,7 @@ function buildWallboxConnectionStatusMapping() {
 
 // Reine Konfigurationszahl (keine Entity-Zuordnung), gleiches Muster fuer mehrere Felder unter
 // "Auto" (Akkukapazitaet, Verbrauch/100km) - siehe buildCarBatteryCapacityField/buildCarConsumptionField.
-function buildConfigNumberField({label, tooltip, id, configKey, placeholder, step = '0.1', defaultValue = null, min = '0', max = null}) {
+function buildConfigNumberField({label, tooltip, id, configKey, placeholder, step = '0.1', defaultValue = null, min = '0', max = null, unit = ''}) {
     const wrapper = document.createElement('div');
     const table = document.createElement('table');
     const tbody = document.createElement('tbody');
@@ -1405,7 +1405,20 @@ function buildConfigNumberField({label, tooltip, id, configKey, placeholder, ste
         configData[configKey] = isNaN(parsed) ? null : parsed;
         autoSave();
     });
-    valueCell.appendChild(input);
+    if (unit) {
+        // Einheit als eigenes Suffix-Element rechts neben dem Eingabefeld (statt Teil des Werts -
+        // <input type="number"> kann selbst kein "80 %" als Wert halten), z.B. "80" [Feld] "%".
+        const fieldWrap = document.createElement('div');
+        fieldWrap.className = 'configNumberFieldWrap';
+        const unitEl = document.createElement('span');
+        unitEl.className = 'configNumberUnit';
+        unitEl.textContent = unit;
+        fieldWrap.appendChild(input);
+        fieldWrap.appendChild(unitEl);
+        valueCell.appendChild(fieldWrap);
+    } else {
+        valueCell.appendChild(input);
+    }
     row.appendChild(labelCell);
     row.appendChild(valueCell);
     tbody.appendChild(row);
@@ -1605,14 +1618,15 @@ function buildEvSocNormalField() {
 // schuetzen. 60-95%, da darunter der Nutzen fraglich waere und 100% die Grenze ohnehin sinnlos macht.
 function buildEvSocMaxPvSurplusField() {
     return buildConfigNumberField({
-        label: 'Maximaler Ladestand (PV-Überschuss)',
+        label: 'Limit PV-Überschussladen',
         tooltip: 'Setze für PV-Überschussladen einen maximalen Ladestand, um die Autobatterie zu schonen. Für geplante Strecken gilt diese Grenze nicht. Auch wird bei sehr günstigem Netzstrom vollgeladen.',
         id: 'ev_soc_max_pv_surplus',
         configKey: 'evSocMaxPvSurplus',
-        placeholder: 'z.B. 80',
+        placeholder: 'z.B. 80 %',
         min: '60',
         max: '95',
         step: '1',
+        unit: '%',
     });
 }
 

@@ -85,6 +85,22 @@
             border-color: var(--color-error);
         }
 
+        /* Einheiten-Suffix neben einem Zahlenfeld (siehe buildConfigNumberField unit-Option), z.B.
+           "80" [Feld] "%" - <input type="number"> kann die Einheit nicht selbst im Wert anzeigen. */
+        .configNumberFieldWrap {
+            display: flex;
+            align-items: center;
+            gap: 0.5em;
+        }
+        .configNumberFieldWrap .sensorInput {
+            flex: 1;
+            min-width: 0;
+        }
+        .configNumberUnit {
+            color: var(--color-text-secondary);
+            white-space: nowrap;
+        }
+
         .clearableInput {
             position: relative;
         }

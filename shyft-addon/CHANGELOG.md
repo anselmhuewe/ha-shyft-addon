@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.0.44.66
+
+* "Maximaler Ladestand (PV-Überschuss)" umbenannt in "Limit PV-Überschussladen", Platzhalter jetzt "z.B. 80 %". Zahlenfelder können jetzt optional eine Einheit als Suffix neben dem Feld anzeigen (`buildConfigNumberField`, neuer `unit`-Parameter) - der Wert selbst bleibt eine reine Zahl (`<input type="number">` kann kein "80 %" als Wert halten), die Einheit steht nur daneben.
+
 ## 0.0.44.65
 
 * **Vierter addon-berechneter Aktionstyp: "Verbraucher an"** (Sonstiger Verbraucher, `compute_od_actions`) - läuft nur, wenn ein Sonstiger-Verbraucher-Gerät konfiguriert ist. Eine Aktion entsteht, wenn `OD_Power` strikt zwischen 0,1 und 99 kW liegt (Werte ≥99 gelten als Optimierer-Artefakt und triggern nicht). Deutlich schlanker als die anderen drei Aktionstypen: kein `Target Value`/`Start Value`/`costsopt`/`Savings`/`costsbase`, da "Verbraucher an" ein reiner Ein/Aus-Schalter ist. `Energy (electr) = OD_Power`, Subtitle `"XXX kW"` (1 Nachkommastelle). Start/Ende-Steuerung war bereits generisch vorhanden (`consumer_on_off`, ein `AUTO_MANAGED_CONTROLS`-Switch-Eintrag).
