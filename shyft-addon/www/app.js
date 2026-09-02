@@ -4695,6 +4695,17 @@ function buildWeatherStrip(weather) {
     return shown ? wrap : null;
 }
 
+// Entfernt so lange die letzte Kachel, bis der Streifen ohne Scrollen in seine Breite passt - muss
+// NACH dem Einhaengen ins Dokument aufgerufen werden (vorher ist die Breite 0, nicht messbar). Statt
+// z.B. per em-Rechnung vorab zu schaetzen, wie viele Kacheln passen (fehleranfaellig bei
+// Schriftgroesse/Zoom), wird einfach so lange real gemessen/entfernt, bis kein Overflow mehr da ist -
+// robust gegen jede Bildschirmbreite, ohne dass eine Kachel am Rand angeschnitten wirkt.
+function trimWeatherStripToFit(strip) {
+    while (strip.scrollWidth > strip.clientWidth && strip.lastElementChild) {
+        strip.removeChild(strip.lastElementChild);
+    }
+}
+
 async function loadDashboard() {
     const container = document.getElementById('dashboardBody');
     if (!container) return;
@@ -4742,7 +4753,10 @@ async function loadDashboard() {
         // falls der neue Endpunkt (noch) nichts liefert (z.B. frische Installation ohne Snapshot).
         if (weather) {
             const strip = buildWeatherStrip(weather);
-            if (strip) container.appendChild(strip);
+            if (strip) {
+                container.appendChild(strip);
+                trimWeatherStripToFit(strip);
+            }
         }
         let pvChartRendered = false;
         try {

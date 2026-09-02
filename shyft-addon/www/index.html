@@ -736,10 +736,11 @@
         .weatherStrip {
             display: flex;
             gap: 0.4em;
-            overflow-x: auto;
-            -webkit-overflow-scrolling: touch;
-            scrollbar-width: thin;
-            padding-bottom: 0.4em;
+            /* Kein Scrollen mehr - trimWeatherStripToFit (app.js) entfernt ueberzaehlige Kacheln,
+               bis der Streifen ohne Ueberlauf in seine Breite passt. overflow:hidden bleibt trotzdem
+               als Sicherheitsnetz (z.B. Rundungsdifferenzen), damit nie eine Kachel am Rand
+               angeschnitten sichtbar wird. */
+            overflow: hidden;
             margin-bottom: 1.2em;
         }
         .weatherCell {

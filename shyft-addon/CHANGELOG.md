@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.0.44.69
+
+* Wetter-Streifen auf dem Dashboard scrollte horizontal, obwohl ohnehin nur ein Teil der Kacheln zu sehen war. Zeigt jetzt nur noch so viele Kacheln, wie ohne Scrollen in die Bildschirmbreite passen (`trimWeatherStripToFit` misst nach dem Einhängen real nach und entfernt überzählige Kacheln, statt die Anzahl anhand von Schriftgröße/em zu schätzen).
+
 ## 0.0.44.68
 
 * **Neues Konfigurationsfeld "Gewünschte Raumtemperatur (mindestens)"** (Wärmepumpen-Abschnitt, über "Heizungspuffer") - Dropdown mit ganzen Grad von 18-24 °C, Default 21 °C. Das ist `t_min` für die Optimierung: die Innentemperatur wird immer mindestens auf diesem Wert gehalten (und höchstens den Heizungspuffer darüber). Geht als `HP - Heating Target Temp (min)` in die staticConfig; der Server bevorzugt es vor dem bisherigen sensor-/Default-Wert (20 °C).
