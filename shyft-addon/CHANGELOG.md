@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.0.44.71
+
+* **Fehlerhinweis auf der Konfigurationsseite, wenn der Innenraumtemperatur-Sensor veraltet ist.** Aktualisiert sich der zugeordnete Sensor länger als 1 Stunde nicht, erscheint auf der Fehler-/Statuskarte `sensor_stale:<entity_id>` mit Angabe, seit wann. shyft-power rechnet solange mit der Prognose des letzten Laufs bzw. der gewünschten Mindest-Raumtemperatur statt mit dem (eingefrorenen) Messwert. Der Hinweis verschwindet automatisch, sobald der Sensor wieder aktuelle Werte liefert. (`_note_indoor_temp_staleness` in `compute_ti0_field`.)
+* **Fix: Dropdown-/Zahlenfeld-Defaults auf der Konfigurationsseite griffen nicht, wenn man das Feld nie angefasst hat.** `buildConfigSelectField`/`buildConfigNumberField` schrieben den sichtbaren Default erst beim ersten `change`-Event in `configData` - ein nie geändertes Feld wurde beim Speichern als `null` persistiert. Betraf konkret `evSocNormal` (Mindestladestand Auto): stand dauerhaft auf `null`, dadurch sendete das Add-on `EV - SOC Normal` gar nicht und der Optimierer rechnete mit `ev_soc_norm = 0` statt der vorgesehenen 10 %. Der effektive Wert wird jetzt schon beim Aufbau des Feldes festgehalten.
+
 ## 0.0.44.70
 
 * Konfigurationsseite: eingeklappte Geräte-Kacheln zeigen jetzt nur noch die Überschriftenzeile (Titel + Pfeil) - der Geräte-Dropdown blendet sich mit ein/aus statt immer sichtbar zu bleiben.

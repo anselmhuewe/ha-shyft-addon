@@ -1830,6 +1830,28 @@ def _last_output_csv_ti_raw_equivalent(t_min):
     return t_min + (ti - t_min) * 10.0
 
 
+def _note_indoor_temp_staleness(entity_id, age_seconds):
+    """Registriert/loescht das Problem 'sensor_stale:<entity_id>' fuer den Innentemperatur-Sensor
+    auf der Fehler-/Statuskarte. age_seconds=None -> HA liefert keinen Zeitstempel bzw. der Sensor
+    ist gar nicht zugeordnet/unavailable (letzteres deckt bereits 'sensor_unavailable:' ab) ->
+    hier nichts melden, nur ein evtl. offenes Stale-Problem freigeben."""
+    if not entity_id:
+        return
+    problem_id = f"sensor_stale:{entity_id}"
+    if age_seconds is not None and age_seconds > INDOOR_TEMP_STALE_SECONDS:
+        hours = age_seconds / 3600.0
+        seit = f"{hours:.0f} Stunden" if hours >= 2 else f"{age_seconds / 60:.0f} Minuten"
+        problem_registry.register(
+            problem_id,
+            f"Der Sensor fuer \"Innenraumtemperatur (gemessen)\" ({entity_id}) hat sich seit "
+            f"{seit} nicht aktualisiert. Solange rechnet shyft-power mit der Prognose des letzten "
+            f"Laufs bzw. der gewuenschten Mindest-Raumtemperatur statt mit dem Messwert - pruefe "
+            f"den Sensor bzw. die zugehoerige Integration.",
+        )
+    else:
+        problem_registry.clear(problem_id)
+
+
 def compute_ti0_field(config):
     """Fertiger T_i_0-Wert fuer den Optimierer, addon-seitig berechnet und als liveValue
     'HP - Temp Indoor T_i_0' in die Site-JSON geschrieben (der Server bevorzugt dieses Feld vor
@@ -1838,7 +1860,8 @@ def compute_ti0_field(config):
     - so bleibt das in Julia auf T_i[1] fixierte T_i_0 sicher innerhalb des Bandes; ein Rohwert
     an/ueber der Puffer-Obergrenze macht das Modell sonst infeasible -> NaN im Output.
     Rueckfall auf die Prognose des letzten Laufs, wenn der Sensor fehlt/nicht zugeordnet/aelter
-    als 1 h ist, und auf t_min selbst, wenn es keine brauchbare vorherige output.csv gibt."""
+    als 1 h ist (dann auch ein Fehlerhinweis auf der Konfigurationsseite), und auf t_min selbst,
+    wenn es keine brauchbare vorherige output.csv gibt."""
     try:
         t_min = float(config.get("hpHeatingTargetTempMin") or 21)
     except (TypeError, ValueError):
@@ -1846,6 +1869,7 @@ def compute_ti0_field(config):
     ceiling = t_min + _heating_buffer_delta(config)
 
     raw = None
+    age = None
     state = _read_mapped_entity_state(config, "heatpump_temp_indoor_measured")
     if state is not None and state.last_updated is not None:
         age = (datetime.now(timezone.utc) - state.last_updated).total_seconds()
@@ -1855,6 +1879,7 @@ def compute_ti0_field(config):
                 raw = float(value)
             except Exception:
                 raw = None
+    _note_indoor_temp_staleness(config.get("sensorMappings", {}).get("heatpump_temp_indoor_measured", ""), age)
 
     if raw is None:
         raw = _last_output_csv_ti_raw_equivalent(t_min)

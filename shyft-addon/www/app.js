@@ -516,7 +516,7 @@ async function saveConfigurationNow() {
         "wallboxMaxPhases": configData["wallboxMaxPhases"] ?? 3,
         "wallboxMaxCurrentAmps": configData["wallboxMaxCurrentAmps"] ?? 16,
         "batteryFlowSignOverride": configData["batteryFlowSignOverride"] ?? null,
-        "evSocNormal": configData["evSocNormal"] ?? null,
+        "evSocNormal": configData["evSocNormal"] ?? '10 %',
         "evSocMaxPvSurplus": configData["evSocMaxPvSurplus"] ?? null,
         // Bis 0.0.44.33 fehlten alle uebrigen "einfachen" staticConfig-Felder (Waermepumpe/Batterie/
         // Strompreise/Optimierung) hier komplett - sie wurden per change-Handler nur lokal in
@@ -1410,6 +1410,11 @@ function buildConfigNumberField({label, tooltip, id, configKey, placeholder, ste
     input.step = step;
     input.placeholder = placeholder;
     input.value = configData[configKey] ?? defaultValue ?? '';
+    // Wie bei buildConfigSelectField: einen vorhandenen Default sofort in configData festhalten,
+    // damit ein nie angefasstes Feld nicht als null gespeichert wird.
+    if ((configData[configKey] === undefined || configData[configKey] === null) && defaultValue !== null) {
+        configData[configKey] = defaultValue;
+    }
     input.addEventListener('change', () => {
         const parsed = parseFloat(input.value);
         configData[configKey] = isNaN(parsed) ? null : parsed;
@@ -1459,6 +1464,13 @@ function buildConfigSelectField({label, tooltip, id, configKey, options, default
         select.appendChild(option);
     }
     select.value = configData[configKey] ?? defaultValue ?? options[0][0];
+    // Den effektiven (Default-aufgeloesten) Wert sofort in configData festhalten, nicht erst beim
+    // ersten 'change'. Sonst wird ein nie angefasstes Dropdown beim Speichern als null/undefined
+    // geschrieben (writeConfig uebernimmt nur, was im PUT-Body steht) und der sichtbare Default
+    // greift nie - z.B. evSocNormal landete so dauerhaft als null in der Config.
+    if (configData[configKey] === undefined || configData[configKey] === null) {
+        configData[configKey] = select.value;
+    }
     select.addEventListener('change', () => {
         configData[configKey] = select.value;
         autoSave();
