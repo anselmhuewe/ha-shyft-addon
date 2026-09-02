@@ -110,6 +110,26 @@ def mask_secret(secret):
     return f"{secret[:6]}***{secret[-4:]}"
 
 
+def _safe_float(value, default=0.0):
+    """Wie float(value), aber NaN/Infinity werden wie eine fehlende/ungueltige Zahl behandelt
+    (Rueckgabe von default) statt sie durchzureichen. Der Optimierer kann fuer nicht konfigurierte
+    Geraete/Groessen Artefaktwerte wie "NaN" oder "Inf" in output_csv schreiben (beobachtet z.B. bei
+    SOC_EV ohne konfiguriertes Auto) - ein einzelner solcher Wert wuerde sonst, einmal in eine
+    JSON-Antwort eingebettet (z.B. /dashboard/chart-data), die GESAMTE Antwort clientseitig
+    unparsbar machen (Browser-JSON lehnt NaN/Infinity strikt ab, anders als Pythons json-Modul, das
+    sie anstandslos - aber nicht standardkonform - ausgibt) - dann schlaegt nicht nur diese eine
+    Kennzahl fehl, sondern das ganze Dashboard zeigt 'Diagrammdaten konnten nicht geladen werden'."""
+    if value is None or value == "":
+        return default
+    try:
+        result = float(value)
+    except (TypeError, ValueError):
+        return default
+    if math.isnan(result) or math.isinf(result):
+        return default
+    return result
+
+
 def extract_shyft_user_id(access_key):
     "The shyft_access_key is formatted as '<prefix>|<user_id>|<secret>'; the actions endpoint needs that user_id as a separate parameter"
     parts = (access_key or "").split("|")
@@ -377,9 +397,9 @@ def readDashboardChartData():
         temperature = []
         for i, row in enumerate(rows):
             labels.append((start + timedelta(hours=i)).isoformat())
-            pv_generation.append(float(row.get("PV_generation") or 0))
-            p_buy.append(float(row.get("p_buy") or 0))
-            temperature.append(float(row.get("Temperature") or 0))
+            pv_generation.append(_safe_float(row.get("PV_generation")))
+            p_buy.append(_safe_float(row.get("p_buy")))
+            temperature.append(_safe_float(row.get("Temperature")))
     except Exception as e:
         return jsonify({"status": "error", "message": f"input_csv konnte nicht gelesen werden: {e}"})
 
@@ -392,10 +412,10 @@ def readDashboardChartData():
             output_rows = list(csv.DictReader(io.StringIO(output_csv)))
             for i, row in enumerate(output_rows):
                 output_labels.append((start + timedelta(hours=i)).isoformat())
-                t_i_target.append(float(row.get("T_i_Target") or 0))
-                t_hw.append(float(row.get("T_HW") or 0))
-                soc_b.append(float(row.get("SOC_B") or 0))
-                soc_ev.append(float(row.get("SOC_EV") or 0))
+                t_i_target.append(_safe_float(row.get("T_i_Target")))
+                t_hw.append(_safe_float(row.get("T_HW")))
+                soc_b.append(_safe_float(row.get("SOC_B")))
+                soc_ev.append(_safe_float(row.get("SOC_EV")))
         except Exception as e:
             print("[Shyft] output_csv konnte nicht gelesen werden:", repr(e))
             output_rows = []
@@ -460,7 +480,7 @@ def _compute_einsatzplan_kpis(rows, pv_values):
         total = 0.0
         for row in rows:
             try:
-                value = float(row.get(name) or 0)
+                value = _safe_float(row.get(name))
             except (TypeError, ValueError):
                 continue
             if clamp_non_negative:
@@ -556,7 +576,7 @@ def _read_future_pv_forecast_by_hour():
     result = {}
     for i, row in enumerate(rows):
         hour_local = _hour_floor((start_utc + timedelta(hours=i)).astimezone())
-        result[hour_local] = float(row.get("PV_generation") or 0)
+        result[hour_local] = _safe_float(row.get("PV_generation"))
     return result
 
 
@@ -1883,7 +1903,7 @@ def _read_current_price_info():
     if index < 0 or index >= len(rows):
         return None
     try:
-        price_cent = round(float(rows[index].get("p_buy") or 0) * 100, 1)
+        price_cent = round(_safe_float(rows[index].get("p_buy")) * 100, 1)
     except (TypeError, ValueError):
         return None
     if price_cent > PRICE_HIGH_THRESHOLD_CENT:
@@ -1927,7 +1947,7 @@ def compute_wb_p_min():
         if i < current_index:
             continue  # Stunden vor "jetzt" ausschliessen
         try:
-            upcoming_prices.append(float(row.get("p_buy") or 0))
+            upcoming_prices.append(_safe_float(row.get("p_buy")))
         except (TypeError, ValueError):
             continue
     if not upcoming_prices:
@@ -2987,19 +3007,19 @@ def _is_ev_wallbox_configured(config):
 
 def _hourly_average_price(output_row, input_row):
     "Durchschnittspreis (EUR/kWh, wie p_buy/p_sell) der Gesamt-Stromkosten dieser Stunde: Netzstromanteil (GR_sum) zu p_buy, PV-Eigenverbrauchsanteil (X_sum - GR_sum) zu p_sell (Opportunitaetskosten - was man sich durch Nicht-Einspeisen entgehen laesst)."
-    x_sum = float(output_row.get("X_sum") or 0)
+    x_sum = _safe_float(output_row.get("X_sum"))
     if x_sum <= 0:
         return 0.0
-    gr_sum = float(output_row.get("GR_sum") or 0)
-    p_buy = float((input_row or {}).get("p_buy") or 0)
-    p_sell = float((input_row or {}).get("p_sell") or 0)
+    gr_sum = _safe_float(output_row.get("GR_sum"))
+    p_buy = _safe_float((input_row or {}).get("p_buy"))
+    p_sell = _safe_float((input_row or {}).get("p_sell"))
     pv_used = max(0.0, x_sum - gr_sum)
     return (gr_sum * p_buy + pv_used * p_sell) / x_sum
 
 
 def _is_ev_pv_surplus(output_row):
-    pv_gr = float(output_row.get("PV_GR") or 0)
-    b_ev = float(output_row.get("B_EV") or 0)
+    pv_gr = _safe_float(output_row.get("PV_GR"))
+    b_ev = _safe_float(output_row.get("B_EV"))
     return pv_gr < EV_PV_SURPLUS_PV_GR_MAX_KW and b_ev < EV_PV_SURPLUS_B_EV_MAX_KW
 
 
@@ -3029,12 +3049,12 @@ def compute_ev_charge_actions(config, output_rows, input_rows, start, optimizer_
         input_row = input_rows[i] if i < len(input_rows) else {}
         is_current_hour = (i == 0)
 
-        ev_sum = float(output_row.get("EV_sum") or 0)
+        ev_sum = _safe_float(output_row.get("EV_sum"))
         if ev_sum <= EV_SUM_TRIGGER_KW:
             continue
 
         pv_surplus = _is_ev_pv_surplus(output_row)
-        soc_now = float(output_row.get("SOC_EV") or 0)  # bereits 0-100 skaliert, wie im Dashboard-Chart
+        soc_now = _safe_float(output_row.get("SOC_EV"))  # bereits 0-100 skaliert, wie im Dashboard-Chart
 
         if is_current_hour and pv_surplus:
             max_soc_pct = config.get("evSocMaxPvSurplus")
@@ -3084,7 +3104,7 @@ def compute_ev_charge_actions(config, output_rows, input_rows, start, optimizer_
             # PV Surplus/PV Sum Forecast: fuer die Zielwert-Korrektur im tatsaechlichen Startmoment
             # (siehe _apply_ev_pv_surplus_start_correction) - EV_sum liegt bereits in "Energy (electr)".
             action["PV Surplus"] = True
-            action["PV Sum Forecast"] = float(output_row.get("PV_sum_44") or 0)
+            action["PV Sum Forecast"] = _safe_float(output_row.get("PV_sum_44"))
             timestamp = datetime.now().strftime("%d.%m. %H:%M Uhr")
             action["Log"] = f"{timestamp}: geplant mit {target_value:.1f} kW (PV-Überschuss, Korrektur folgt beim Start)"
         result[i] = action
@@ -3156,12 +3176,12 @@ def compute_dhw_actions(config, output_rows, input_rows, start, optimizer_run_id
         input_row = input_rows[i] if i < len(input_rows) else {}
         is_current_hour = (i == 0)
 
-        hp_hw = float(output_row.get("HP_HW") or 0)
+        hp_hw = _safe_float(output_row.get("HP_HW"))
         if hp_hw < HP_HW_TRIGGER_KW:
             continue
 
         hour_start = start + timedelta(hours=i)
-        t_hw = float(output_row.get("T_HW") or 0)
+        t_hw = _safe_float(output_row.get("T_HW"))
         next_row = output_rows[i + 1] if i + 1 < len(output_rows) else output_row
         target_t_hw = float(next_row.get("T_HW") or t_hw)
         avg_price = _hourly_average_price(output_row, input_row)
@@ -3225,13 +3245,13 @@ def compute_heizung_actions(config, output_rows, input_rows, start, optimizer_ru
         input_row = input_rows[i] if i < len(input_rows) else {}
         is_current_hour = (i == 0)
 
-        t_i_target = float(output_row.get("T_i_Target") or 0)
+        t_i_target = _safe_float(output_row.get("T_i_Target"))
         if round(t_i_target) == round(current_target):
             continue
 
         hour_start = start + timedelta(hours=i)
-        t_i = float(output_row.get("T_i") or 0)
-        hp_fh = float(output_row.get("HP_FH") or 0)
+        t_i = _safe_float(output_row.get("T_i"))
+        hp_fh = _safe_float(output_row.get("HP_FH"))
         avg_price = _hourly_average_price(output_row, input_row)
         target_value = round(t_i_target)
 
@@ -3297,7 +3317,7 @@ def compute_od_actions(config, output_rows, input_rows, start, optimizer_run_id)
         output_row = output_rows[i]
         is_current_hour = (i == 0)
 
-        od_power = float(output_row.get("OD_Power") or 0)
+        od_power = _safe_float(output_row.get("OD_Power"))
         if not (OD_POWER_MIN_KW < od_power < OD_POWER_MAX_KW):
             continue
 
@@ -3633,7 +3653,7 @@ def _maybe_freeze_pv_forecast_snapshot(input_csv, creation_date_ms):
         if row_dt_utc.astimezone().date().isoformat() != today_local:
             continue
         labels.append(row_dt_utc.isoformat())
-        pv_generation.append(float(row.get("PV_generation") or 0))
+        pv_generation.append(_safe_float(row.get("PV_generation")))
     if not labels:
         return  # Prognose deckt "heute" (noch) gar nicht ab - naechster Sync versucht es erneut
 

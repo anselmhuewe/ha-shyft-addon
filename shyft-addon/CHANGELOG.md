@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.0.44.67
+
+* **Fix: Dashboard zeigte "Diagrammdaten konnten nicht geladen werden".** Ursache: der Optimierer kann für nicht (vollständig) konfigurierte Geräte/Größen `"NaN"`/`"Inf"`-Artefaktwerte in `output_csv` schreiben (z.B. bei `SOC_EV` ohne konfiguriertes Auto) - ein einziger solcher Wert, einmal in die `/dashboard/chart-data`-JSON-Antwort eingebettet, machte die **gesamte** Antwort clientseitig unparsbar (Browser-JSON lehnt `NaN`/`Infinity` strikt ab, anders als Pythons `json`-Modul, das sie anstandslos aber nicht-standardkonform ausgibt) - dann schlägt nicht nur eine Kennzahl fehl, sondern das komplette Dashboard.
+  * Neue `_safe_float()`-Hilfsfunktion (Ersatz für alle `float(x or 0)`-Stellen, 27 Fundstellen) - NaN/Infinity werden wie ein fehlender Wert behandelt (Default 0.0) statt durchgereicht zu werden. Betrifft sowohl die Dashboard-Chart-Daten als auch alle vier Aktionsberechnungen (Auto laden, Warmwasser, Heizung, Verbraucher an), die potenziell dieselben Optimierer-Artefakte lesen.
+
 ## 0.0.44.66
 
 * "Maximaler Ladestand (PV-Überschuss)" umbenannt in "Limit PV-Überschussladen", Platzhalter jetzt "z.B. 80 %". Zahlenfelder können jetzt optional eine Einheit als Suffix neben dem Feld anzeigen (`buildConfigNumberField`, neuer `unit`-Parameter) - der Wert selbst bleibt eine reine Zahl (`<input type="number">` kann kein "80 %" als Wert halten), die Einheit steht nur daneben.
