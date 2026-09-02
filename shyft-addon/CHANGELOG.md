@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.0.44.68
+
+* **Neues Konfigurationsfeld "Gewünschte Raumtemperatur (mindestens)"** (Wärmepumpen-Abschnitt, über "Heizungspuffer") - Dropdown mit ganzen Grad von 18-24 °C, Default 21 °C. Das ist `t_min` für die Optimierung: die Innentemperatur wird immer mindestens auf diesem Wert gehalten (und höchstens den Heizungspuffer darüber). Geht als `HP - Heating Target Temp (min)` in die staticConfig; der Server bevorzugt es vor dem bisherigen sensor-/Default-Wert (20 °C).
+* **T_i_0 wird jetzt addon-seitig aufbereitet** und als neues liveValue `HP - Temp Indoor T_i_0` an die Site geschrieben (der Rohwert `HP - Temp Indoor measured` bleibt unverändert für Anzeige/Debug erhalten). Die Abweichung der gemessenen Innentemperatur von `t_min` wird durch 10 gedämpft und auf `[t_min, t_min + Heizungspuffer]` geklemmt. Hintergrund: ein Rohwert an oder über der Puffer-Obergrenze nagelt die in Julia auf `T_i[1]` fixierte Starttemperatur ohne Spielraum an eine harte Schranke - das Modell wird dann unlösbar und liefert eine reine `NaN`-Ausgabe, an der der ganze Lauf scheitert ("Character N is neither a decimal digit…").
+  * **Fallback**, wenn der Innentemperatur-Sensor fehlt, nicht zugeordnet oder älter als 1 h ist: die vom letzten Lauf für die aktuelle Stunde prognostizierte `T_i` aus der letzten `output.csv` (auf den Rohwert zurückgerechnet und durch dieselbe Klemm-/Dämpfungs-Pipeline geschickt). Gibt es keine brauchbare vorherige `output.csv`, wird `t_min` gesendet.
+* Erfordert das zugehörige Server-Deployment (shyft 0.46.11.0), das die beiden neuen Site-Felder liest.
+
 ## 0.0.44.67
 
 * **Fix: Dashboard zeigte "Diagrammdaten konnten nicht geladen werden".** Ursache: der Optimierer kann für nicht (vollständig) konfigurierte Geräte/Größen `"NaN"`/`"Inf"`-Artefaktwerte in `output_csv` schreiben (z.B. bei `SOC_EV` ohne konfiguriertes Auto) - ein einziger solcher Wert, einmal in die `/dashboard/chart-data`-JSON-Antwort eingebettet, machte die **gesamte** Antwort clientseitig unparsbar (Browser-JSON lehnt `NaN`/`Infinity` strikt ab, anders als Pythons `json`-Modul, das sie anstandslos aber nicht-standardkonform ausgibt) - dann schlägt nicht nur eine Kennzahl fehl, sondern das komplette Dashboard.

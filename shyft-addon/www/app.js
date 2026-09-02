@@ -530,6 +530,7 @@ async function saveConfigurationNow() {
         "hpDhwTankSize": configData["hpDhwTankSize"] ?? 'klein (200 Liter)',
         "hpMaxPower": configData["hpMaxPower"] ?? 'mittel (6 kW)',
         "hpMaxSupplyTempC": configData["hpMaxSupplyTempC"] ?? 55,
+        "hpHeatingTargetTempMin": configData["hpHeatingTargetTempMin"] ?? '21',
         "hpHeatingBuffer": configData["hpHeatingBuffer"] ?? 'mittel__0.2',
         "hpHeatingCurveLevel": configData["hpHeatingCurveLevel"] ?? 0,
         "hpHeatingCurveSlope": configData["hpHeatingCurveSlope"] ?? 1.2,
@@ -1253,6 +1254,7 @@ function renderSectionBody(bodyDiv, section, entryIds) {
             bodyDiv.appendChild(buildHpDhwTankSizeField());
             bodyDiv.appendChild(buildHpMaxPowerField());
             bodyDiv.appendChild(buildHpMaxSupplyTempField());
+            bodyDiv.appendChild(buildHpHeatingTargetTempMinField());
             bodyDiv.appendChild(buildHpHeatingBufferField());
             bodyDiv.appendChild(buildHpHeatingCurveLevelField());
             bodyDiv.appendChild(buildHpHeatingCurveSlopeField());
@@ -1525,6 +1527,22 @@ function buildHpTypeField() {
         configKey: 'hpType',
         options: [['Air-Air', 'Luft-Luft'], ['Air-Water', 'Luft-Wasser'], ['Brine-Water', 'Sole-Wasser']],
         defaultValue: 'Air-Water',
+    });
+}
+
+// Untergrenze fuer die Innentemperatur (= T_i_min in der Optimierung, eigene CSV-Spalte). Dient
+// ausserdem als Referenzpunkt fuer die addon-seitige T_i_0-Kompression und -Klemmung (siehe
+// compute_ti0_field in app.py): die gemessene Temperatur wird auf [t_min, t_min+Puffer] gehalten,
+// sonst kann der Julia-Optimierer bei einem Rohwert an/ueber der Puffer-Obergrenze infeasible
+// werden und NaN ausgeben.
+function buildHpHeatingTargetTempMinField() {
+    return buildConfigSelectField({
+        label: 'Gewünschte Raumtemperatur (mindestens)',
+        tooltip: 'Untergrenze für die Raumtemperatur. Die Optimierung hält die Innentemperatur immer mindestens auf diesem Wert (und höchstens den Heizungspuffer darüber).',
+        id: 'hp_heating_target_temp_min',
+        configKey: 'hpHeatingTargetTempMin',
+        options: [18, 19, 20, 21, 22, 23, 24].map(v => [String(v), `${v} °C`]),
+        defaultValue: '21',
     });
 }
 

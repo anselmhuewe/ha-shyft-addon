@@ -297,6 +297,10 @@ def sync_site_data(optimizer_period_override=None, _wait_attempt=1):
     wb_p_min = compute_wb_p_min()
     if wb_p_min is not None:
         live_values["WB - p_min"] = wb_p_min
+    try:
+        live_values["HP - Temp Indoor T_i_0"] = compute_ti0_field(config)
+    except Exception as e:
+        print("[Shyft] T_i_0-Feld konnte nicht berechnet werden:", repr(e))
     payload = json.dumps({"staticConfig": static_config, "liveValues": live_values})
     try:
         _update_input_csv_health(config, live_values)
@@ -1780,6 +1784,87 @@ def _read_mapped_last_updated_iso(config, sensor_key):
     if state is None or state.last_updated is None:
         return None
     return state.last_updated.isoformat()
+
+
+INDOOR_TEMP_STALE_SECONDS = 3600
+
+
+def _heating_buffer_delta(config):
+    "Numerischer Puffer-Faktor aus dem 'name__zahl'-Wert von hpHeatingBuffer (z.B. 'mittel__0.2' -> 0.2)."
+    raw = config.get("hpHeatingBuffer") or "mittel__0.2"
+    try:
+        return float(str(raw).split("__", 1)[1])
+    except (IndexError, ValueError):
+        return 0.2
+
+
+def _last_output_csv_ti_raw_equivalent(t_min):
+    """Fallback-Quelle fuer T_i_0: die vom letzten Optimierungslauf fuer die aktuelle Stunde
+    prognostizierte Innentemperatur (output.csv-Spalte 'T_i'). Diese Spalte liegt bereits im
+    komprimierten Raum (Abweichung von t_min durch 10 geteilt, durch die Julia-Constraints auf
+    [t_min, t_min+Puffer] begrenzt) - hier auf den Sensor-Rohwert zurueckgerechnet, damit die
+    Pipeline in compute_ti0_field einheitlich greift. None, wenn keine brauchbare output.csv."""
+    try:
+        with open(DASHBOARD_CACHE_PATH, "r") as f:
+            cache = json.load(f)
+    except Exception:
+        return None
+    output_csv = cache.get("output_csv")
+    creation_date_ms = cache.get("creation_date")
+    if not output_csv or creation_date_ms is None:
+        return None
+    start = datetime.fromtimestamp(creation_date_ms / 1000, tz=timezone.utc).replace(minute=0, second=0, microsecond=0)
+    now_hour = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
+    idx = int((now_hour - start).total_seconds() // 3600)
+    if idx < 0:
+        return None
+    try:
+        rows = list(csv.DictReader(io.StringIO(output_csv)))
+    except Exception:
+        return None
+    if idx >= len(rows):
+        return None
+    ti = _safe_float(rows[idx].get("T_i"), default=None)
+    if ti is None:
+        return None
+    return t_min + (ti - t_min) * 10.0
+
+
+def compute_ti0_field(config):
+    """Fertiger T_i_0-Wert fuer den Optimierer, addon-seitig berechnet und als liveValue
+    'HP - Temp Indoor T_i_0' in die Site-JSON geschrieben (der Server bevorzugt dieses Feld vor
+    dem Rohwert 'HP - Temp Indoor measured'). Die Abweichung der gemessenen Innentemperatur von
+    der konfigurierten Untergrenze wird durch 10 gedaempft und auf [t_min, t_min+Puffer] geklemmt
+    - so bleibt das in Julia auf T_i[1] fixierte T_i_0 sicher innerhalb des Bandes; ein Rohwert
+    an/ueber der Puffer-Obergrenze macht das Modell sonst infeasible -> NaN im Output.
+    Rueckfall auf die Prognose des letzten Laufs, wenn der Sensor fehlt/nicht zugeordnet/aelter
+    als 1 h ist, und auf t_min selbst, wenn es keine brauchbare vorherige output.csv gibt."""
+    try:
+        t_min = float(config.get("hpHeatingTargetTempMin") or 21)
+    except (TypeError, ValueError):
+        t_min = 21.0
+    ceiling = t_min + _heating_buffer_delta(config)
+
+    raw = None
+    state = _read_mapped_entity_state(config, "heatpump_temp_indoor_measured")
+    if state is not None and state.last_updated is not None:
+        age = (datetime.now(timezone.utc) - state.last_updated).total_seconds()
+        if 0 <= age <= INDOOR_TEMP_STALE_SECONDS:
+            try:
+                value, _ = convert_to_expected_unit("heatpump_temp_indoor_measured", state.state, state.unit)
+                raw = float(value)
+            except Exception:
+                raw = None
+
+    if raw is None:
+        raw = _last_output_csv_ti_raw_equivalent(t_min)
+
+    if raw is None:
+        ti0 = t_min
+    else:
+        compressed = t_min + (raw - t_min) / 10.0
+        ti0 = min(max(compressed, t_min), ceiling)
+    return round(ti0, 3)
 
 
 def _read_mapped_bool_on(config, sensor_key):

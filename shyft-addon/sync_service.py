@@ -241,6 +241,7 @@ class SyncService:
         add("HP - DHW Tank Size", "hpDhwTankSize")
         add("HP - Max. Power", "hpMaxPower")
         add("HP - Max Supply Temp", "hpMaxSupplyTempC")
+        add("HP - Heating Target Temp (min)", "hpHeatingTargetTempMin")
         add("HP - Heating Buffer", "hpHeatingBuffer")
         add("HP - Heating Curve, level", "hpHeatingCurveLevel")
         add("HP - Heating Curve, slope", "hpHeatingCurveSlope")
