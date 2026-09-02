@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.0.44.65
+
+* **Vierter addon-berechneter Aktionstyp: "Verbraucher an"** (Sonstiger Verbraucher, `compute_od_actions`) - läuft nur, wenn ein Sonstiger-Verbraucher-Gerät konfiguriert ist. Eine Aktion entsteht, wenn `OD_Power` strikt zwischen 0,1 und 99 kW liegt (Werte ≥99 gelten als Optimierer-Artefakt und triggern nicht). Deutlich schlanker als die anderen drei Aktionstypen: kein `Target Value`/`Start Value`/`costsopt`/`Savings`/`costsbase`, da "Verbraucher an" ein reiner Ein/Aus-Schalter ist. `Energy (electr) = OD_Power`, Subtitle `"XXX kW"` (1 Nachkommastelle). Start/Ende-Steuerung war bereits generisch vorhanden (`consumer_on_off`, ein `AUTO_MANAGED_CONTROLS`-Switch-Eintrag).
+* **Fix: "wirklich beenden" hing bisher am *aktuellen* Aktionstyp-Toggle statt am tatsächlichen Ausführungsstatus.** Wurde eine Aktion real gestartet (Toggle war an) und der Toggle dann vor dem Beenden ausgeschaltet, hätte das Beenden nur noch simuliert (nicht wirklich gestoppt) - ein real laufendes Gerät wäre nie wirklich abgeschaltet worden. `handle_shyft_action_start` setzt jetzt `Execution Status` auf `"yes, started"`/`"no, deactivated"`, je nachdem ob der Start echt war; alle drei Beenden-Aufrufer (`_reconcile_computed_actions`, `run_hourly_action_transition`, `process_shyft_actions`) prüfen jetzt diesen gespeicherten Wert statt den Toggle zum Beenden-Zeitpunkt neu auszuwerten. Gilt für alle vier Aktionstypen, nicht nur "Verbraucher an".
+
 ## 0.0.44.64
 
 * PV-Ertrag Heute|Morgen (siehe 0.0.44.61-Versuch, Werte neben "Jetzt"-Linie/Tagesgrenze in den PV-Prognose-Chart einzuzeichnen) zurückgebaut: stand trotz Kollisionsvermeidung nicht sauber genug im Chart. Wieder schlichter Text, jetzt aber direkt unter dem PV-Chart selbst verankert statt lose im Dashboard-Flow (dort vorher mit der "Stromverbrauch"-Kennzahl der Einsatzplan-Karte verwechselt worden).

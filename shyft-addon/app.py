@@ -2868,6 +2868,14 @@ def handle_shyft_action_start(action, actions_enabled, config):
     else:
         print(f"[Shyft] Start faellig fuer '{label}' (Ziel: {target}) - Ausfuehrung pro Aktion noch nicht implementiert.")
 
+    # Merkt sich, ob dieser Start "echt" war oder nur simuliert (Aktionstyp deaktiviert) - massgeblich
+    # dafuer, ob beim spaeteren Beenden wirklich die Geraete-Steuerung ausgeloest werden muss (siehe
+    # die Aufrufer von handle_shyft_action_end: die pruefen "Execution Status" == "yes, started" statt
+    # den Aktionstyp-Toggle zum Beenden-Zeitpunkt erneut auszuwerten - der kann sich zwischen Start
+    # und Ende geaendert haben).
+    action["Execution Status"] = "yes, started" if actions_enabled else "no, deactivated"
+    _update_computed_action(action)
+
     notify_action_event(config, action, "gestartet" if actions_enabled else "gestartet (nur simuliert)")
 
 
@@ -2923,8 +2931,8 @@ def handle_shyft_action_end(action, actions_enabled, config):
 # die Aktionen werden direkt aus output_csv berechnet und nur noch lokal gespeichert
 # (COMPUTED_ACTIONS_PATH), Bubble wird dafuer weder gelesen noch beschrieben.
 #
-# Bisher implementiert: nur "Auto laden" (EV_CHARGE_ACTION_NAME). Weitere Aktionstypen (Heizung,
-# Zweitheizung, Warmwasser, Batterie) folgen demselben Muster in spaeteren Schritten.
+# Bisher implementiert: "Auto laden", "Warmwasser", "Heizung Soll-Temperatur", "Verbraucher an".
+# Weitere Aktionstypen (Zweitheizung, Batterie) folgen demselben Muster in spaeteren Schritten.
 #
 # Reichweite: die ersten EV_CHARGE_HOUR_WINDOW Stunden (0 = die gerade laufende, per output_csv-
 # Zeilenindex) jedes frischen Optimierungslaufs. Stunde 0 wird bei jedem neuen Lauf abgeglichen
@@ -3249,6 +3257,68 @@ def compute_heizung_actions(config, output_rows, input_rows, start, optimizer_ru
     return result
 
 
+# ============================================================================
+# Sonstiger Verbraucher (Other Device) - vierter Aktionstyp nach demselben Muster. Deutlich
+# schlanker als die anderen drei: keine Target Value/Start Value/costsopt/Savings/costsbase, da
+# "Verbraucher an" ein reiner Ein/Aus-Schalter ist (kein Zielwert zu verfolgen). Start/Ende sind
+# bereits generisch abgedeckt (AUTO_MANAGED_CONTROLS-Eintrag "consumer_on_off", switch-Typ - siehe
+# ACTION_NAME_TO_CONTROL_KEY/execute_auto_managed_action in handle_shyft_action_start/end).
+# ============================================================================
+
+OD_ACTION_NAME = "Verbraucher an"
+OD_ID_PREFIX = "verbraucher_an"
+OD_HOUR_WINDOW = 10
+OD_POWER_MIN_KW = 0.1
+# Der Optimierer kann bei manchen Laeufen Artefakte mit sehr grossen OD_Power-Werten ausgeben, die
+# nicht triggern sollen (siehe Nutzer-Vorgabe) - alles ab hier gilt als Artefakt, nicht als echter Bedarf.
+OD_POWER_MAX_KW = 99
+
+
+def _is_other_device_configured(config):
+    return bool(config.get("integrationMappings", {}).get("sonstiger_verbraucher"))
+
+
+def _od_action_id(hour_start):
+    return f"{OD_ID_PREFIX}_{int(hour_start.timestamp() * 1000)}"
+
+
+def compute_od_actions(config, output_rows, input_rows, start, optimizer_run_id):
+    """Berechnet fuer die Stunden 0..OD_HOUR_WINDOW-1 des aktuellsten Optimierungslaufs, ob eine
+    "Verbraucher an"-Aktion existieren soll - analog zu compute_dhw_actions/compute_heizung_actions,
+    aber ohne Zielwert (reiner Ein/Aus-Schalter). Trigger: OD_Power liegt strikt zwischen
+    OD_POWER_MIN_KW und OD_POWER_MAX_KW (ausserhalb dieses Bereichs entweder kein nennenswerter
+    Bedarf oder ein Optimierer-Artefakt, siehe OD_POWER_MAX_KW)."""
+    result = {}
+    if not _is_other_device_configured(config):
+        return result
+
+    row_count = min(OD_HOUR_WINDOW, len(output_rows))
+    for i in range(row_count):
+        output_row = output_rows[i]
+        is_current_hour = (i == 0)
+
+        od_power = float(output_row.get("OD_Power") or 0)
+        if not (OD_POWER_MIN_KW < od_power < OD_POWER_MAX_KW):
+            continue
+
+        hour_start = start + timedelta(hours=i)
+        action = {
+            "_id": _od_action_id(hour_start),
+            "Action Name": OD_ACTION_NAME,
+            "Action Trigger Type": "Optimizer",
+            "Energy (electr)": od_power,
+            "Status": "aktiv" if is_current_hour else "geplant",
+            "Subtitle": f"{od_power:.1f} kW",
+            "Date Start": int(datetime.now(timezone.utc).timestamp() * 1000) if is_current_hour else int(hour_start.timestamp() * 1000),
+            "Date End": int((hour_start + timedelta(hours=1)).timestamp() * 1000),
+            "Optimizer Run": optimizer_run_id,
+            "Execution Status": "yes, planned" if is_action_type_enabled(config, OD_ACTION_NAME) else "no, deactivated",
+        }
+        result[i] = action
+
+    return result
+
+
 def _reconcile_computed_actions(config, action_name, id_prefix, computed_by_hour, start):
     """Ersetzt alle vorhandenen Aktionen vom Typ action_name im lokalen Store, deren Stundenfenster
     zum aktuellen Lauf gehoert (Stunden 0..EV_CHARGE_HOUR_WINDOW-1 ab start), durch die frisch
@@ -3287,8 +3357,12 @@ def _reconcile_computed_actions(config, action_name, id_prefix, computed_by_hour
         else:
             kept.append(computed_by_hour[0])
     elif hour0_existing:
+        # War wirklich aktiv (Execution Status "yes, started"), nicht nur der aktuelle Toggle-Zustand:
+        # der Aktionstyp koennte zwischen Start und jetzt deaktiviert worden sein, ohne dass die
+        # tatsaechlich laufende Steuerung das mitbekommen haette - dann muss trotzdem echt beendet werden.
+        was_really_started = hour0_existing.get("Execution Status") == "yes, started"
         try:
-            handle_shyft_action_end(hour0_existing, is_action_type_enabled(config, action_name), config)
+            handle_shyft_action_end(hour0_existing, was_really_started, config)
         except Exception as e:
             print(f"[Shyft] Sofortiges Beenden von '{action_name}' fehlgeschlagen:", repr(e))
         # nicht wieder aufgenommen - die Aktion ist beendet und faellt aus dem Store
@@ -3301,7 +3375,7 @@ def _reconcile_computed_actions(config, action_name, id_prefix, computed_by_hour
 
 
 def recompute_actions_from_optimizer_run(input_csv, output_csv, creation_date_ms, optimizer_run_id):
-    "Wird bei jedem frischen Optimierungslauf aufgerufen (siehe _write_dashboard_cache) - berechnet und reconciled alle addon-seitigen Aktionstypen neu. Bisher 'Auto laden', 'Warmwasser' und 'Heizung Soll-Temperatur'; weitere folgen demselben Muster."
+    "Wird bei jedem frischen Optimierungslauf aufgerufen (siehe _write_dashboard_cache) - berechnet und reconciled alle addon-seitigen Aktionstypen neu. Bisher 'Auto laden', 'Warmwasser', 'Heizung Soll-Temperatur' und 'Verbraucher an'; weitere folgen demselben Muster."
     if is_demo_mode():
         return
     try:
@@ -3315,6 +3389,8 @@ def recompute_actions_from_optimizer_run(input_csv, output_csv, creation_date_ms
         _reconcile_computed_actions(config, DHW_ACTION_NAME, DHW_ID_PREFIX, dhw_actions, start)
         heizung_actions = compute_heizung_actions(config, output_rows, input_rows, start, optimizer_run_id)
         _reconcile_computed_actions(config, HEIZUNG_ACTION_NAME, HEIZUNG_ID_PREFIX, heizung_actions, start)
+        od_actions = compute_od_actions(config, output_rows, input_rows, start, optimizer_run_id)
+        _reconcile_computed_actions(config, OD_ACTION_NAME, OD_ID_PREFIX, od_actions, start)
     except Exception as e:
         print("[Shyft] Aktionsberechnung aus Optimierungslauf fehlgeschlagen:", repr(e))
 
@@ -3375,8 +3451,11 @@ def run_hourly_action_transition():
                 continue
             action_id = current.get("_id")
             if action_id and action_id not in ended_ids:
+                # wie bei _reconcile_computed_actions: der Toggle zum jetzigen Zeitpunkt ist nicht
+                # massgeblich, sondern ob die Aktion beim Start wirklich ausgefuehrt wurde
+                was_really_started = current.get("Execution Status") == "yes, started"
                 try:
-                    handle_shyft_action_end(current, enabled, config)
+                    handle_shyft_action_end(current, was_really_started, config)
                 except Exception as e:
                     print(f"[Shyft] Stundenwechsel: Beenden von '{name}' fehlgeschlagen:", repr(e))
                 ended_ids.add(action_id)
@@ -3451,7 +3530,10 @@ def process_shyft_actions():
             started_ids.add(action_id)
 
         if date_end is not None and date_end <= now_ms and action_id and action_id not in ended_ids:
-            handle_shyft_action_end(action, enabled, config)
+            # der aktuelle Toggle-Zustand ist hier nicht massgeblich (koennte sich seit dem Start
+            # geaendert haben) - entscheidend ist, ob die Aktion beim Start wirklich ausgefuehrt wurde
+            was_really_started = action.get("Execution Status") == "yes, started"
+            handle_shyft_action_end(action, was_really_started, config)
             ended_ids.add(action_id)
 
         currently_running = is_active and date_start is not None and date_start <= now_ms and not (date_end is not None and date_end <= now_ms)
