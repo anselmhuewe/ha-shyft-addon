@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.0.44.74
+
+* **EV-Ladestand-Umrechnung (0.0.44.72) ist jetzt einheitengesteuert statt größenbasiert.** Bisher wurde `EV - SOC` durch 100 geteilt, wenn der Wert `> 1` war - dabei ist `1` mehrdeutig (1 % vs. 100 %). Jetzt entscheidet die von Home Assistant gemeldete Einheit: meldet der Sensor `"%"`, wird durch 100 geteilt; liefert er den Wert bereits als Bruch (keine oder andere Einheit), bleibt er unangetastet. Meldet ein Prozent-Sensor gar keine Einheit, wird nicht umgerechnet - dann ist die Sensor-Konfiguration in HA zu korrigieren.
+
 ## 0.0.44.73
 
 * **PV-Prognose-Aufzeichnung ist jetzt rollierend statt einmalig eingefroren.** `_maybe_freeze_pv_forecast_snapshot` schreibt für heute noch bevorstehende Stunden bei jedem Sync (stündlich, `sync_dashboard_chart_data`) die jeweils aktuellste Prognose fort - erst sobald eine Stunde tatsächlich eingetreten ist, friert ihr Wert endgültig ein ("letzte Prognose vor Eintritt der Stunde"). Vorher wurde die gesamte Tagesprognose beim ersten Sync des Tages ein für alle Mal eingefroren.

@@ -278,22 +278,22 @@ class SyncService:
         data = self._load_config()
         for key, bubble_name in LIST_OF_SENSORS.items():
             entry = self._load_sensor_value(key, bubble_name, data)
-            if entry != "":
-                live_values[entry["sensor"]] = entry["state"]
-        # shyft-power / der Julia-Optimierer erwartet den EV-Ladestand als Bruch 0..1: dort wird
-        # ev_soc_0 als SOC_ev_0 * ev_b_size zu kWh verrechnet, ohne eigenes /100. HA-SoC-Sensoren
-        # liefern Prozent (0..100) -> hier auf 0.xx bringen (Guard auf > 1, damit ein bereits als
-        # Bruch gelieferter Wert unangetastet bleibt). Der Hausspeicher-Ladestand "B - SOC" bleibt
-        # bewusst Prozent: dessen Server-Spalte heisst SOC_b_0_percent und wird erst im Optimierer
-        # durch 100 geteilt.
-        ev_soc = live_values.get("EV - SOC")
-        if ev_soc is not None:
-            try:
-                ev_soc = float(ev_soc)
-                if ev_soc > 1:
-                    live_values["EV - SOC"] = round(ev_soc / 100, 4)
-            except (TypeError, ValueError):
-                pass
+            if entry == "":
+                continue
+            value = entry["state"]
+            # Der Julia-Optimierer erwartet den EV-Ladestand als Bruch 0..1: dort wird ev_soc_0 als
+            # SOC_ev_0 * ev_b_size zu kWh verrechnet, ohne eigenes /100. Ob und wie umgerechnet
+            # wird, entscheidet die von Home Assistant gemeldete Einheit: meldet der Sensor "%",
+            # teilen wir durch 100; liefert er den Wert bereits als Bruch (keine oder eine andere
+            # Einheit), bleibt er unangetastet. Der Hausspeicher-Ladestand "B - SOC" bleibt bewusst
+            # Prozent - dessen Server-Spalte heisst SOC_b_0_percent und wird erst im Optimierer
+            # durch 100 geteilt.
+            if key == "electronicvehicle_state_of_charge" and entry.get("unit") in ("%", "percent"):
+                try:
+                    value = round(float(value) / 100, 4)
+                except (TypeError, ValueError):
+                    pass
+            live_values[entry["sensor"]] = value
         return live_values
 
     def _load_sensor_value(self, key, bubbleSensorIdentifier, data):
