@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.0.44.70
+
+* Konfigurationsseite: eingeklappte Geräte-Kacheln zeigen jetzt nur noch die Überschriftenzeile (Titel + Pfeil) - der Geräte-Dropdown blendet sich mit ein/aus statt immer sichtbar zu bleiben.
+
 ## 0.0.44.69
 
 * Wetter-Streifen auf dem Dashboard scrollte horizontal, obwohl ohnehin nur ein Teil der Kacheln zu sehen war. Zeigt jetzt nur noch so viele Kacheln, wie ohne Scrollen in die Bildschirmbreite passen (`trimWeatherStripToFit` misst nach dem Einhängen real nach und entfernt überzählige Kacheln, statt die Anzahl anhand von Schriftgröße/em zu schätzen).

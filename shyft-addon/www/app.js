@@ -881,23 +881,8 @@ function renderIntegrationSections() {
             }
         });
 
-        function updateBodyVisibility() {
-            const hasSelection = currentIntegrationSelections[section.key].length > 0;
-            bodyDiv.style.display = (hasSelection && expanded) ? '' : 'none';
-            toggleButton.classList.toggle('collapsed', !expanded);
-            toggleButton.disabled = !hasSelection;
-        }
-
-        if (currentIds.length > 0) {
-            renderSectionBody(bodyDiv, section, currentIds);
-        }
-        updateBodyVisibility();
-
-        toggleButton.addEventListener('click', () => {
-            expanded = !expanded;
-            updateBodyVisibility();
-        });
-
+        // Der Geraete-Dropdown (picker) wird VOR updateBodyVisibility definiert, damit dessen
+        // Sichtbarkeit von Anfang an mitgesteuert werden kann.
         const picker = buildIntegrationPicker(section, currentIds, (selectedIds) => {
             const previousIds = currentIntegrationSelections[section.key];
             const wasEmpty = previousIds.length === 0;
@@ -916,6 +901,29 @@ function renderIntegrationSections() {
             autoSave();
         });
         heading.appendChild(picker);
+
+        function updateBodyVisibility() {
+            const hasSelection = currentIntegrationSelections[section.key].length > 0;
+            bodyDiv.style.display = (hasSelection && expanded) ? '' : 'none';
+            // Eingeklappt (expanded=false) zeigt NUR die Ueberschriften-Zeile - der Geraete-Dropdown
+            // blendet sich mit aus, nicht nur die Sensor-Zuordnungsfelder darunter. Einklappen ist
+            // erst moeglich, wenn schon ein Geraet gewaehlt ist (toggleButton.disabled unten), das
+            // Ausblenden des Dropdowns kann die Erstauswahl also nie versperren.
+            picker.style.display = expanded ? '' : 'none';
+            toggleButton.classList.toggle('collapsed', !expanded);
+            toggleButton.disabled = !hasSelection;
+        }
+
+        if (currentIds.length > 0) {
+            renderSectionBody(bodyDiv, section, currentIds);
+        }
+        updateBodyVisibility();
+
+        toggleButton.addEventListener('click', () => {
+            expanded = !expanded;
+            updateBodyVisibility();
+        });
+
         sectionDiv.appendChild(heading);
         sectionDiv.appendChild(bodyDiv);
 
