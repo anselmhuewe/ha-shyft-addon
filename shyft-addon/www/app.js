@@ -3571,7 +3571,8 @@ function buildLineChart(title, unit, labels, values, options = {}) {
     return wrapper;
 }
 
-// Vergleicht die heute frueh eingefrorene PV-Prognose mit den tatsaechlichen Messwerten (siehe
+// Vergleicht die fuer heute aufgezeichnete PV-Prognose (vergangene Stunden eingefroren, kommende
+// laufend nachgetragen) mit den tatsaechlichen Messwerten (siehe
 // /dashboard/pv-forecast-vs-actual) - eigene, schlankere Chart-Funktion statt buildLineChart zu
 // erweitern: die war bisher nie fuer zwei Reihen auf gemeinsamer Zeitachse mit Luecken (null-Werte,
 // wo eine Reihe fuer diese Stunde keine Daten hat) gebaut, und alle anderen Charts sollen davon
@@ -4767,8 +4768,9 @@ async function loadDashboard() {
             colorBands: {highThreshold: 35, highColor: 'var(--color-error)', lowThreshold: 25, lowColor: 'var(--color-accent)', midColor: 'var(--color-text-secondary)'},
         }));
         container.appendChild(buildLineChart('Außentemperatur', '°C', data.labels, data.temperature));
-        // Ersetzt die reine Prognose-Ansicht: gemeinsame Stundenachse ab 0 Uhr heute, Prognose
-        // (heute eingefroren + ab morgen live) gegen tatsaechliche Ist-Werte (siehe
+        // Ersetzt die reine Prognose-Ansicht: gemeinsame Stundenachse ab 0 Uhr heute, aufgezeichnete
+        // Prognose (heute, vergangene Stunden eingefroren/kommende laufend aktualisiert + ab morgen
+        // live) gegen tatsaechliche Ist-Werte (siehe
         // readPvForecastVsActual) - best-effort, faellt auf den einfachen Prognose-Chart zurueck,
         // falls der neue Endpunkt (noch) nichts liefert (z.B. frische Installation ohne Snapshot).
         if (weather) {

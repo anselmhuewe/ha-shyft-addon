@@ -3,7 +3,8 @@
 Ansatz (siehe Nutzer-Excel PV_Prediction_v2):
 
 - open-meteo liefert stuendlich `global_tilted_irradiance` (W/m^2, feste 35 Grad Suedausrichtung),
-  `temperature_2m` (Grad C) und `weather_code`, fuer 7 Tage Vergangenheit + 3 Tage Zukunft.
+  `temperature_2m` (Grad C), `weather_code` und `cloud_cover` (letzteres nur fuers Rohdaten-Log,
+  siehe unten - fliesst nicht in die Prognose ein), fuer 7 Tage Vergangenheit + 3 Tage Zukunft.
 - Pro PV-Anlage (aktuell genau eine) wird ein "m^2-Aequivalent" je Tagesstunde 0..23 gelernt:
   die hypothetische Kollektorflaeche, die - mal Einstrahlung mal 0.2 (grober Anlagenwirkungsgrad) -
   die tatsaechlich gemessene Leistung ergibt. Stundenweise, weil Verschattung/Cosinus je Tageszeit
@@ -18,7 +19,10 @@ Ansatz (siehe Nutzer-Excel PV_Prediction_v2):
   gemessenen Leistung implizierten Wertes geglaettet - der Altwert dominiert, ein einzelner
   Ausreissertag verzieht die Prognose also nur wenig.
 
-Persistenz: /data/weather_forecast.json (open-meteo-Cache), /data/pv_calibration.json (m2[]).
+Persistenz: /data/weather_forecast.json (open-meteo-Cache, wird bei jedem Fetch ueberschrieben),
+/data/pv_calibration.json (m2[]), /data/weather_forecast_log.jsonl (Rohdaten JEDES Fetches als
+eigene Zeile, WEATHER_LOG_RETENTION_DAYS Tage Historie - fuer eine spaetere Prognose-vs-Ist-Analyse,
+siehe log_weather_fetch).
 """
 
 import json
@@ -29,6 +33,12 @@ import requests
 
 WEATHER_CACHE_PATH = "/data/weather_forecast.json"
 PV_CALIBRATION_PATH = "/data/pv_calibration.json"
+# Rohdaten-Log jedes einzelnen open-meteo-Abrufs (JSON Lines, eine Zeile pro Fetch) - anders als
+# WEATHER_CACHE_PATH (wird bei jedem Fetch komplett ueberschrieben) bleibt hier die Historie
+# erhalten, damit sich z.B. Prognosefehler an bewoelkten Tagen im Nachhinein auswerten lassen, ohne
+# aus spaeteren Abrufen zurueckrechnen zu muessen. Siehe log_weather_fetch/WEATHER_LOG_RETENTION_DAYS.
+WEATHER_LOG_PATH = "/data/weather_forecast_log.jsonl"
+WEATHER_LOG_RETENTION_DAYS = 30
 
 OPEN_METEO_URL = "https://api.open-meteo.com/v1/forecast"
 # Feste Annahme statt Nutzer-Konfiguration: 35 Grad Neigung, Suedausrichtung (open-meteo:
@@ -94,7 +104,11 @@ def fetch_weather(latitude, longitude):
     params = {
         "latitude": latitude,
         "longitude": longitude,
-        "hourly": "global_tilted_irradiance,temperature_2m,weather_code",
+        # cloud_cover NUR fuers Rohdaten-Log (siehe log_weather_fetch) - fliesst nicht in die
+        # kW-Prognose ein (die haengt allein an gti), hilft aber bei der Auswertung zu unterscheiden,
+        # ob eine falsche Prognose an einer falschen Bewoelkungs-Vorhersage lag oder daran, dass die
+        # Strahlung selbst bei richtig erkannter Bewoelkung zu hoch berechnet wurde.
+        "hourly": "global_tilted_irradiance,temperature_2m,weather_code,cloud_cover",
         "tilt": PV_TILT_DEG,
         "azimuth": PV_AZIMUTH_DEG,
         "timezone": "Europe/Berlin",
@@ -111,8 +125,9 @@ def fetch_weather(latitude, longitude):
         return None
 
     hourly = data.get("hourly") or {}
+    fetched_at = datetime.now(timezone.utc).isoformat()
     cache = {
-        "fetched_at": datetime.now(timezone.utc).isoformat(),
+        "fetched_at": fetched_at,
         "latitude": latitude,
         "longitude": longitude,
         "utc_offset_seconds": data.get("utc_offset_seconds"),
@@ -120,12 +135,62 @@ def fetch_weather(latitude, longitude):
         "gti": hourly.get("global_tilted_irradiance") or [],               # W/m^2
         "temperature": hourly.get("temperature_2m") or [],                 # Grad C
         "weather_code": hourly.get("weather_code") or [],                  # WMO
+        "cloud_cover": hourly.get("cloud_cover") or [],                    # %
     }
     if not cache["time"] or not cache["gti"]:
         print("[Shyft] open-meteo-Antwort ohne stuendliche Daten - Cache nicht aktualisiert.")
         return None
     _write_json(WEATHER_CACHE_PATH, cache)
+    log_weather_fetch(cache)
     return cache
+
+
+def log_weather_fetch(cache):
+    """Haengt den soeben geholten Fetch als eigene Zeile an WEATHER_LOG_PATH an (JSON Lines) - im
+    Gegensatz zum WEATHER_CACHE_PATH (wird bei jedem Fetch ueberschrieben) bleibt hier die Historie
+    ueber mehrere Fetches hinweg erhalten. Kompakt gehalten (nur die Rohreihen, kein Redundantes) -
+    bei einem Fetch alle 3h und ~11 Tagen Zeitraum pro Zeile ca. 250 Punkte. Beste-effort: ein
+    Schreibfehler hier darf den eigentlichen Fetch/Cache-Update nicht verhindern (wird schon von
+    fetch_weather so aufgerufen, nach dem Cache-Write)."""
+    entry = {
+        "fetched_at": cache["fetched_at"],
+        "time": cache["time"],
+        "gti": cache["gti"],
+        "temperature": cache["temperature"],
+        "weather_code": cache["weather_code"],
+        "cloud_cover": cache.get("cloud_cover", []),
+    }
+    try:
+        with open(WEATHER_LOG_PATH, "a") as f:
+            f.write(json.dumps(entry) + "\n")
+    except Exception as e:
+        print("[Shyft] Wetter-Rohdaten-Log konnte nicht geschrieben werden:", repr(e))
+        return
+    _prune_weather_log()
+
+
+def _prune_weather_log():
+    "Entfernt Log-Zeilen aelter als WEATHER_LOG_RETENTION_DAYS - haelt die Datei langfristig beschraenkt, statt unbegrenzt zu wachsen."
+    cutoff = datetime.now(timezone.utc) - timedelta(days=WEATHER_LOG_RETENTION_DAYS)
+    try:
+        with open(WEATHER_LOG_PATH, "r") as f:
+            lines = f.readlines()
+    except Exception:
+        return
+    kept = []
+    for line in lines:
+        try:
+            fetched_at = datetime.fromisoformat(json.loads(line)["fetched_at"])
+        except Exception:
+            continue  # kaputte Zeile - verwerfen statt die ganze Datei zu blockieren
+        if fetched_at >= cutoff:
+            kept.append(line)
+    if len(kept) != len(lines):
+        try:
+            with open(WEATHER_LOG_PATH, "w") as f:
+                f.writelines(kept)
+        except Exception as e:
+            print("[Shyft] Wetter-Rohdaten-Log konnte nicht bereinigt werden:", repr(e))
 
 
 def weather_cache_age_hours():

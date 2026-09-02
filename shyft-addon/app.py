@@ -42,12 +42,14 @@ DETAILED_LOGGING = False
 OPTIONS_PATH = "/data/options.json"
 CONFIG_PATH = "/data/config.json"
 DASHBOARD_CACHE_PATH = "/data/dashboard_cache.json"
-# Anders als DASHBOARD_CACHE_PATH (stuendlich ueberschrieben) wird dieser Snapshot nur EINMAL pro
-# Kalendertag geschrieben - die zu Tagesbeginn bekannte PV-Prognose, eingefroren, damit sie sich
-# spaeter gegen die tatsaechlich eingetretenen Werte vergleichen laesst (siehe
-# _maybe_freeze_pv_forecast_snapshot / /dashboard/pv-forecast-vs-actual). Ohne dieses Einfrieren
-# wuerde ein Abgleich am Nachmittag die laengst korrigierte (nicht die urspruengliche) Prognose fuer
-# den Vormittag zeigen.
+# Die je Kalendertag aufgezeichnete PV-Prognose fuer den Prognose-vs-Ist-Vergleich (siehe
+# _maybe_freeze_pv_forecast_snapshot / /dashboard/pv-forecast-vs-actual). Anders als der Name
+# "freeze" nahelegt (historisch: frueher wirklich nur einmal pro Tag geschrieben) wird hier NICHT
+# der gesamte Tag beim ersten Sync eingefroren, sondern nur die bereits VERGANGENEN Stunden - fuer
+# noch bevorstehende Stunden traegt jeder weitere Sync (alle paar Stunden, siehe
+# sync_dashboard_chart_data) die inzwischen aktuellere Prognose nach. Sobald eine Stunde vergangen
+# ist, bleibt ihr zuletzt aufgezeichneter Wert unveraendert - das ist dann "die letzte Prognose vor
+# Eintritt der Stunde", der eigentliche Vergleichswert fuer die Prognosequalitaet.
 PV_FORECAST_SNAPSHOT_PATH = "/data/pv_forecast_snapshot.json"
 CAR_PRESENCE_LOG_PATH = "/data/car_presence_log.json"
 CAR_PRESENCE_LOG_MAX_DAYS = 180
@@ -587,13 +589,14 @@ def _read_future_pv_forecast_by_hour():
 @app.route("/dashboard/pv-forecast-vs-actual", methods=["GET"])
 def readPvForecastVsActual():
     """Eine gemeinsame stundenweise Zeitachse ab 0 Uhr (lokale Zeit) fuer den Prognose-vs-Ist-
-    Vergleich im PV-Leistung-Chart: 'forecast' kombiniert die heute frueh eingefrorene Tages-
-    Prognose (siehe _maybe_freeze_pv_forecast_snapshot - fuer die bereits vergangenen wie auch noch
-    kommenden Stunden HEUTE) mit der normalen, laufend aktualisierten Prognose (fuer alles ab
-    morgen); 'actual' sind die stundenweise gemittelten tatsaechlichen Messwerte von 0 Uhr bis
-    jetzt, nur fuer heute (keine Ist-Werte fuer die Zukunft). Fehlende Werte je Stunde sind null,
-    nicht ausgelassen - hält beide Reihen synchron zur selben labels-Achse, wie es das Frontend zum
-    Zeichnen zweier Linien braucht."""
+    Vergleich im PV-Leistung-Chart: 'forecast' kombiniert den fuer HEUTE aufgezeichneten Prognose-
+    Snapshot (siehe _maybe_freeze_pv_forecast_snapshot - vergangene Stunden darin sind eingefroren
+    auf die letzte Prognose vor ihrem Eintritt, noch bevorstehende Stunden bekommen bei jedem Sync
+    die aktuellste Prognose nachgetragen) mit der normalen, laufend aktualisierten Prognose (fuer
+    alles ab morgen); 'actual' sind die stundenweise gemittelten tatsaechlichen Messwerte von 0 Uhr
+    bis jetzt, nur fuer heute (keine Ist-Werte fuer die Zukunft). Fehlende Werte je Stunde sind
+    null, nicht ausgelassen - hält beide Reihen synchron zur selben labels-Achse, wie es das
+    Frontend zum Zeichnen zweier Linien braucht."""
     config = _read_current_config()
     entity_id = config.get("sensorMappings", {}).get("photovoltaic_powerflow_pv", "")
 
@@ -3736,20 +3739,26 @@ def _read_pv_forecast_snapshot():
 
 
 def _maybe_freeze_pv_forecast_snapshot(input_csv, creation_date_ms):
-    """Schreibt PV_FORECAST_SNAPSHOT_PATH nur, wenn dort noch keine Prognose fuer den heutigen
-    (lokalen) Kalendertag liegt - danach bleibt der Snapshot fuer den Rest des Tages unangetastet,
-    auch wenn sync_dashboard_chart_data() stuendlich weiter neue Prognosen holt. Nimmt aus dem
-    JUST gefetchten input_csv nur die Zeilen, die tatsaechlich auf "heute" fallen - deckt die
-    Prognose den bisherigen Tagesverlauf (noch) nicht ab (z.B. weil creation_date schon nach 0 Uhr
-    liegt), bleiben diese fruehen Stunden im Snapshot einfach leer statt geraten.
+    """Aktualisiert PV_FORECAST_SNAPSHOT_PATH fuer den heutigen (lokalen) Kalendertag - anders als
+    der Name (historisch) nahelegt, NICHT nur einmal taeglich: fuer bereits VERGANGENE Stunden wird
+    der zuletzt aufgezeichnete Wert beibehalten (das war "die letzte Prognose vor Eintritt der
+    Stunde" und soll sich nicht mehr aendern), fuer noch bevorstehende (oder gerade laufende)
+    Stunden wird dagegen bei jedem Aufruf die aktuelle Prognose aus dem JUST gefetchten input_csv
+    uebernommen - sync_dashboard_chart_data() ruft das alle paar Stunden mit neuen Daten auf, jede
+    noch nicht eingetretene Stunde bekommt so schrittweise eine aktuellere Prognose nachgetragen,
+    bis sie selbst vergangen ist und einfriert. Nimmt aus input_csv nur die Zeilen, die tatsaechlich
+    auf "heute" fallen - deckt die Prognose den bisherigen Tagesverlauf (noch) nicht ab (z.B. weil
+    creation_date schon nach 0 Uhr liegt), bleiben diese fruehen Stunden einfach leer statt geraten.
 
     Nutzt die Systemzeitzone des Containers fuer den Tagesbezug (bei einer normalen Home-Assistant-
     OS/Supervised-Installation identisch zur in HA konfigurierten Zeitzone)."""
     today_local = date.today().isoformat()
     existing = _read_pv_forecast_snapshot()
+    existing_by_label = {}
     if existing and existing.get("date") == today_local:
-        return
+        existing_by_label = dict(zip(existing.get("labels", []), existing.get("pv_generation", [])))
 
+    now_hour_local = datetime.now().astimezone().replace(minute=0, second=0, microsecond=0)
     start_utc = datetime.fromtimestamp(creation_date_ms / 1000, tz=timezone.utc).replace(minute=0, second=0, microsecond=0)
     try:
         rows = list(csv.DictReader(io.StringIO(input_csv), delimiter=";"))
@@ -3760,10 +3769,19 @@ def _maybe_freeze_pv_forecast_snapshot(input_csv, creation_date_ms):
     labels, pv_generation = [], []
     for i, row in enumerate(rows):
         row_dt_utc = start_utc + timedelta(hours=i)
-        if row_dt_utc.astimezone().date().isoformat() != today_local:
+        row_dt_local = row_dt_utc.astimezone()
+        if row_dt_local.date().isoformat() != today_local:
             continue
-        labels.append(row_dt_utc.isoformat())
-        pv_generation.append(_safe_float(row.get("PV_generation")))
+        label = row_dt_utc.isoformat()
+        if row_dt_local < now_hour_local and label in existing_by_label:
+            # Diese Stunde ist bereits vergangen UND schon aufgezeichnet - eingefroren lassen, nicht
+            # mit einer neueren Prognose ueberschreiben (fuer eine abgelaufene Stunde waere das
+            # ohnehin keine "Prognose" mehr, sondern ruecksschauend verzerrt).
+            value = existing_by_label[label]
+        else:
+            value = _safe_float(row.get("PV_generation"))
+        labels.append(label)
+        pv_generation.append(value)
     if not labels:
         return  # Prognose deckt "heute" (noch) gar nicht ab - naechster Sync versucht es erneut
 

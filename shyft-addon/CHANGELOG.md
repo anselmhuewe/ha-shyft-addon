@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.0.44.73
+
+* **PV-Prognose-Aufzeichnung ist jetzt rollierend statt einmalig eingefroren.** `_maybe_freeze_pv_forecast_snapshot` schreibt für heute noch bevorstehende Stunden bei jedem Sync (stündlich, `sync_dashboard_chart_data`) die jeweils aktuellste Prognose fort - erst sobald eine Stunde tatsächlich eingetreten ist, friert ihr Wert endgültig ein ("letzte Prognose vor Eintritt der Stunde"). Vorher wurde die gesamte Tagesprognose beim ersten Sync des Tages ein für alle Mal eingefroren.
+* **open-meteo-Rohdaten werden jetzt fortlaufend geloggt** (`/data/weather_forecast_log.jsonl`, eine Zeile pro Abruf alle 3h, 30 Tage Historie, automatisch bereinigt) - für eine spätere Prognose-vs-Ist-Analyse, ohne aus späteren Abrufen zurückrechnen zu müssen. Zusätzlich wird jetzt auch `cloud_cover` mit abgefragt (bisher nur `global_tilted_irradiance`/`temperature_2m`/`weather_code`) - fließt nicht in die kW-Prognose ein, hilft aber zu unterscheiden, ob eine falsche Prognose an falsch vorhergesagter Bewölkung lag oder daran, dass die Strahlung selbst bei richtig erkannter Bewölkung zu hoch berechnet wurde.
+
 ## 0.0.44.72
 
 * **Fix: EV-Ladestand wird jetzt als Bruch 0..1 an die Site geschickt statt als Prozentzahl.** Der Julia-Optimierer verrechnet `ev_soc_0` als `SOC_ev_0 * ev_b_size` zu kWh (ohne eigenes `/100`). Ein HA-SoC-Sensor mit z.B. `79` (%) ergab so `SOC_EV[1] = 79 * 90 = 7110 kWh` und verletzte die harte Nebenbedingung `SOC_EV[h] <= ev.soc_max`, sobald das Auto Fahrten hat (`ev_usage_h` nicht leer) → Modell unlösbar → alle Optimierer-Ausgaben `NaN` (`optimizer output column 'profits_net_opt' has non-numeric value 'NaN'`). `collect_live_values` teilt `EV - SOC` jetzt durch 100 (Guard auf `> 1`). Der Hausspeicher-Ladestand `B - SOC` bleibt bewusst Prozent - dessen Server-Spalte heißt `SOC_b_0_percent` und wird erst im Optimierer geteilt. Kein Server-Deployment nötig (die serverseitige Normalisierung 0.46.12.0 wurde zugunsten dieser Addon-Lösung zurückgenommen).
