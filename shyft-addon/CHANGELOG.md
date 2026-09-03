@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.0.44.81
+
+* Neues Konfigurationsfeld "Max. Ladeleistung (kW)" bei der Batterie - deckelt den Zielwert von "Batterie netzladen" im Addon direkt, zusätzlich zum bereits bestehenden Live-Sensor-Cap (der jeweils niedrigere Wert gewinnt). Hintergrund: der Julia-Optimierer nimmt intern pauschal 50 % der Batteriekapazität als maximale Lade-/Entladeleistung an (`run_SHEMS.jl`), was von der tatsächlichen Gerätegrenze abweichen kann - kleine Abweichungen der Optimierung selbst sind unproblematisch, diese Deckelung ist nur ein Sicherheitsnetz im Addon.
+
 ## 0.0.44.80
 
 * **Siebter und letzter Batterie-Aktionstyp: "Batterie-Laden verschieben (PV-Überschuss)"** (`compute_battery_charge_shift_actions`) - verhindert gezieltes Laden aus PV-Überschuss, wenn sich das nicht lohnt. Trigger, betrachtet über ein 12-Stunden-Fenster ab der jeweiligen Stunde: `SOC_B` bleibt in jeder der 12 Stunden > 25 % UND die Summe von `PV_GR` über denselben Zeitraum ist > 5 kWh. Reicht `output_csv` für eine Stunde nicht mehr für die volle 12h-Vorschau, wird sie (und jede spätere) übersprungen. `Energy (electr) = 0`, `Target Value = 0,1` (fester Signalwert, nicht 0), Subtitle "Batterie nicht laden". Damit sind alle sieben geplanten Aktionstypen umgesetzt.

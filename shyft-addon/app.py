@@ -3520,8 +3520,9 @@ def compute_battery_grid_charge_actions(config, output_rows, input_rows, start, 
     Keine Aktion, wenn fuer dieselbe Stunde schon "Batterie-Entladen verschieben" reserviert ist
     (siehe _discharge_shift_reserved_for_hour) - das hat Vorrang. In Stunden mit vorhergesagtem
     Sonnenschein greift zusaetzlich die 95%-Deckelung (siehe BATTERY_SUNSHINE_SOC_CAP_PCT).
-    Unabhaengig davon wird der Zielwert immer sicherheitshalber auf die maximale Ladeleistung der
-    Batterie gedeckelt (Live-Sensor "battery_charge_limit_current")."""
+    Unabhaengig davon wird der Zielwert immer sicherheitshalber gedeckelt: sowohl auf den statisch
+    konfigurierten "Max. Ladeleistung"-Wert (batteryMaxChargeKw) als auch, falls zugeordnet, auf den
+    praeziseren Live-Sensor "battery_charge_limit_current" - der niedrigere Wert gewinnt."""
     result = {}
     if not _is_battery_configured(config):
         return result
@@ -3553,12 +3554,18 @@ def compute_battery_grid_charge_actions(config, output_rows, input_rows, start, 
                 max_kwh_this_hour = (BATTERY_SUNSHINE_SOC_CAP_PCT - soc_now) / 100 * battery_capacity_kwh
                 energy = min(energy, max(0.0, max_kwh_this_hour))
 
-        # Sicherheitshalber immer zusaetzlich auf die maximale Ladeleistung der Batterie gedeckelt -
-        # der LIVE-Sensor (nicht ein statischer Konfigurationswert), da die tatsaechlich erlaubte
-        # Ladeleistung z.B. temperatur-/BMS-abhaengig schwanken kann.
-        max_charge_kw = _read_mapped_numeric(config, "battery_charge_limit_current")
-        if max_charge_kw is not None:
-            energy = min(energy, max(0.0, max_charge_kw))
+        # Sicherheitshalber immer zusaetzlich gedeckelt - sowohl auf den statisch konfigurierten
+        # Wert (batteryMaxChargeKw, siehe compute_battery_grid_charge_actions-Docstring: der
+        # Optimierer nimmt intern pauschal 50% der Kapazitaet als Leistungsgrenze an, was von der
+        # echten Geraetegrenze abweichen kann) als auch auf den LIVE-Sensor (falls zugeordnet, praeziser
+        # als der statische Wert, da die tatsaechlich erlaubte Ladeleistung z.B. temperatur-/BMS-
+        # abhaengig schwanken kann) - der jeweils niedrigere Wert gewinnt.
+        static_max_charge_kw = config.get("batteryMaxChargeKw")
+        if static_max_charge_kw:
+            energy = min(energy, max(0.0, static_max_charge_kw))
+        live_max_charge_kw = _read_mapped_numeric(config, "battery_charge_limit_current")
+        if live_max_charge_kw is not None:
+            energy = min(energy, max(0.0, live_max_charge_kw))
 
         next_row = output_rows[i + 1] if i + 1 < len(output_rows) else None
         soc_next = _safe_float(next_row.get("SOC_B")) if next_row is not None else soc_now
