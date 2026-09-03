@@ -3617,7 +3617,11 @@ function buildPvForecastActualChart(labels, forecast, actual) {
     const rawMin = Math.min(...definedValues, 0);
     const rawMax = Math.max(...definedValues);
     const valueRange = (rawMax - rawMin) || 1;
-    const yMin = rawMin - valueRange * 0.1;
+    // PV-Leistung kann nie negativ sein - der generische "10% Padding nach unten" wuerde sonst z.B.
+    // -0.5 kW auf der Achse zeigen, obwohl kein Wert der Reihe negativ ist. Anders als beim
+    // generischen buildLineChart (das MIN_Y als Option kennt) ist das hier fest verdrahtet, weil
+    // dieser Chart ausschliesslich PV-Leistung zeigt.
+    const yMin = Math.max(0, rawMin - valueRange * 0.1);
     const yMax = rawMax + valueRange * 0.1;
     const yRange = (yMax - yMin) || 1;
     const lastIndex = labels.length - 1 || 1;

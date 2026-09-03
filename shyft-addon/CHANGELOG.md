@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.0.44.75
+
+* PV-Leistung-Chart: Y-Achse beginnt jetzt fest bei 0 statt durch das generische 10%-Padding leicht ins Negative zu rutschen (PV-Leistung kann nie negativ sein).
+* **Fix: Ist-Werte-Kurve zeigte nachts eine Lücke statt 0 kW.** Meldet der PV-Sensor nachts gar keine neuen Events (Wechselrichter schläft, statt weiter "0" zu senden), blieb die Stunde bisher komplett leer. Neuer Fallback: fehlt für eine Stunde ein echter (gemittelter) Messwert, wird jetzt der letzte bekannte Zustand von vor Mitternacht vorwärts gefüllt (`_forward_fill_hourly`, wie schon beim Anwesenheits-Backfill) - aber nur, wenn dieser letzte Zustand selbst eine echte Zahl war (kein geratener Wert, wenn der Sensor zuletzt "unavailable" war).
+
 ## 0.0.44.74
 
 * **EV-Ladestand-Umrechnung (0.0.44.72) ist jetzt einheitengesteuert statt größenbasiert.** Bisher wurde `EV - SOC` durch 100 geteilt, wenn der Wert `> 1` war - dabei ist `1` mehrdeutig (1 % vs. 100 %). Jetzt entscheidet die von Home Assistant gemeldete Einheit: meldet der Sensor `"%"`, wird durch 100 geteilt; liefert er den Wert bereits als Bruch (keine oder andere Einheit), bleibt er unangetastet. Meldet ein Prozent-Sensor gar keine Einheit, wird nicht umgerechnet - dann ist die Sensor-Konfiguration in HA zu korrigieren.
