@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.0.44.77
+
+* **"Details einblenden"-Button unter jeder eingeklappten Gerätekachel** (Konfiguration) - der Aufklapp-Pfeil allein war zu unauffällig, um als Einblenden-Aktion gefunden zu werden. Ausblenden bleibt weiterhin Aufgabe des Pfeils.
+* **Geräte-Dropdown bekommt eine Überschrift** ("GERÄT"), darunter weiterhin zuerst "Demo-Gerät", dann sichtbar abgetrennt die echte, aus Home Assistant stammende Geräteliste.
+
 ## 0.0.44.76
 
 * **Fix: der Nacht-Fallback von 0.0.44.75 war selbst fehlerhaft.** Er hat bei fehlenden Events den *letzten bekannten* PV-Leistungswert vorwärts fortgeführt (`_forward_fill_hourly`, eigentlich für Zustände wie Wallbox-Status/SOC gedacht, die sich zwischen Events wirklich nicht ändern) - für eine Leistungsmessung ergab das Unsinn: ein zuletzt positiver Wert vor Verstummen des Sensors wäre stundenlang als "immer noch produziert" weitergeschrieben worden. Jede Stunde ohne echten Messwert wird jetzt direkt auf 0 gesetzt, nicht auf den letzten Zustand.

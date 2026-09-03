@@ -902,6 +902,19 @@ function renderIntegrationSections() {
         });
         heading.appendChild(picker);
 
+        // Der Aufklapp-Pfeil (toggleButton) allein ist zu unauffaellig, um als Einblenden-Aktion
+        // gefunden zu werden - dieser zusaetzliche, deutlich sichtbarere Text-Button uebernimmt das
+        // Einblenden; Ausblenden bleibt wie gehabt allein Aufgabe des Pfeils. Nur sichtbar, wenn
+        // eingeklappt UND ueberhaupt ein Geraet gewaehlt ist (sonst gibt es nichts einzublenden).
+        const showDetailsButton = document.createElement('button');
+        showDetailsButton.type = 'button';
+        showDetailsButton.className = 'sectionShowDetailsButton';
+        showDetailsButton.textContent = 'Details einblenden';
+        showDetailsButton.addEventListener('click', () => {
+            expanded = true;
+            updateBodyVisibility();
+        });
+
         function updateBodyVisibility() {
             const hasSelection = currentIntegrationSelections[section.key].length > 0;
             bodyDiv.style.display = (hasSelection && expanded) ? '' : 'none';
@@ -912,6 +925,7 @@ function renderIntegrationSections() {
             picker.style.display = expanded ? '' : 'none';
             toggleButton.classList.toggle('collapsed', !expanded);
             toggleButton.disabled = !hasSelection;
+            showDetailsButton.style.display = (hasSelection && !expanded) ? '' : 'none';
         }
 
         if (currentIds.length > 0) {
@@ -925,6 +939,7 @@ function renderIntegrationSections() {
         });
 
         sectionDiv.appendChild(heading);
+        sectionDiv.appendChild(showDetailsButton);
         sectionDiv.appendChild(bodyDiv);
 
         container.appendChild(sectionDiv);
@@ -1163,8 +1178,25 @@ function buildIntegrationPicker(section, currentIds, onChange) {
             return optionLabel;
         }
 
+        // Ueberschrift ganz oben (siehe Nutzer-Wunsch nach durchgaengigen Dropdown-Ueberschriften) -
+        // rein optisch/nicht interaktiv, listet nicht als eigene Option mit (anders als bei einem
+        // <datalist>, wo eine "Kopfzeile" technisch nicht moeglich ist - siehe buildAutomationEntityRow/
+        // allEntityOptions, dort bleibt es beim reinen Feld-Label).
+        const header = document.createElement('div');
+        header.className = 'integrationPickerHeader';
+        header.textContent = 'Gerät';
+        list.appendChild(header);
+
         if (showDemoOption) {
             list.appendChild(buildCheckbox(demoOption.id, demoOption.name, {isDemo: true}));
+        }
+        if (showDemoOption && filtered.length > 0) {
+            // Sichtbare Trennung zwischen dem synthetischen Demo-Geraet und der echten, aus Home
+            // Assistant stammenden Liste - keine eigene Textueberschrift fuer letztere, "Gerät" oben
+            // deckt beide Gruppen gemeinsam ab.
+            const divider = document.createElement('hr');
+            divider.className = 'integrationPickerDivider';
+            list.appendChild(divider);
         }
         for (const integration of filtered) {
             list.appendChild(buildCheckbox(integration.id, integration.name));
