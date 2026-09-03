@@ -3467,34 +3467,161 @@ def compute_od_actions(config, output_rows, input_rows, start, optimizer_run_id)
     return result
 
 
-def _reconcile_computed_actions(config, action_name, id_prefix, computed_by_hour, start):
+# ============================================================================
+# Batterie - fuenfter, sechster, siebter Aktionstyp. "Batterie netzladen" zuerst; "Batterie-Laden
+# verschieben" und "Batterie-Entladen verschieben" folgen (siehe BATTERY_DISCHARGE_SHIFT_*-
+# Platzhalter unten, schon reserviert fuer den Vorrang-Check). Alle drei sind reine
+# HA-Automation-Aktionstypen (kein AUTO_MANAGED_CONTROLS-Direktzugriff, siehe
+# BATTERY_SHIFT_ACTOR_KEYS) und teilen sich denselben "Beenden"-Automation-Actor
+# (actorMappings.battery_action_stop, siehe handle_shyft_action_end).
+# ============================================================================
+
+BATTERY_HOUR_WINDOW = 10
+BATTERY_GRID_CHARGE_ACTION_NAME = "Batterie netzladen"
+BATTERY_GRID_CHARGE_ID_PREFIX = "batterie_netzladen"
+BATTERY_GRID_CHARGE_TRIGGER_KW = 0.2
+# Wieviel vom PV-Batterie-Fluss (PV_B) zusaetzlich zum reinen Netz-Batterie-Fluss (GR_B) in den
+# Zielwert einfliesst - Vorgabe des Nutzers, keine physikalische Herleitung.
+BATTERY_GRID_CHARGE_PV_WEIGHT = 0.6
+# In Stunden mit vorhergesagtem Sonnenschein (PV_sum_44 > 0) wird auf diesen SOC gedeckelt, damit
+# noch Puffer fuer unvorhergesehenen PV-Strom bleibt: liegt der AKTUELLE SOC_B schon darueber,
+# entfaellt die Aktion fuer diese Stunde komplett; sonst wird der Zielwert so weit reduziert, dass
+# die Ladung genau bei diesem SOC endet (ueber die konfigurierte Batteriekapazitaet umgerechnet).
+BATTERY_SUNSHINE_SOC_CAP_PCT = 95
+
+# "Batterie-Entladen verschieben" hat Vorrang vor "Batterie netzladen" (siehe
+# compute_battery_grid_charge_actions) - Name/ID-Prefix sind hier schon reserviert, auch wenn die
+# zugehoerige compute_battery_discharge_shift_actions erst in einem spaeteren Schritt folgt; bis
+# dahin liefert _discharge_shift_reserved_for_hour immer False (leerer Store fuer diesen Namen).
+BATTERY_DISCHARGE_SHIFT_ACTION_NAME = "Batterie-Entladen verschieben"
+BATTERY_DISCHARGE_SHIFT_ID_PREFIX = "batterie_entladen_verschieben"
+
+
+def _is_battery_configured(config):
+    return bool(config.get("integrationMappings", {}).get("batterie"))
+
+
+def _battery_grid_charge_action_id(hour_start):
+    return f"{BATTERY_GRID_CHARGE_ID_PREFIX}_{int(hour_start.timestamp() * 1000)}"
+
+
+def _discharge_shift_reserved_for_hour(hour_start):
+    "True, wenn fuer diese Stunde schon eine geplante oder aktive 'Batterie-Entladen verschieben'-Aktion existiert - die hat Vorrang vor 'Batterie netzladen'."
+    action_id = f"{BATTERY_DISCHARGE_SHIFT_ID_PREFIX}_{int(hour_start.timestamp() * 1000)}"
+    for a in _read_computed_actions():
+        if a.get("_id") == action_id and (a.get("Status") or "").lower() in ("aktiv", "geplant"):
+            return True
+    return False
+
+
+def compute_battery_grid_charge_actions(config, output_rows, input_rows, start, optimizer_run_id):
+    """Berechnet fuer die Stunden 0..BATTERY_HOUR_WINDOW-1 des aktuellsten Optimierungslaufs, ob
+    eine "Batterie netzladen"-Aktion existieren soll. Trigger: GR_B > BATTERY_GRID_CHARGE_TRIGGER_KW.
+    Keine Aktion, wenn fuer dieselbe Stunde schon "Batterie-Entladen verschieben" reserviert ist
+    (siehe _discharge_shift_reserved_for_hour) - das hat Vorrang. In Stunden mit vorhergesagtem
+    Sonnenschein greift zusaetzlich die 95%-Deckelung (siehe BATTERY_SUNSHINE_SOC_CAP_PCT)."""
+    result = {}
+    if not _is_battery_configured(config):
+        return result
+
+    battery_capacity_kwh = config.get("batteryCapacityKwh")
+
+    row_count = min(BATTERY_HOUR_WINDOW, len(output_rows))
+    for i in range(row_count):
+        output_row = output_rows[i]
+        is_current_hour = (i == 0)
+
+        gr_b = _safe_float(output_row.get("GR_B"))
+        if gr_b <= BATTERY_GRID_CHARGE_TRIGGER_KW:
+            continue
+
+        hour_start = start + timedelta(hours=i)
+        if _discharge_shift_reserved_for_hour(hour_start):
+            continue
+
+        pv_b = _safe_float(output_row.get("PV_B"))
+        energy = gr_b + BATTERY_GRID_CHARGE_PV_WEIGHT * pv_b
+        soc_now = _safe_float(output_row.get("SOC_B"))
+
+        pv_sum_forecast = _safe_float(output_row.get("PV_sum_44"))
+        if pv_sum_forecast > 0:
+            if soc_now >= BATTERY_SUNSHINE_SOC_CAP_PCT:
+                continue  # Ausnahme: SOC ist bei Sonnenschein bereits am 95%-Deckel, keine Aktion
+            if battery_capacity_kwh:
+                max_kwh_this_hour = (BATTERY_SUNSHINE_SOC_CAP_PCT - soc_now) / 100 * battery_capacity_kwh
+                energy = min(energy, max(0.0, max_kwh_this_hour))
+
+        next_row = output_rows[i + 1] if i + 1 < len(output_rows) else None
+        soc_next = _safe_float(next_row.get("SOC_B")) if next_row is not None else soc_now
+        target_value = round(energy, 1)
+
+        action = {
+            "_id": _battery_grid_charge_action_id(hour_start),
+            "Action Name": BATTERY_GRID_CHARGE_ACTION_NAME,
+            "Action Trigger Type": "Optimizer",
+            "Energy (electr)": energy,
+            "Start Value": soc_now,
+            "Status": "aktiv" if is_current_hour else "geplant",
+            "Subtitle": f"Laden mit {target_value:.1f} kW, von {round(soc_now)} % auf {round(soc_next)} %",
+            "Target Value": target_value,
+            "Date Start": int(datetime.now(timezone.utc).timestamp() * 1000) if is_current_hour else int(hour_start.timestamp() * 1000),
+            "Date End": int((hour_start + timedelta(hours=1)).timestamp() * 1000),
+            "Optimizer Run": optimizer_run_id,
+            "Execution Status": "yes, planned" if is_action_type_enabled(config, BATTERY_GRID_CHARGE_ACTION_NAME) else "no, deactivated",
+        }
+        result[i] = action
+
+    return result
+
+
+def _reconcile_computed_actions(config, action_name, id_prefix, computed_by_hour, start, hour_window=EV_CHARGE_HOUR_WINDOW, replace_running=False):
     """Ersetzt alle vorhandenen Aktionen vom Typ action_name im lokalen Store, deren Stundenfenster
-    zum aktuellen Lauf gehoert (Stunden 0..EV_CHARGE_HOUR_WINDOW-1 ab start), durch die frisch
-    berechneten (computed_by_hour, siehe compute_ev_charge_actions) - mit Sonderbehandlung fuer die
-    laufende Stunde (Index 0):
+    zum aktuellen Lauf gehoert (Stunden 0..hour_window-1 ab start), durch die frisch berechneten
+    (computed_by_hour, siehe compute_ev_charge_actions) - mit Sonderbehandlung fuer die laufende
+    Stunde (Index 0):
       - existiert dort schon eine Aktion UND soll laut computed_by_hour weiterhin eine existieren:
-        nur Target Value + Log aktualisieren (wenn sich der Zielwert geaendert hat), alle anderen
-        Felder bleiben wie beim ersten Anlegen (Subtitle, Start Value, Energy, costsopt, Date
-        Start/End, Optimizer Run, "_id") - die laufende Aktion wird nicht beendet und neu angelegt.
+        Standardmaessig (replace_running=False) nur Target Value + Log aktualisieren (wenn sich der
+        Zielwert geaendert hat), alle anderen Felder bleiben wie beim ersten Anlegen (Subtitle,
+        Start Value, Energy, costsopt, Date Start/End, Optimizer Run, "_id") - die laufende Aktion
+        wird nicht beendet und neu angelegt. Mit replace_running=True (z.B. "Batterie netzladen",
+        auf Nutzerwunsch) wird die laufende Aktion stattdessen bei jedem neuen Optimierungslauf
+        wirklich beendet und durch die neu berechnete abgeloest (gleiche "_id", da an denselben
+        Stundenbeginn gebunden - die ID wird dafuer aus startedShyftActionIds entfernt, damit
+        process_shyft_actions den Ersatz nicht faelschlich schon als "gestartet" behandelt und
+        dessen eigenen Start-Aufruf uebergeht, siehe process_shyft_actions' Docstring zu
+        "abgeloesten" Aktionen).
       - existiert dort schon eine Aktion, soll laut computed_by_hour aber keine mehr existieren
         (Bedingung nicht mehr gegeben): sofort beenden (handle_shyft_action_end), nicht bis zum
         naechsten process_shyft_actions-Poll warten.
-    Stunden 1..EV_CHARGE_HOUR_WINDOW-1: immer vollstaendig ersetzt - sie sind noch nicht gestartet
-    (Status "geplant"), koennen also gefahrlos verworfen und aus dem aktuellen Lauf neu aufgebaut
-    werden. Aktionen ausserhalb dieses Stundenfensters (z.B. eine gerade zu Ende gegangene Stunde)
-    bleiben unangetastet - der Stundenwechsel selbst gehoert zum spaeteren, allgemeinen Start/Ende/
+    Stunden 1..hour_window-1: immer vollstaendig ersetzt - sie sind noch nicht gestartet (Status
+    "geplant"), koennen also gefahrlos verworfen und aus dem aktuellen Lauf neu aufgebaut werden.
+    Aktionen ausserhalb dieses Stundenfensters (z.B. eine gerade zu Ende gegangene Stunde) bleiben
+    unangetastet - der Stundenwechsel selbst gehoert zum spaeteren, allgemeinen Start/Ende/
     Verlaengern-Mechanismus."""
     all_actions = _read_computed_actions()
-    run_ids = {f"{id_prefix}_{int((start + timedelta(hours=i)).timestamp() * 1000)}" for i in range(EV_CHARGE_HOUR_WINDOW)}
+    run_ids = {f"{id_prefix}_{int((start + timedelta(hours=i)).timestamp() * 1000)}" for i in range(hour_window)}
 
     kept = [a for a in all_actions if not (a.get("Action Name") == action_name and a.get("_id") in run_ids)]
     existing_in_window = {a.get("_id"): a for a in all_actions if a.get("Action Name") == action_name and a.get("_id") in run_ids}
 
     hour0_id = f"{id_prefix}_{int(start.timestamp() * 1000)}"
     hour0_existing = existing_in_window.get(hour0_id)
+    config_changed = False
 
     if 0 in computed_by_hour:
-        if hour0_existing:
+        if hour0_existing and replace_running:
+            was_really_started = hour0_existing.get("Execution Status") == "yes, started"
+            try:
+                handle_shyft_action_end(hour0_existing, was_really_started, config)
+            except Exception as e:
+                print(f"[Shyft] Abloesen (Beenden) von '{action_name}' fehlgeschlagen:", repr(e))
+            started_ids = set(config.get("startedShyftActionIds", []))
+            if hour0_existing.get("_id") in started_ids:
+                started_ids.discard(hour0_existing.get("_id"))
+                config["startedShyftActionIds"] = sorted(started_ids)
+                config_changed = True
+            kept.append(computed_by_hour[0])
+        elif hour0_existing:
             new_target = computed_by_hour[0]["Target Value"]
             if hour0_existing.get("Target Value") != new_target:
                 timestamp = datetime.now().strftime("%d.%m. %H:%M Uhr")
@@ -3515,15 +3642,17 @@ def _reconcile_computed_actions(config, action_name, id_prefix, computed_by_hour
             print(f"[Shyft] Sofortiges Beenden von '{action_name}' fehlgeschlagen:", repr(e))
         # nicht wieder aufgenommen - die Aktion ist beendet und faellt aus dem Store
 
-    for i in range(1, EV_CHARGE_HOUR_WINDOW):
+    for i in range(1, hour_window):
         if i in computed_by_hour:
             kept.append(computed_by_hour[i])
 
     _write_computed_actions(kept)
+    if config_changed:
+        _write_current_config(config)
 
 
 def recompute_actions_from_optimizer_run(input_csv, output_csv, creation_date_ms, optimizer_run_id):
-    "Wird bei jedem frischen Optimierungslauf aufgerufen (siehe _write_dashboard_cache) - berechnet und reconciled alle addon-seitigen Aktionstypen neu. Bisher 'Auto laden', 'Warmwasser', 'Heizung Soll-Temperatur' und 'Verbraucher an'; weitere folgen demselben Muster."
+    "Wird bei jedem frischen Optimierungslauf aufgerufen (siehe _write_dashboard_cache) - berechnet und reconciled alle addon-seitigen Aktionstypen neu. Bisher 'Auto laden', 'Warmwasser', 'Heizung Soll-Temperatur', 'Verbraucher an' und 'Batterie netzladen'; weitere folgen demselben Muster."
     if is_demo_mode():
         return
     try:
@@ -3539,6 +3668,10 @@ def recompute_actions_from_optimizer_run(input_csv, output_csv, creation_date_ms
         _reconcile_computed_actions(config, HEIZUNG_ACTION_NAME, HEIZUNG_ID_PREFIX, heizung_actions, start)
         od_actions = compute_od_actions(config, output_rows, input_rows, start, optimizer_run_id)
         _reconcile_computed_actions(config, OD_ACTION_NAME, OD_ID_PREFIX, od_actions, start)
+        # Vor "Batterie netzladen" reconcilen, sobald "Batterie-Entladen verschieben" existiert -
+        # der Vorrang-Check dort (_discharge_shift_reserved_for_hour) braucht den frischen Stand.
+        battery_grid_charge_actions = compute_battery_grid_charge_actions(config, output_rows, input_rows, start, optimizer_run_id)
+        _reconcile_computed_actions(config, BATTERY_GRID_CHARGE_ACTION_NAME, BATTERY_GRID_CHARGE_ID_PREFIX, battery_grid_charge_actions, start, hour_window=BATTERY_HOUR_WINDOW, replace_running=True)
     except Exception as e:
         print("[Shyft] Aktionsberechnung aus Optimierungslauf fehlgeschlagen:", repr(e))
 

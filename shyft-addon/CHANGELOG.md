@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.0.44.78
+
+* **Fünfter addon-berechneter Aktionstyp: "Batterie netzladen"** (`compute_battery_grid_charge_actions`) - läuft nur, wenn eine Batterie konfiguriert ist. Eine Aktion entsteht, wenn `GR_B > 0,2` kW. `Energy (electr) = GR_B + 0,6 × PV_B`, `Start Value = SOC_B`, `Target Value` = gerundeter Energiewert, Subtitle "Laden mit XXX kW, von YY % auf ZZ %" (ZZ = `SOC_B` der nächsten Zeile). Hat keinen Vorrang, wenn für dieselbe Stunde schon "Batterie-Entladen verschieben" reserviert ist (folgt als nächster Aktionstyp) - Name/ID-Präfix sind dafür schon reserviert. In Stunden mit vorhergesagtem Sonnenschein (`PV_sum_44 > 0`) wird auf 95 % SOC gedeckelt: liegt der aktuelle `SOC_B` schon darüber, entfällt die Aktion für diese Stunde; sonst wird der Zielwert über die konfigurierte Batteriekapazität (`batteryCapacityKwh`) so reduziert, dass die Ladung genau bei 95 % endet.
+* **`_reconcile_computed_actions` unterstützt jetzt `replace_running=True`** - anders als die anderen vier Aktionstypen (die die laufende Stunde nur im Zielwert aktualisieren) wird "Batterie netzladen" bei jeder neuen Optimierung wirklich beendet und durch die frisch berechnete Aktion abgelöst, auch für die gerade laufende Stunde. Verwendet dieselbe `"_id"` (an den Stundenbeginn gebunden), entfernt sie aber aus `startedShyftActionIds`, damit `process_shyft_actions` die Ablösung nicht fälschlich als "schon gestartet" überspringt.
+
 ## 0.0.44.77
 
 * **"Details einblenden"-Button unter jeder eingeklappten Gerätekachel** (Konfiguration) - der Aufklapp-Pfeil allein war zu unauffällig, um als Einblenden-Aktion gefunden zu werden. Ausblenden bleibt weiterhin Aufgabe des Pfeils.
