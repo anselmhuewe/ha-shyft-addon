@@ -3574,6 +3574,94 @@ def compute_battery_grid_charge_actions(config, output_rows, input_rows, start, 
     return result
 
 
+# "Batterie-Entladen verschieben" - sechster Aktionstyp. Reine "Halte-den-Ladestand"-Aktion (Energy/
+# Target Value immer 0) - verhindert, dass die Batterie diese Stunde entladen wird, damit der
+# gespeicherte Strom fuer eine spaeter guenstigere/teurere Stunde aufgehoben wird.
+BATTERY_DISCHARGE_SHIFT_TRIGGER_KW = 0.2  # fuer die CO_B/GR_B < ...-Bedingung (nicht dieselbe Schwelle wie beim Netzladen-Vorrang-Check, nur zufaellig derselbe Wert laut Nutzer-Vorgabe)
+BATTERY_DISCHARGE_SHIFT_MIN_SOC_PCT = 15
+BATTERY_DISCHARGE_SHIFT_MAX_SOC_DROP_PCT = 0.5
+BATTERY_DISCHARGE_SHIFT_MIN_COSTS_OPT = 0.1
+
+
+def _battery_discharge_shift_action_id(hour_start):
+    return f"{BATTERY_DISCHARGE_SHIFT_ID_PREFIX}_{int(hour_start.timestamp() * 1000)}"
+
+
+def _has_dynamic_tariff(input_rows):
+    "True, wenn p_buy ueber die gesamte input_csv nicht durchgehend gleich ist (dynamischer Stromtarif) - Voraussetzung fuer 'Batterie-Entladen verschieben', da sich das Verschieben bei einem Festpreistarif nicht lohnt. Gilt fuer den gesamten Lauf, nicht pro Stunde."
+    prices = {round(_safe_float(row.get("p_buy")), 6) for row in input_rows}
+    return len(prices) > 1
+
+
+def compute_battery_discharge_shift_actions(config, output_rows, input_rows, start, optimizer_run_id):
+    """Berechnet fuer die Stunden 0..BATTERY_HOUR_WINDOW-1 des aktuellsten Optimierungslaufs, ob
+    eine "Batterie-Entladen verschieben"-Aktion existieren soll. Trigger (alle Bedingungen UND-
+    verknuepft):
+      - (CO_B < 0,2 ODER GR_B < 0,2) UND GR_sum > 0
+      - dynamischer Stromtarif im gesamten Lauf (siehe _has_dynamic_tariff)
+      - SOC_B > 15% (darunter lohnt sich das Verschieben nicht mehr)
+      - SOC_B (diese Stunde) minus SOC_B (naechste Stunde) <= 0,5 Prozentpunkte (bis zu 0,5
+        Prozentpunkte Entladung gelten noch als "verschoben")
+      - costs_opt > 0,1
+    "Batterie netzladen" hat Vorrang: greift dessen Ausloese-Bedingung (GR_B > 0,2) fuer dieselbe
+    Stunde, wird hier keine Aktion erzeugt (die umgekehrte Pruefung sitzt in
+    compute_battery_grid_charge_actions/_discharge_shift_reserved_for_hour)."""
+    result = {}
+    if not _is_battery_configured(config):
+        return result
+    if not _has_dynamic_tariff(input_rows):
+        return result
+
+    row_count = min(BATTERY_HOUR_WINDOW, len(output_rows))
+    for i in range(row_count):
+        output_row = output_rows[i]
+        is_current_hour = (i == 0)
+
+        gr_b = _safe_float(output_row.get("GR_B"))
+        if gr_b > BATTERY_GRID_CHARGE_TRIGGER_KW:
+            continue  # "Batterie netzladen" hat fuer diese Stunde Vorrang
+
+        co_b = _safe_float(output_row.get("CO_B"))
+        if not (co_b < BATTERY_DISCHARGE_SHIFT_TRIGGER_KW or gr_b < BATTERY_DISCHARGE_SHIFT_TRIGGER_KW):
+            continue
+
+        gr_sum = _safe_float(output_row.get("GR_sum"))
+        if gr_sum <= 0:
+            continue
+
+        soc_now = _safe_float(output_row.get("SOC_B"))
+        if soc_now <= BATTERY_DISCHARGE_SHIFT_MIN_SOC_PCT:
+            continue
+
+        next_row = output_rows[i + 1] if i + 1 < len(output_rows) else None
+        soc_next = _safe_float(next_row.get("SOC_B")) if next_row is not None else soc_now
+        if soc_now - soc_next > BATTERY_DISCHARGE_SHIFT_MAX_SOC_DROP_PCT:
+            continue
+
+        costs_opt = _safe_float(output_row.get("costs_opt"))
+        if costs_opt <= BATTERY_DISCHARGE_SHIFT_MIN_COSTS_OPT:
+            continue
+
+        hour_start = start + timedelta(hours=i)
+        action = {
+            "_id": _battery_discharge_shift_action_id(hour_start),
+            "Action Name": BATTERY_DISCHARGE_SHIFT_ACTION_NAME,
+            "Action Trigger Type": "Optimizer",
+            "Energy (electr)": 0,
+            "Start Value": soc_now,
+            "Status": "aktiv" if is_current_hour else "geplant",
+            "Subtitle": f"Ladestand bei {round(soc_now)} %",
+            "Target Value": 0,
+            "Date Start": int(datetime.now(timezone.utc).timestamp() * 1000) if is_current_hour else int(hour_start.timestamp() * 1000),
+            "Date End": int((hour_start + timedelta(hours=1)).timestamp() * 1000),
+            "Optimizer Run": optimizer_run_id,
+            "Execution Status": "yes, planned" if is_action_type_enabled(config, BATTERY_DISCHARGE_SHIFT_ACTION_NAME) else "no, deactivated",
+        }
+        result[i] = action
+
+    return result
+
+
 def _reconcile_computed_actions(config, action_name, id_prefix, computed_by_hour, start, hour_window=EV_CHARGE_HOUR_WINDOW, replace_running=False):
     """Ersetzt alle vorhandenen Aktionen vom Typ action_name im lokalen Store, deren Stundenfenster
     zum aktuellen Lauf gehoert (Stunden 0..hour_window-1 ab start), durch die frisch berechneten
@@ -3652,7 +3740,7 @@ def _reconcile_computed_actions(config, action_name, id_prefix, computed_by_hour
 
 
 def recompute_actions_from_optimizer_run(input_csv, output_csv, creation_date_ms, optimizer_run_id):
-    "Wird bei jedem frischen Optimierungslauf aufgerufen (siehe _write_dashboard_cache) - berechnet und reconciled alle addon-seitigen Aktionstypen neu. Bisher 'Auto laden', 'Warmwasser', 'Heizung Soll-Temperatur', 'Verbraucher an' und 'Batterie netzladen'; weitere folgen demselben Muster."
+    "Wird bei jedem frischen Optimierungslauf aufgerufen (siehe _write_dashboard_cache) - berechnet und reconciled alle addon-seitigen Aktionstypen neu. Bisher 'Auto laden', 'Warmwasser', 'Heizung Soll-Temperatur', 'Verbraucher an', 'Batterie-Entladen verschieben' und 'Batterie netzladen'; weitere folgen demselben Muster."
     if is_demo_mode():
         return
     try:
@@ -3668,8 +3756,13 @@ def recompute_actions_from_optimizer_run(input_csv, output_csv, creation_date_ms
         _reconcile_computed_actions(config, HEIZUNG_ACTION_NAME, HEIZUNG_ID_PREFIX, heizung_actions, start)
         od_actions = compute_od_actions(config, output_rows, input_rows, start, optimizer_run_id)
         _reconcile_computed_actions(config, OD_ACTION_NAME, OD_ID_PREFIX, od_actions, start)
-        # Vor "Batterie netzladen" reconcilen, sobald "Batterie-Entladen verschieben" existiert -
-        # der Vorrang-Check dort (_discharge_shift_reserved_for_hour) braucht den frischen Stand.
+        # VOR "Batterie netzladen" berechnen+reconcilen: dessen Vorrang-Check
+        # (_discharge_shift_reserved_for_hour) liest den Store und braucht deshalb den frischen
+        # Stand aus DIESEM Lauf, nicht den von der letzten Optimierung. Die umgekehrte Pruefung
+        # (compute_battery_discharge_shift_actions gibt "Batterie netzladen" Vorrang) rechnet GR_B
+        # direkt aus output_csv nach, ist also unabhaengig von der Reihenfolge hier korrekt.
+        battery_discharge_shift_actions = compute_battery_discharge_shift_actions(config, output_rows, input_rows, start, optimizer_run_id)
+        _reconcile_computed_actions(config, BATTERY_DISCHARGE_SHIFT_ACTION_NAME, BATTERY_DISCHARGE_SHIFT_ID_PREFIX, battery_discharge_shift_actions, start, hour_window=BATTERY_HOUR_WINDOW)
         battery_grid_charge_actions = compute_battery_grid_charge_actions(config, output_rows, input_rows, start, optimizer_run_id)
         _reconcile_computed_actions(config, BATTERY_GRID_CHARGE_ACTION_NAME, BATTERY_GRID_CHARGE_ID_PREFIX, battery_grid_charge_actions, start, hour_window=BATTERY_HOUR_WINDOW, replace_running=True)
     except Exception as e:

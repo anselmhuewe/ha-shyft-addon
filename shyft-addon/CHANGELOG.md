@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.0.44.79
+
+* **Sechster addon-berechneter Aktionstyp: "Batterie-Entladen verschieben"** (`compute_battery_discharge_shift_actions`) - hält die Batterie diese Stunde bewusst vom Entladen ab, um den Ladestand für eine später günstigere/teurere Stunde aufzuheben. Läuft nur bei konfigurierter Batterie UND dynamischem Stromtarif (mindestens zwei unterschiedliche `p_buy`-Werte über die gesamte `input_csv`, sonst lohnt sich das Verschieben nicht - gilt für den gesamten Lauf, nicht pro Stunde). Trigger je Stunde: `(CO_B < 0,2 ODER GR_B < 0,2)` UND `GR_sum > 0` UND `SOC_B > 15 %` UND `SOC_B(diese Stunde) − SOC_B(nächste Stunde) ≤ 0,5 Prozentpunkte` UND `costs_opt > 0,1`. "Batterie netzladen" hat Vorrang (`GR_B > 0,2` blockiert diese Aktion für dieselbe Stunde). `Energy (electr)`/`Target Value` sind konstant 0, Subtitle "Ladestand bei XX %".
+* `recompute_actions_from_optimizer_run` berechnet "Batterie-Entladen verschieben" jetzt vor "Batterie netzladen", damit dessen Vorrang-Check (`_discharge_shift_reserved_for_hour`) den frischen Stand aus demselben Optimierungslauf sieht statt den vom letzten Lauf.
+
 ## 0.0.44.78
 
 * **Fünfter addon-berechneter Aktionstyp: "Batterie netzladen"** (`compute_battery_grid_charge_actions`) - läuft nur, wenn eine Batterie konfiguriert ist. Eine Aktion entsteht, wenn `GR_B > 0,2` kW. `Energy (electr) = GR_B + 0,6 × PV_B`, `Start Value = SOC_B`, `Target Value` = gerundeter Energiewert, Subtitle "Laden mit XXX kW, von YY % auf ZZ %" (ZZ = `SOC_B` der nächsten Zeile). Hat keinen Vorrang, wenn für dieselbe Stunde schon "Batterie-Entladen verschieben" reserviert ist (folgt als nächster Aktionstyp) - Name/ID-Präfix sind dafür schon reserviert. In Stunden mit vorhergesagtem Sonnenschein (`PV_sum_44 > 0`) wird auf 95 % SOC gedeckelt: liegt der aktuelle `SOC_B` schon darüber, entfällt die Aktion für diese Stunde; sonst wird der Zielwert über die konfigurierte Batteriekapazität (`batteryCapacityKwh`) so reduziert, dass die Ladung genau bei 95 % endet.
