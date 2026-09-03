@@ -3519,7 +3519,9 @@ def compute_battery_grid_charge_actions(config, output_rows, input_rows, start, 
     eine "Batterie netzladen"-Aktion existieren soll. Trigger: GR_B > BATTERY_GRID_CHARGE_TRIGGER_KW.
     Keine Aktion, wenn fuer dieselbe Stunde schon "Batterie-Entladen verschieben" reserviert ist
     (siehe _discharge_shift_reserved_for_hour) - das hat Vorrang. In Stunden mit vorhergesagtem
-    Sonnenschein greift zusaetzlich die 95%-Deckelung (siehe BATTERY_SUNSHINE_SOC_CAP_PCT)."""
+    Sonnenschein greift zusaetzlich die 95%-Deckelung (siehe BATTERY_SUNSHINE_SOC_CAP_PCT).
+    Unabhaengig davon wird der Zielwert immer sicherheitshalber auf die maximale Ladeleistung der
+    Batterie gedeckelt (Live-Sensor "battery_charge_limit_current")."""
     result = {}
     if not _is_battery_configured(config):
         return result
@@ -3550,6 +3552,13 @@ def compute_battery_grid_charge_actions(config, output_rows, input_rows, start, 
             if battery_capacity_kwh:
                 max_kwh_this_hour = (BATTERY_SUNSHINE_SOC_CAP_PCT - soc_now) / 100 * battery_capacity_kwh
                 energy = min(energy, max(0.0, max_kwh_this_hour))
+
+        # Sicherheitshalber immer zusaetzlich auf die maximale Ladeleistung der Batterie gedeckelt -
+        # der LIVE-Sensor (nicht ein statischer Konfigurationswert), da die tatsaechlich erlaubte
+        # Ladeleistung z.B. temperatur-/BMS-abhaengig schwanken kann.
+        max_charge_kw = _read_mapped_numeric(config, "battery_charge_limit_current")
+        if max_charge_kw is not None:
+            energy = min(energy, max(0.0, max_charge_kw))
 
         next_row = output_rows[i + 1] if i + 1 < len(output_rows) else None
         soc_next = _safe_float(next_row.get("SOC_B")) if next_row is not None else soc_now
@@ -3662,6 +3671,76 @@ def compute_battery_discharge_shift_actions(config, output_rows, input_rows, sta
     return result
 
 
+# "Batterie-Laden verschieben (PV-Ueberschuss)" - siebter und letzter Batterie-Aktionstyp. Reine
+# "Halte-den-Ladestand"-Aktion wie "Batterie-Entladen verschieben" (Energy immer 0), verhindert
+# aber das GEZIELTE Laden aus PV-Ueberschuss (statt das Entladen) - lohnt sich nicht, wenn ohnehin
+# genug PV exportiert wird und der Ladestand komfortabel hoch bleibt.
+BATTERY_CHARGE_SHIFT_ACTION_NAME = "Batterie-Laden verschieben (PV-Überschuss)"
+BATTERY_CHARGE_SHIFT_ID_PREFIX = "batterie_laden_verschieben"
+BATTERY_CHARGE_SHIFT_LOOKAHEAD_HOURS = 12
+BATTERY_CHARGE_SHIFT_MIN_SOC_PCT = 25
+BATTERY_CHARGE_SHIFT_MIN_PV_SURPLUS_KWH = 5
+# Kein "echter" Zielwert (die Aktion bedeutet ja "nicht laden") - fester, vom Nutzer vorgegebener
+# Wert statt 0, vermutlich als von 0 unterscheidbares Signal fuer die Automation.
+BATTERY_CHARGE_SHIFT_TARGET_VALUE = 0.1
+
+
+def _battery_charge_shift_action_id(hour_start):
+    return f"{BATTERY_CHARGE_SHIFT_ID_PREFIX}_{int(hour_start.timestamp() * 1000)}"
+
+
+def compute_battery_charge_shift_actions(config, output_rows, input_rows, start, optimizer_run_id):
+    """Berechnet fuer die Stunden 0..BATTERY_HOUR_WINDOW-1 des aktuellsten Optimierungslaufs, ob
+    eine "Batterie-Laden verschieben (PV-Ueberschuss)"-Aktion existieren soll. Trigger, betrachtet
+    ueber ein 12-Stunden-Fenster ab dieser Stunde (diese eingeschlossen, siehe
+    BATTERY_CHARGE_SHIFT_LOOKAHEAD_HOURS):
+      - SOC_B bleibt in JEDER der 12 Stunden > 25%
+      - Summe von PV_GR ueber dieselben 12 Stunden > 5 (kWh)
+    Reicht output_csv fuer diese Stunde nicht mehr fuer die vollen 12 Stunden Vorschau, wird sie
+    (und jede spaetere) uebersprungen - ohne vollstaendige Vorschau ist "SOC bleibt durchgehend
+    ueber 25%" nicht zusicherbar."""
+    result = {}
+    if not _is_battery_configured(config):
+        return result
+
+    row_count = min(BATTERY_HOUR_WINDOW, len(output_rows))
+    for i in range(row_count):
+        window_end = i + BATTERY_CHARGE_SHIFT_LOOKAHEAD_HOURS
+        if window_end > len(output_rows):
+            break  # keine vollstaendige 12h-Vorschau mehr - gilt auch fuer alle folgenden Stunden
+
+        window_rows = output_rows[i:window_end]
+        soc_values = [_safe_float(r.get("SOC_B")) for r in window_rows]
+        if not all(soc > BATTERY_CHARGE_SHIFT_MIN_SOC_PCT for soc in soc_values):
+            continue
+
+        pv_gr_sum = sum(_safe_float(r.get("PV_GR")) for r in window_rows)
+        if pv_gr_sum <= BATTERY_CHARGE_SHIFT_MIN_PV_SURPLUS_KWH:
+            continue
+
+        is_current_hour = (i == 0)
+        hour_start = start + timedelta(hours=i)
+        soc_now = soc_values[0]
+
+        action = {
+            "_id": _battery_charge_shift_action_id(hour_start),
+            "Action Name": BATTERY_CHARGE_SHIFT_ACTION_NAME,
+            "Action Trigger Type": "Optimizer",
+            "Energy (electr)": 0,
+            "Start Value": soc_now,
+            "Status": "aktiv" if is_current_hour else "geplant",
+            "Subtitle": "Batterie nicht laden",
+            "Target Value": BATTERY_CHARGE_SHIFT_TARGET_VALUE,
+            "Date Start": int(datetime.now(timezone.utc).timestamp() * 1000) if is_current_hour else int(hour_start.timestamp() * 1000),
+            "Date End": int((hour_start + timedelta(hours=1)).timestamp() * 1000),
+            "Optimizer Run": optimizer_run_id,
+            "Execution Status": "yes, planned" if is_action_type_enabled(config, BATTERY_CHARGE_SHIFT_ACTION_NAME) else "no, deactivated",
+        }
+        result[i] = action
+
+    return result
+
+
 def _reconcile_computed_actions(config, action_name, id_prefix, computed_by_hour, start, hour_window=EV_CHARGE_HOUR_WINDOW, replace_running=False):
     """Ersetzt alle vorhandenen Aktionen vom Typ action_name im lokalen Store, deren Stundenfenster
     zum aktuellen Lauf gehoert (Stunden 0..hour_window-1 ab start), durch die frisch berechneten
@@ -3740,7 +3819,7 @@ def _reconcile_computed_actions(config, action_name, id_prefix, computed_by_hour
 
 
 def recompute_actions_from_optimizer_run(input_csv, output_csv, creation_date_ms, optimizer_run_id):
-    "Wird bei jedem frischen Optimierungslauf aufgerufen (siehe _write_dashboard_cache) - berechnet und reconciled alle addon-seitigen Aktionstypen neu. Bisher 'Auto laden', 'Warmwasser', 'Heizung Soll-Temperatur', 'Verbraucher an', 'Batterie-Entladen verschieben' und 'Batterie netzladen'; weitere folgen demselben Muster."
+    "Wird bei jedem frischen Optimierungslauf aufgerufen (siehe _write_dashboard_cache) - berechnet und reconciled alle addon-seitigen Aktionstypen neu: 'Auto laden', 'Warmwasser', 'Heizung Soll-Temperatur', 'Verbraucher an', 'Batterie-Entladen verschieben', 'Batterie netzladen' und 'Batterie-Laden verschieben (PV-Ueberschuss)' - alle sieben bisher geplanten Aktionstypen sind damit umgesetzt."
     if is_demo_mode():
         return
     try:
@@ -3765,6 +3844,8 @@ def recompute_actions_from_optimizer_run(input_csv, output_csv, creation_date_ms
         _reconcile_computed_actions(config, BATTERY_DISCHARGE_SHIFT_ACTION_NAME, BATTERY_DISCHARGE_SHIFT_ID_PREFIX, battery_discharge_shift_actions, start, hour_window=BATTERY_HOUR_WINDOW)
         battery_grid_charge_actions = compute_battery_grid_charge_actions(config, output_rows, input_rows, start, optimizer_run_id)
         _reconcile_computed_actions(config, BATTERY_GRID_CHARGE_ACTION_NAME, BATTERY_GRID_CHARGE_ID_PREFIX, battery_grid_charge_actions, start, hour_window=BATTERY_HOUR_WINDOW, replace_running=True)
+        battery_charge_shift_actions = compute_battery_charge_shift_actions(config, output_rows, input_rows, start, optimizer_run_id)
+        _reconcile_computed_actions(config, BATTERY_CHARGE_SHIFT_ACTION_NAME, BATTERY_CHARGE_SHIFT_ID_PREFIX, battery_charge_shift_actions, start, hour_window=BATTERY_HOUR_WINDOW)
     except Exception as e:
         print("[Shyft] Aktionsberechnung aus Optimierungslauf fehlgeschlagen:", repr(e))
 

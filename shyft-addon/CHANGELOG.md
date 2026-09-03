@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.0.44.80
+
+* **Siebter und letzter Batterie-Aktionstyp: "Batterie-Laden verschieben (PV-Überschuss)"** (`compute_battery_charge_shift_actions`) - verhindert gezieltes Laden aus PV-Überschuss, wenn sich das nicht lohnt. Trigger, betrachtet über ein 12-Stunden-Fenster ab der jeweiligen Stunde: `SOC_B` bleibt in jeder der 12 Stunden > 25 % UND die Summe von `PV_GR` über denselben Zeitraum ist > 5 kWh. Reicht `output_csv` für eine Stunde nicht mehr für die volle 12h-Vorschau, wird sie (und jede spätere) übersprungen. `Energy (electr) = 0`, `Target Value = 0,1` (fester Signalwert, nicht 0), Subtitle "Batterie nicht laden". Damit sind alle sieben geplanten Aktionstypen umgesetzt.
+* **Fix: "Batterie netzladen" deckelt den Zielwert jetzt zusätzlich sicherheitshalber auf die maximale Ladeleistung der Batterie** (Live-Sensor `battery_charge_limit_current`, nicht ein statischer Konfigurationswert, da die tatsächlich erlaubte Ladeleistung z.B. temperatur-/BMS-abhängig schwanken kann) - unabhängig von der bereits bestehenden 95%-SOC-Deckelung bei Sonnenschein.
+
 ## 0.0.44.79
 
 * **Sechster addon-berechneter Aktionstyp: "Batterie-Entladen verschieben"** (`compute_battery_discharge_shift_actions`) - hält die Batterie diese Stunde bewusst vom Entladen ab, um den Ladestand für eine später günstigere/teurere Stunde aufzuheben. Läuft nur bei konfigurierter Batterie UND dynamischem Stromtarif (mindestens zwei unterschiedliche `p_buy`-Werte über die gesamte `input_csv`, sonst lohnt sich das Verschieben nicht - gilt für den gesamten Lauf, nicht pro Stunde). Trigger je Stunde: `(CO_B < 0,2 ODER GR_B < 0,2)` UND `GR_sum > 0` UND `SOC_B > 15 %` UND `SOC_B(diese Stunde) − SOC_B(nächste Stunde) ≤ 0,5 Prozentpunkte` UND `costs_opt > 0,1`. "Batterie netzladen" hat Vorrang (`GR_B > 0,2` blockiert diese Aktion für dieselbe Stunde). `Energy (electr)`/`Target Value` sind konstant 0, Subtitle "Ladestand bei XX %".
