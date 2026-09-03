@@ -51,10 +51,6 @@ DASHBOARD_CACHE_PATH = "/data/dashboard_cache.json"
 # ist, bleibt ihr zuletzt aufgezeichneter Wert unveraendert - das ist dann "die letzte Prognose vor
 # Eintritt der Stunde", der eigentliche Vergleichswert fuer die Prognosequalitaet.
 PV_FORECAST_SNAPSHOT_PATH = "/data/pv_forecast_snapshot.json"
-# Wie weit vor Mitternacht readPvForecastVsActual fuer den PV-Ist-Nacht-Fallback zurueckschaut, um
-# einen letzten bekannten Wert zum Forward-Fillen zu haben (siehe dort) - 10h reicht auch im
-# Hochsommer bis deutlich vor Sonnenuntergang zurueck.
-PV_ACTUAL_FORWARD_FILL_LOOKBACK_HOURS = 10
 CAR_PRESENCE_LOG_PATH = "/data/car_presence_log.json"
 CAR_PRESENCE_LOG_MAX_DAYS = 180
 CAR_PRESENCE_MIN_SAMPLES = 3
@@ -638,22 +634,17 @@ def readPvForecastVsActual():
         # Nachts liefert der PV-Sensor oft ueberhaupt keine neuen Events (der Wechselrichter meldet
         # sich schlafend gar nicht mehr, statt weiter "0" zu senden) - ohne Fallback bliebe die
         # Ist-Kurve dann bis zum ersten Morgen-Event komplett leer, statt (korrekt) bei 0 zu stehen.
-        # Forward-Fill vom letzten bekannten Wert VOR Mitternacht (siehe _forward_fill_hourly) fuellt
-        # genau diese Luecken - aber nur dort, wo die obige Mittelung oben KEINEN echten Messwert
-        # fuer die Stunde hatte; Stunden mit echten Samples behalten ihren (praeziseren) Mittelwert.
-        try:
-            lookback_start = midnight_local - timedelta(hours=PV_ACTUAL_FORWARD_FILL_LOOKBACK_HOURS)
-            raw_events = homeassistant_adapter.load_entity_history_raw(entity_id, lookback_start, now_local)
-            hours = [midnight_local + timedelta(hours=i) for i in range(int((now_local - midnight_local).total_seconds() // 3600) + 1)]
-            for hour_local, state in _forward_fill_hourly(raw_events, hours).items():
-                if hour_local in actual_by_hour:
-                    continue  # echter Stunden-Mittelwert vorhanden - nicht durch den Fallback ersetzen
-                try:
-                    actual_by_hour[hour_local] = float(state)
-                except (TypeError, ValueError):
-                    continue  # letzter bekannter Zustand war selbst "unknown"/"unavailable" - keine Luecke fuellen, die wir nicht kennen
-        except Exception as e:
-            print("[Shyft] PV-Ist-Werte (Nacht-Fallback) konnten nicht geladen werden:", repr(e))
+        # WICHTIG: hier NICHT den letzten bekannten (evtl. noch positiven) Wert vorwaerts fortfuehren
+        # (siehe _forward_fill_hourly - das waere fuer einen Zustand wie Wallbox-Status/SOC richtig,
+        # der sich zwischen Events tatsaechlich nicht aendert, fuer eine Leistungsmessung aber Unsinn:
+        # "keine neuen Events mehr" heisst hier "Anlage produziert nichts mehr", nicht "Leistung
+        # eingefroren bei ihrem letzten Wert"). Jede bereits vergangene Stunde ohne echten Messwert
+        # wird deshalb direkt auf 0 gesetzt statt auf den letzten bekannten Zustand.
+        hour_cursor = midnight_local
+        while hour_cursor <= now_local:
+            hour_key = _hour_floor(hour_cursor)
+            actual_by_hour.setdefault(hour_key, 0.0)
+            hour_cursor += timedelta(hours=1)
 
     midnight_local = _hour_floor(datetime.now().astimezone().replace(hour=0))
     candidate_hours = set(today_forecast_by_hour) | set(future_forecast_by_hour) | set(actual_by_hour)

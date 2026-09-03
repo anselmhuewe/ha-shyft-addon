@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.0.44.76
+
+* **Fix: der Nacht-Fallback von 0.0.44.75 war selbst fehlerhaft.** Er hat bei fehlenden Events den *letzten bekannten* PV-Leistungswert vorwärts fortgeführt (`_forward_fill_hourly`, eigentlich für Zustände wie Wallbox-Status/SOC gedacht, die sich zwischen Events wirklich nicht ändern) - für eine Leistungsmessung ergab das Unsinn: ein zuletzt positiver Wert vor Verstummen des Sensors wäre stundenlang als "immer noch produziert" weitergeschrieben worden. Jede Stunde ohne echten Messwert wird jetzt direkt auf 0 gesetzt, nicht auf den letzten Zustand.
+
 ## 0.0.44.75
 
 * PV-Leistung-Chart: Y-Achse beginnt jetzt fest bei 0 statt durch das generische 10%-Padding leicht ins Negative zu rutschen (PV-Leistung kann nie negativ sein).
