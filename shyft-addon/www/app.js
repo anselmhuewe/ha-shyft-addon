@@ -193,8 +193,12 @@ const INTEGRATION_SECTIONS = [
     },
     {
         key: 'batterie',
+        // battery_storage_command_mode/battery_charge_limit_current/battery_discharge_limit_current
+        // sind KEINE reinen Anzeige-Sensoren mehr, sondern Steuerungs-Entitaeten - werden jetzt unter
+        // der "Steuerung"-Ueberschrift (siehe buildBatterySteuerungSection) verwaltet, nicht mehr hier
+        // in der normalen Sensor-Zuordnungstabelle.
         label: 'Batterie',
-        sensors: ['battery_storage_command_mode', 'battery_state_of_charge', 'battery_charge_limit_current', 'battery_discharge_limit_current'],
+        sensors: ['battery_state_of_charge'],
         actions: ['battery_charge_shift_pv_surplus', 'battery_discharge_shift', 'battery_grid_charge', 'battery_action_stop'],
         requiresDeviceClass: 'power',
         hasDemo: true
@@ -298,6 +302,23 @@ const AUTO_MANAGED_CONTROLS = [
     {key: 'consumer_on_off', type: 'switch', sensorField: 'sonstiger_verbraucher_switch_entity', actionKeys: ['consumer_on', 'consumer_off'], titleLabel: 'Sonstiger Verbraucher (aktuell)', hasAutomationVariant: true},
 ];
 const AUTO_MANAGED_ACTION_KEYS = new Set(AUTO_MANAGED_CONTROLS.flatMap(c => c.actionKeys));
+
+// Die vier Batterie-Aktionstypen bekommen ihre eigene "Steuerung"-UI (siehe
+// buildBatterySteuerungSection) statt der generischen einzeiligen Automation-Zuordnung - werden
+// deshalb aus der "manualActions"-Tabelle ausgeschlossen (bleiben aber in section.actions, damit
+// ihr Toggle weiterhin ueber den bestehenden generischen Mechanismus gespeichert wird).
+const BATTERY_DIRECT_ACTION_KEYS = new Set([
+    'battery_charge_shift_pv_surplus', 'battery_discharge_shift', 'battery_grid_charge', 'battery_action_stop'
+]);
+// Je Aktionstyp die "primaere" gekoppelte Steuerungs-Entitaet, die bei Variante "direct"
+// mindestens gesetzt sein muss, damit die Geraete-Kachel als vollstaendig konfiguriert gilt -
+// analog zu control.sensorField bei AUTO_MANAGED_CONTROLS (siehe isSectionComplete).
+const BATTERY_DIRECT_REQUIRED_SENSOR_FIELDS = {
+    battery_charge_shift_pv_surplus: 'battery_charge_limit_current',
+    battery_discharge_shift: 'battery_discharge_limit_current',
+    battery_grid_charge: 'battery_charge_limit_current',
+    battery_action_stop: 'battery_charge_limit_current',
+};
 
 // "Auto laden" gets its own bespoke recipe UI (buildCarChargeControl) instead of the uniform
 // AUTO_MANAGED_CONTROLS shape, since it's a multi-stage, manufacturer-varying command sequence.
@@ -461,6 +482,26 @@ async function saveConfigurationNow() {
         }
     }
 
+    // Batterie-Steuerung: analog zum AUTO_MANAGED_CONTROLS-Muster oben, aber eigenstaendig
+    // (siehe buildBatterySteuerungSection) - Varianten-Dropdown + HA-Automation-Feld je Aktionstyp.
+    // Die gekoppelten Limit-Entitaeten (Lade-/Entladeleistung/Timeout) schreiben sich selbst direkt
+    // in configData['sensorMappings'] (siehe buildBatteryCoupledEntityField) und werden hier ueber
+    // den sensorValues-Spread oben bereits mit uebernommen.
+    for (const actionKey of BATTERY_DIRECT_ACTION_KEYS) {
+        const variantElement = document.getElementById(actionKey + '_variant');
+        if (variantElement) {
+            controlVariant[actionKey] = variantElement.value;
+        }
+        const automationElement = document.getElementById(actionKey + '_ha_automation_entity');
+        if (automationElement) {
+            actorValues[actionKey] = automationElement.value;
+        }
+    }
+    const batteryModeNetzladenElement = document.getElementById('battery_mode_netzladen_value');
+    const batteryModeNetzladenValue = batteryModeNetzladenElement ? batteryModeNetzladenElement.value : (configData["batteryModeNetzladenValue"] ?? null);
+    const batteryModeSelfConsumptionElement = document.getElementById('battery_mode_self_consumption_value');
+    const batteryModeSelfConsumptionValue = batteryModeSelfConsumptionElement ? batteryModeSelfConsumptionElement.value : (configData["batteryModeSelfConsumptionValue"] ?? null);
+
     const notificationTargets = {...(configData["notificationTargets"] || {})};
     const phoneInput = document.getElementById('notificationPhone');
     if (phoneInput) {
@@ -537,6 +578,8 @@ async function saveConfigurationNow() {
         "batteryCapacityKwh": configData["batteryCapacityKwh"] ?? 10,
         "batterySocMinPercent": configData["batterySocMinPercent"] ?? 10,
         "batteryMaxChargeKw": configData["batteryMaxChargeKw"] ?? null,
+        "batteryModeNetzladenValue": batteryModeNetzladenValue,
+        "batteryModeSelfConsumptionValue": batteryModeSelfConsumptionValue,
         "coPriceGas": configData["coPriceGas"] ?? 0.1,
         "optimizationPeriodsSite": configData["optimizationPeriodsSite"] ?? 48,
         "electricityBaseLoad": configData["electricityBaseLoad"] ?? 'niedrig__2628',
@@ -678,6 +721,12 @@ const loadConfiguration = async (event) => {
             allEntityOptionsElement.appendChild(option);
         }
 
+        // Vorab laden, damit die Modus-Dropdowns in buildBatterySteuerungSection beim ersten Rendern
+        // gleich die volle Optionsliste zeigen, statt zunaechst nur den gespeicherten Wert (siehe
+        // buildBatteryModeValueSelect) - renderIntegrationSections ist synchron, ein Await danach
+        // haette also zu spaet kommen.
+        await loadBatteryModeOptions();
+
         renderGeneralConfigSection();
         renderIntegrationSections();
         renderNotificationSection();
@@ -778,9 +827,18 @@ function isSectionComplete(section, currentIds) {
         }
     }
 
-    const manualActions = section.actions.filter(key => !AUTO_MANAGED_ACTION_KEYS.has(key) && !CAR_CHARGE_ACTION_KEYS.has(key) && !HOT_WATER_ACTION_KEYS.has(key));
+    const manualActions = section.actions.filter(key => !AUTO_MANAGED_ACTION_KEYS.has(key) && !CAR_CHARGE_ACTION_KEYS.has(key) && !HOT_WATER_ACTION_KEYS.has(key) && !BATTERY_DIRECT_ACTION_KEYS.has(key));
     for (const key of manualActions) {
         if (!actorMappings[key]) return false;
+    }
+
+    for (const key of section.actions.filter(k => BATTERY_DIRECT_ACTION_KEYS.has(k))) {
+        const variant = (configData['controlVariant'] || {})[key] || 'ha_automation';
+        if (variant === 'ha_automation') {
+            if (!actorMappings[key]) return false;
+        } else if (!sensorMappings[BATTERY_DIRECT_REQUIRED_SENSOR_FIELDS[key]]) {
+            return false;
+        }
     }
 
     if (section.actions.some(k => CAR_CHARGE_ACTION_KEYS.has(k))) {
@@ -1282,6 +1340,7 @@ function renderSectionBody(bodyDiv, section, entryIds) {
             bodyDiv.appendChild(buildBatteryCapacityField());
             bodyDiv.appendChild(buildBatterySocMinField());
             bodyDiv.appendChild(buildBatteryMaxChargeKwField());
+            bodyDiv.appendChild(buildBatterySteuerungSection(bodyDiv, section, entryIds, candidateEntities));
         }
         if (section.key === 'auto') {
             bodyDiv.appendChild(buildCarBatteryCapacityField());
@@ -1303,7 +1362,7 @@ function renderSectionBody(bodyDiv, section, entryIds) {
         }
     }
 
-    const manualActions = section.actions.filter(key => !AUTO_MANAGED_ACTION_KEYS.has(key) && !CAR_CHARGE_ACTION_KEYS.has(key) && !HOT_WATER_ACTION_KEYS.has(key));
+    const manualActions = section.actions.filter(key => !AUTO_MANAGED_ACTION_KEYS.has(key) && !CAR_CHARGE_ACTION_KEYS.has(key) && !HOT_WATER_ACTION_KEYS.has(key) && !BATTERY_DIRECT_ACTION_KEYS.has(key));
     const sectionControls = AUTO_MANAGED_CONTROLS.filter(c => c.actionKeys.some(k => section.actions.includes(k)));
     const hasCarCharge = section.actions.some(k => CAR_CHARGE_ACTION_KEYS.has(k));
     const hasHotWater = section.actions.some(k => HOT_WATER_ACTION_KEYS.has(k));
@@ -2916,6 +2975,218 @@ function buildToggleSwitch(id, checked) {
 
 function extractEntityId(value) {
     return (value || '').split(/[:\s]/)[0];
+}
+
+// ----------------------------------------------------------------------
+// Batterie > Steuerung: vier Aktionstypen mit "Varianten" (Direkt / HA-Automation), analog zum
+// Wallbox-Muster. Bei "Direkt" braucht es je nach Aktionstyp einen Modus-Wert (Dropdown, gespeist
+// aus /battery-mode-options) und/oder eine Leistungs-Limit-Entitaet - Letztere ist zwischen
+// mehreren Aktionstypen GETEILT: einmal gesetzt, wird sie an den anderen Stellen nur noch
+// schreibgeschuetzt angezeigt ("gekoppelt"), aendern kann man sie nur dort, wo sie urspruenglich
+// eingetragen wurde. Automations-Vorschlaege nutzen bewusst dieselbe ungefilterte
+// automation.*-Liste wie ueberall sonst im Addon (keine Filterung nach Batterie-Bezug - das waere
+// pro Automation ein zusaetzlicher REST-Call und ist (noch) nicht umgesetzt).
+// ----------------------------------------------------------------------
+
+let batteryModeOptionsCache = null;
+async function loadBatteryModeOptions() {
+    if (batteryModeOptionsCache) return batteryModeOptionsCache;
+    try {
+        batteryModeOptionsCache = await getJson(insideHomeAssistant + '/battery-mode-options');
+    } catch (err) {
+        console.log(err);
+        batteryModeOptionsCache = [];
+    }
+    return batteryModeOptionsCache;
+}
+
+function buildLabeledRow(labelText, tooltipText, valueEl) {
+    const table = document.createElement('table');
+    const tbody = document.createElement('tbody');
+    const row = document.createElement('tr');
+    const labelCell = document.createElement('td');
+    labelCell.textContent = labelText;
+    if (tooltipText) labelCell.appendChild(buildTooltip(tooltipText));
+    const valueCell = document.createElement('td');
+    valueCell.appendChild(valueEl);
+    row.appendChild(labelCell);
+    row.appendChild(valueCell);
+    tbody.appendChild(row);
+    table.appendChild(tbody);
+    return table;
+}
+
+function buildBatteryModeValueSelect(id, currentValue, options) {
+    const select = document.createElement('select');
+    select.id = id;
+    select.className = 'sensorInput';
+    const emptyOption = document.createElement('option');
+    emptyOption.value = '';
+    emptyOption.textContent = '– auswählen –';
+    select.appendChild(emptyOption);
+    // Der gespeicherte Wert bleibt immer als Option erhalten, auch wenn er gerade nicht (mehr)
+    // unter den live von der Entitaet gelesenen Werten ist (z.B. Entitaet kurzzeitig nicht erreichbar).
+    const allValues = new Set(options);
+    if (currentValue) allValues.add(currentValue);
+    for (const value of Array.from(allValues).sort()) {
+        const option = document.createElement('option');
+        option.value = value;
+        option.textContent = value;
+        select.appendChild(option);
+    }
+    select.value = currentValue || '';
+    select.addEventListener('change', autoSave);
+    return select;
+}
+
+// Gekoppeltes/gesperrtes Feld: an mehreren Stellen (Aktionstypen) referenziert, aber nur EINMAL
+// ausfuellbar - ist schon eine Entitaet zugeordnet, wird sie hier nur noch schreibgeschuetzt
+// angezeigt statt erneut editierbar zu sein.
+function buildBatteryCoupledEntityField(sensorKey, datalistId, onChange) {
+    const sensorMappings = configData['sensorMappings'] || {};
+    const currentValue = sensorMappings[sensorKey] || '';
+    if (currentValue) {
+        const display = document.createElement('span');
+        display.className = 'batteryLockedEntity';
+        display.textContent = formatEntityDisplay(currentValue);
+        return display;
+    }
+    const input = document.createElement('input');
+    input.id = sensorKey + VALUE_POSTFIX;
+    input.className = 'sensorInput';
+    input.setAttribute('autocomplete', 'off');
+    if (datalistId) input.setAttribute('list', datalistId);
+    input.addEventListener('change', () => {
+        configData['sensorMappings'] = configData['sensorMappings'] || {};
+        configData['sensorMappings'][sensorKey] = extractEntityId(input.value);
+        autoSave();
+        if (onChange) onChange();
+    });
+    return input;
+}
+
+// Ein einzelner Aktionstyp-Block innerhalb "Steuerung": Ueberschrift+Toggle, "Varianten"-Auswahl,
+// darunter je nach Variante entweder die Direkt-Steuerungsfelder (buildDirectFields liefert sie)
+// oder ein Automations-Feld.
+function buildBatteryControlBlock(actionKey, label, tooltip, buildDirectFields) {
+    const wrapper = document.createElement('div');
+    wrapper.className = 'autoActionControl';
+
+    const headingRow = document.createElement('div');
+    headingRow.className = 'integrationHeadingRow';
+    const title = document.createElement('span');
+    title.textContent = label;
+    if (tooltip) title.appendChild(buildTooltip(tooltip));
+    headingRow.appendChild(title);
+    const actionTypeEnabled = configData['actionTypeEnabled'] || {};
+    headingRow.appendChild(buildToggleSwitch(actionKey + ACTION_TOGGLE_POSTFIX, actionTypeEnabled[actionKey] !== false));
+    wrapper.appendChild(headingRow);
+
+    const variant = (configData['controlVariant'] || {})[actionKey] || 'ha_automation';
+    const variantSelect = buildVariantSelect(actionKey + '_variant', variant, 'Direkte Entitäts-Steuerung');
+    wrapper.appendChild(buildLabeledRow('Varianten', 'Wie das Addon diese Aktion umsetzt: entweder direkt über Home-Assistant-Entitäten (mit Retry/Verifikation), oder indem es eine selbst erstellte Automation triggert.', variantSelect));
+
+    const directFields = document.createElement('div');
+    directFields.style.display = variant === 'direct' ? '' : 'none';
+    directFields.appendChild(buildDirectFields());
+    wrapper.appendChild(directFields);
+
+    const automationRow = buildAutomationEntityRow('HA-Automation auswählen',
+        'Zum Auslösen dieser Aktion kannst du deine selber erstellte Automation hinterlegen.',
+        actionKey + '_ha_automation_entity', (configData['actorMappings'] || {})[actionKey], 'z.B. automation.meine_aktion');
+    automationRow.style.display = variant === 'ha_automation' ? '' : 'none';
+    wrapper.appendChild(automationRow);
+
+    // Sichtbarkeit direkt umschalten statt ueber refresh() neu zu rendern: refresh() haengt von
+    // configData ab, das aber erst NACH dem asynchronen PUT in autoSave() aktualisiert wird - ein
+    // synchron direkt danach aufgerufenes refresh() wuerde also noch mit dem alten Stand rendern
+    // und die Auswahl optisch wieder zuruecksetzen. Selbes Muster wie bei den bestehenden
+    // AUTO_MANAGED_CONTROLS-Varianten-Dropdowns (siehe z.B. buildAutoManagedNumberControl).
+    variantSelect.addEventListener('change', () => {
+        const newVariant = variantSelect.value;
+        configData['controlVariant'] = configData['controlVariant'] || {};
+        configData['controlVariant'][actionKey] = newVariant;
+        directFields.style.display = newVariant === 'direct' ? '' : 'none';
+        automationRow.style.display = newVariant === 'ha_automation' ? '' : 'none';
+        autoSave();
+    });
+
+    return wrapper;
+}
+
+function buildBatterySteuerungSection(bodyDiv, section, entryIds, candidateEntities) {
+    const container = document.createElement('div');
+
+    const heading = document.createElement('div');
+    heading.className = 'sectionSubHeading';
+    heading.textContent = 'Steuerung';
+    container.appendChild(heading);
+
+    const refresh = () => renderSectionBody(bodyDiv, section, entryIds);
+
+    // Eine gemeinsame Datalist fuer alle Batterie-Steuerungs-Entitaeten (Modus/Lade-/Entladelimit/
+    // Timeout) - dieselben Kandidaten wie fuer die normalen Sensoren dieser Sektion, ungefiltert
+    // nach device_class (die Entitaets-Typen variieren zu stark je Wechselrichter-Integration).
+    const datalistId = 'entityOptions_batterie_steuerung';
+    const datalist = document.createElement('datalist');
+    datalist.id = datalistId;
+    for (const entity of candidateEntities) {
+        const option = document.createElement('option');
+        option.value = entity.label;
+        datalist.appendChild(option);
+    }
+    container.appendChild(datalist);
+
+    container.appendChild(buildBatteryControlBlock('battery_charge_shift_pv_surplus', 'Batterie-Laden verschieben (PV-Überschuss)',
+        'Verhindert gezieltes Laden aus PV-Überschuss, wenn sich das aktuell nicht lohnt.', () => {
+            const wrap = document.createElement('div');
+            wrap.appendChild(buildLabeledRow('Aktuelle max. Ladeleistung', 'Entität, über die das Addon die Ladeleistung der Batterie begrenzt (Zahlenwert in kW).',
+                buildBatteryCoupledEntityField('battery_charge_limit_current', datalistId, refresh)));
+            return wrap;
+        }));
+
+    container.appendChild(buildBatteryControlBlock('battery_discharge_shift', 'Batterie-Entladen verschieben',
+        'Hält die Batterie diese Stunde bewusst vom Entladen ab.', () => {
+            const wrap = document.createElement('div');
+            wrap.appendChild(buildLabeledRow('Aktuelle max. Entladeleistung', 'Entität, über die das Addon die Entladeleistung der Batterie begrenzt (Zahlenwert in kW).',
+                buildBatteryCoupledEntityField('battery_discharge_limit_current', datalistId, refresh)));
+            wrap.appendChild(buildLabeledRow('Timeout-Entität (Watchdog)', 'Manche Wechselrichter (z.B. SolarEdge) brauchen eine periodisch aufgefrischte "Command Timeout"-Entität, damit ein Fernbefehl in Kraft bleibt. Nur ausfüllen, falls dein Gerät das braucht.',
+                buildBatteryCoupledEntityField('battery_command_timeout', datalistId, refresh)));
+            return wrap;
+        }));
+
+    container.appendChild(buildBatteryControlBlock('battery_grid_charge', 'Batterie netzladen',
+        'Lädt die Batterie gezielt aus dem Netz, wenn sich das laut Optimierung lohnt.', () => {
+            const wrap = document.createElement('div');
+            const modeOptions = batteryModeOptionsCache || [];
+            const modeSelect = buildBatteryModeValueSelect('battery_mode_netzladen_value', configData['batteryModeNetzladenValue'], modeOptions);
+            wrap.appendChild(buildLabeledRow('Modus "Netzladen"', 'Welcher Rohwert der Batterie-Modus-Entität bedeutet "aus dem Netz laden" (z.B. "Charge from Solar Power and Grid").', modeSelect));
+            wrap.appendChild(buildLabeledRow('Aktuelle max. Ladeleistung', 'Dieselbe Entität wie bei "Batterie-Laden verschieben" - dort bereits ausgefüllt, falls du das schon gemacht hast.',
+                buildBatteryCoupledEntityField('battery_charge_limit_current', datalistId, refresh)));
+            wrap.appendChild(buildLabeledRow('Timeout-Entität (Watchdog)', 'Dieselbe Entität wie bei "Batterie-Entladen verschieben".',
+                buildBatteryCoupledEntityField('battery_command_timeout', datalistId, refresh)));
+            return wrap;
+        }));
+
+    container.appendChild(buildBatteryControlBlock('battery_action_stop', 'Batterie-Aktion beenden',
+        'Setzt den Modus zurück und hebt die Lade-/Entladelimits wieder auf - wird ausgelöst, sobald eine der drei Aktionen oben endet.', () => {
+            const wrap = document.createElement('div');
+            const modeOptions = batteryModeOptionsCache || [];
+            const modeSelect = buildBatteryModeValueSelect('battery_mode_self_consumption_value', configData['batteryModeSelfConsumptionValue'], modeOptions);
+            wrap.appendChild(buildLabeledRow('Modus zurückstellen auf "Eigenverbrauchsmaximierung"', 'Welcher Rohwert der Batterie-Modus-Entität den Normalbetrieb bedeutet (z.B. "Maximize Self Consumption").', modeSelect));
+            wrap.appendChild(buildLabeledRow('Aktuelle max. Ladeleistung', 'Dieselbe Entität wie bei "Batterie-Laden verschieben"/"Batterie netzladen".',
+                buildBatteryCoupledEntityField('battery_charge_limit_current', datalistId, refresh)));
+            wrap.appendChild(buildLabeledRow('Aktuelle max. Entladeleistung', 'Dieselbe Entität wie bei "Batterie-Entladen verschieben".',
+                buildBatteryCoupledEntityField('battery_discharge_limit_current', datalistId, refresh)));
+            return wrap;
+        }));
+
+    // loadConfiguration() wartet bereits auf die Modus-Optionen, bevor ueberhaupt gerendert wird -
+    // dieser Aufruf hier ist nur ein Sicherheitsnetz, falls battery_storage_command_mode erst
+    // waehrend dieser Sitzung neu zugeordnet wurde (dann war der Cache beim ersten Laden noch leer).
+    loadBatteryModeOptions();
+
+    return container;
 }
 
 function formatEntityDisplay(entityId) {

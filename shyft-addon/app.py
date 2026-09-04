@@ -679,14 +679,14 @@ def get_wallbox_connection_status_options():
         end = datetime.now(timezone.utc)
         start = end - timedelta(days=10)
         for element in homeassistant_adapter.load_entity_history(entity_id, start, end):
-            if _is_real_wallbox_state(element.state):
+            if _is_real_entity_state(element.state):
                 values.add(element.state)
     except Exception as e:
         print("[Shyft] Wallbox-Status-Historie konnte nicht geladen werden:", repr(e))
     try:
         current_state = homeassistant_adapter.get_from_homeassistant(f"/api/states/{entity_id}")
         state_value = current_state.get("state")
-        if _is_real_wallbox_state(state_value):
+        if _is_real_entity_state(state_value):
             values.add(state_value)
         for option in (current_state.get("attributes") or {}).get("options") or []:
             values.add(option)
@@ -695,7 +695,7 @@ def get_wallbox_connection_status_options():
     return sorted(values)
 
 
-def _is_real_wallbox_state(state_value):
+def _is_real_entity_state(state_value):
     "Excludes not just the exact HA placeholder states but also glitchy variants (e.g. a transient 'unknown 0' seen from an Easee integration reload) - anything starting with 'unknown' is a placeholder, not a real classifiable status value."
     return bool(state_value) and state_value != "unavailable" and not state_value.startswith("unknown")
 
@@ -703,6 +703,41 @@ def _is_real_wallbox_state(state_value):
 @app.route("/wallbox-connection-status-options", methods=["GET"])
 def wallboxConnectionStatusOptions():
     return jsonify(get_wallbox_connection_status_options())
+
+
+def get_battery_mode_options():
+    """Distinct Rohwerte der gemappten Batterie-Modus-Entitaet ("Batterie: Steuerungsmodus"), fuer
+    die Modus-Dropdowns bei "Batterie netzladen" (Modus 'Netzladen') und "Batterie-Aktion beenden"
+    (Modus zurueckstellen auf 'Eigenverbrauchsmaximierung') - dieselbe Quellenkombination wie bei
+    get_wallbox_connection_status_options: Historie + aktueller Live-Wert + deklarierte
+    "options"-Attribute (bei select-Entitaeten der Regelfall)."""
+    entity_id = _read_current_config().get("sensorMappings", {}).get("battery_storage_command_mode", "")
+    if not entity_id:
+        return []
+    values = set()
+    try:
+        end = datetime.now(timezone.utc)
+        start = end - timedelta(days=10)
+        for element in homeassistant_adapter.load_entity_history(entity_id, start, end):
+            if _is_real_entity_state(element.state):
+                values.add(element.state)
+    except Exception as e:
+        print("[Shyft] Batterie-Modus-Historie konnte nicht geladen werden:", repr(e))
+    try:
+        current_state = homeassistant_adapter.get_from_homeassistant(f"/api/states/{entity_id}")
+        state_value = current_state.get("state")
+        if _is_real_entity_state(state_value):
+            values.add(state_value)
+        for option in (current_state.get("attributes") or {}).get("options") or []:
+            values.add(option)
+    except Exception as e:
+        print("[Shyft] Aktueller Batterie-Modus konnte nicht geladen werden:", repr(e))
+    return sorted(values)
+
+
+@app.route("/battery-mode-options", methods=["GET"])
+def batteryModeOptions():
+    return jsonify(get_battery_mode_options())
 
 
 # Sammelstelle fuer Konfigurations-Warnhinweise, die oben auf der Konfigurationsseite angezeigt
@@ -2837,6 +2872,133 @@ ACTION_NAME_TO_ACTOR_KEY = {name: key for key, name in ACTION_TYPE_TOGGLE_KEYS.i
 # the same stop automation (actorMappings["battery_action_stop"]) rather than each having their own.
 BATTERY_SHIFT_ACTOR_KEYS = {"battery_charge_shift_pv_surplus", "battery_discharge_shift", "battery_grid_charge"}
 
+# ============================================================================
+# "Direkte Entitaets-Steuerung" fuer die Batterie-Aktionstypen (Alternative zur HA-Automation, siehe
+# controlVariant/battery_*-Keys) - schreibt/verifiziert/wiederholt nach demselben Muster wie die
+# bestehenden Home-Assistant-Automationen des Nutzers (siehe z.B. "Batterie netzladen (Shyft)"),
+# die per MCP inspiziert wurden: Wert schreiben, alle BATTERY_RETRY_DELAY_SECONDS pruefen, ob die
+# Entitaet ihn tatsaechlich uebernommen hat (der Wechselrichter - SolarEdge, per Modbus - ist manchmal
+# kurzzeitig nicht erreichbar oder verarbeitet Befehle verzoegert), bis zu BATTERY_RETRY_TIMEOUT_SECONDS
+# lang (2 Minuten, Nutzer-Vorgabe - die eigenen Automationen selbst geben deutlich spaeter auf).
+# Schlaegt danach immer noch mindestens ein Wert fehl, wird eine Push-Benachrichtigung geschickt.
+# Repliziert NUR dieses Schreiben+Verifizieren+Benachrichtigen - die zusaetzliche, separate
+# "SolarEdge Discharge Guard"-Ueberwachungsautomation (die den Entladelimit-Wert dauerhaft alle 2
+# Minuten erneut durchsetzt, unabhaengig von einer Shyft-Aktion) wird bewusst NICHT nachgebaut - das
+# waere ein eigener, groesserer Schritt (persistente HA-Helper-Entitaeten verwalten).
+# ============================================================================
+
+BATTERY_RETRY_DELAY_SECONDS = 10
+BATTERY_RETRY_TIMEOUT_SECONDS = 120
+# Watchdog-Wert (Sekunden) fuer die "Command Timeout"-Entitaet - wird bei "Batterie netzladen" und
+# "Batterie-Entladen verschieben" mit aufgefrischt (siehe deren Referenz-Automationen), bei den
+# anderen beiden Aktionstypen nicht (offenbar nur fuer die aktiv vom Standardverhalten abweichenden
+# Aktionen noetig).
+BATTERY_COMMAND_TIMEOUT_VALUE = 3600
+
+
+def _battery_value_matches(current_state, target_value):
+    "Zahlenvergleich mit Toleranz fuer Number-Entitaeten, sonst String-Vergleich (fuer die Modus-Entitaet)."
+    try:
+        return abs(float(current_state) - float(target_value)) < 1e-6
+    except (TypeError, ValueError):
+        return str(current_state) == str(target_value)
+
+
+def _write_and_verify_battery_entity(entity_id, domain, service, data_key, target_value):
+    """Schreibt target_value auf entity_id und prueft per Live-Status, ob die Entitaet ihn wirklich
+    uebernommen hat - mit Retry alle BATTERY_RETRY_DELAY_SECONDS, bis zu BATTERY_RETRY_TIMEOUT_SECONDS.
+    True bei Erfolg, False wenn nach Ablauf der Frist immer noch keine Uebereinstimmung besteht (oder
+    keine Entitaet zugeordnet ist)."""
+    if not entity_id:
+        return False
+    deadline = time.time() + BATTERY_RETRY_TIMEOUT_SECONDS
+    attempt = 0
+    while True:
+        attempt += 1
+        try:
+            homeassistant_adapter.call_service(domain, service, {"entity_id": entity_id, data_key: target_value})
+        except Exception as e:
+            print(f"[Shyft] Batterie-Steuerung: {domain}.{service} auf '{entity_id}' fehlgeschlagen (Versuch {attempt}):", repr(e))
+        try:
+            current_state = homeassistant_adapter.load_entity_state(entity_id)
+            if _battery_value_matches(current_state.state, target_value):
+                return True
+        except Exception as e:
+            print(f"[Shyft] Batterie-Steuerung: Status von '{entity_id}' nicht lesbar (Versuch {attempt}):", repr(e))
+        if time.time() >= deadline:
+            return False
+        time.sleep(BATTERY_RETRY_DELAY_SECONDS)
+
+
+def _notify_battery_control_failure(action_key, phase, failed_fields, config):
+    label = ACTION_TYPE_TOGGLE_KEYS.get(action_key, action_key)
+    message = (f"Batterie-Steuerung fuer \"{label}\" ({phase}): {', '.join(failed_fields)} konnte(n) "
+               f"nach {BATTERY_RETRY_TIMEOUT_SECONDS // 60} Minuten nicht gesetzt werden.")
+    try:
+        target = config.get("notificationTargets", {}).get("phone", "")
+        if target:
+            homeassistant_adapter.send_notification(target, message)
+    except Exception as e:
+        print("[Shyft] Batterie-Fehler-Benachrichtigung fehlgeschlagen:", repr(e))
+    print("[Shyft]", message)
+
+
+def execute_battery_direct(action_key, phase, target_kw, config):
+    """Fuehrt die 'direkte Entitaets-Steuerung'-Variante eines Batterie-Aktionstyps aus (siehe
+    Modulkommentar oben). target_kw ist der Target Value der Aktion (kW) - fuer "Batterie netzladen"
+    der Ladezielwert, fuer "Batterie-Laden verschieben" der (kleine) Begrenzungswert, sonst
+    ungenutzt. Raised, wenn nach den Retries noch mindestens ein Wert falsch steht (fuer
+    _note_action_outcome/die Problem-Registry) - hat aber vorher schon die Push-Benachrichtigung
+    verschickt."""
+    sensor_mappings = config.get("sensorMappings", {})
+    mode_entity = sensor_mappings.get("battery_storage_command_mode")
+    charge_limit_entity = sensor_mappings.get("battery_charge_limit_current")
+    discharge_limit_entity = sensor_mappings.get("battery_discharge_limit_current")
+    timeout_entity = sensor_mappings.get("battery_command_timeout")
+    netzladen_mode_value = config.get("batteryModeNetzladenValue")
+    self_consumption_mode_value = config.get("batteryModeSelfConsumptionValue")
+    max_charge_watts = round((config.get("batteryMaxChargeKw") or 0) * 1000) or None
+
+    failed = []
+
+    def write_number(entity_id, watts, label):
+        if not _write_and_verify_battery_entity(entity_id, "number", "set_value", "value", watts):
+            failed.append(label)
+
+    def write_mode(mode_value, label):
+        if not mode_value:
+            return  # kein Modus-Wert konfiguriert - ueberspringen statt grundlos zu scheitern
+        if not _write_and_verify_battery_entity(mode_entity, "select", "select_option", "option", mode_value):
+            failed.append(label)
+
+    if action_key == "battery_grid_charge":
+        if timeout_entity:
+            write_number(timeout_entity, BATTERY_COMMAND_TIMEOUT_VALUE, "Timeout")
+        write_number(charge_limit_entity, round((target_kw or 0) * 1000), "Ladeleistung")
+        write_mode(netzladen_mode_value, "Modus")
+    elif action_key == "battery_discharge_shift":
+        if timeout_entity:
+            write_number(timeout_entity, BATTERY_COMMAND_TIMEOUT_VALUE, "Timeout")
+        write_number(discharge_limit_entity, 0, "Entladeleistung")
+    elif action_key == "battery_charge_shift_pv_surplus":
+        write_mode(self_consumption_mode_value, "Modus")
+        write_number(charge_limit_entity, round((target_kw or 0) * 1000), "Ladeleistung")
+    elif action_key == "battery_action_stop":
+        write_mode(self_consumption_mode_value, "Modus")
+        # Kein eigenes "maximale Entladeleistung"-Konfigurationsfeld vorhanden - nutzt denselben
+        # Wert wie die Ladeleistungs-Grenze als bestmoegliche Annaeherung an "kein Limit mehr".
+        if max_charge_watts:
+            write_number(discharge_limit_entity, max_charge_watts, "Entladeleistung")
+            write_number(charge_limit_entity, max_charge_watts, "Ladeleistung")
+
+    if failed:
+        _notify_battery_control_failure(action_key, phase, failed, config)
+        raise Exception(f"Batterie-Steuerung unvollstaendig: {', '.join(failed)}")
+
+
+def _battery_control_variant(config, action_key):
+    return "direct" if config.get("controlVariant", {}).get(action_key) == "direct" else "ha_automation"
+
 # Notification types the user can toggle in the "Benachrichtigungen" config section - extend this
 # dict as new types are added, the frontend renders one toggle row per entry.
 NOTIFICATION_TYPES = {
@@ -2997,9 +3159,13 @@ def handle_shyft_action_start(action, actions_enabled, config):
             print(f"[Shyft] Start fuer '{label}' fehlgeschlagen: {e!r}")
             _note_action_outcome(label, "gestartet", e)
     elif ACTION_NAME_TO_ACTOR_KEY.get(label) in BATTERY_SHIFT_ACTOR_KEYS:
+        actor_key = ACTION_NAME_TO_ACTOR_KEY[label]
         try:
-            automation_entity_id = config.get("actorMappings", {}).get(ACTION_NAME_TO_ACTOR_KEY[label])
-            trigger_ha_automation(automation_entity_id, "start", target)
+            if _battery_control_variant(config, actor_key) == "direct":
+                execute_battery_direct(actor_key, "gestartet", target, config)
+            else:
+                automation_entity_id = config.get("actorMappings", {}).get(actor_key)
+                trigger_ha_automation(automation_entity_id, "start", target)
             print(f"[Shyft] Start ausgefuehrt fuer '{label}' (Ziel: {target}).")
             _note_action_outcome(label, "gestartet")
         except Exception as e:
@@ -3052,8 +3218,11 @@ def handle_shyft_action_end(action, actions_enabled, config):
         try:
             # shared across all three battery Aktionstypen - see BATTERY_SHIFT_ACTOR_KEYS - and no
             # target value, unlike the start: "stop the current battery action" has nothing to aim for
-            automation_entity_id = config.get("actorMappings", {}).get("battery_action_stop")
-            trigger_ha_automation(automation_entity_id, "stop", None)
+            if _battery_control_variant(config, "battery_action_stop") == "direct":
+                execute_battery_direct("battery_action_stop", "beendet", None, config)
+            else:
+                automation_entity_id = config.get("actorMappings", {}).get("battery_action_stop")
+                trigger_ha_automation(automation_entity_id, "stop", None)
             print(f"[Shyft] Ende ausgefuehrt fuer '{label}'.")
             _note_action_outcome(label, "beendet")
         except Exception as e:

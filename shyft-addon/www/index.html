@@ -85,6 +85,23 @@
             border-color: var(--color-error);
         }
 
+        /* Batterie-Steuerung: eine Entitaet, die schon an anderer Stelle in "Steuerung" zugeordnet
+           wurde, wird hier nur noch schreibgeschuetzt angezeigt statt erneut editierbar zu sein
+           (siehe buildBatteryCoupledEntityField) - optisch an .sensorInput angelehnt, aber gedaempft,
+           damit auf den ersten Blick klar ist, dass sich das Feld nicht anklicken laesst. */
+        .batteryLockedEntity {
+            display: inline-block;
+            box-sizing: border-box;
+            width: 100%;
+            padding: 0.5em 0.7em;
+            border: 1px dashed var(--color-input-border);
+            border-radius: 6px;
+            background: var(--color-input-bg);
+            color: var(--color-text-secondary);
+            font-family: var(--font-body);
+            font-size: 0.95em;
+        }
+
         /* Einheiten-Suffix neben einem Zahlenfeld (siehe buildConfigNumberField unit-Option), z.B.
            "80" [Feld] "%" - <input type="number"> kann die Einheit nicht selbst im Wert anzeigen. */
         .configNumberFieldWrap {
