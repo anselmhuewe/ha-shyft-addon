@@ -3776,7 +3776,12 @@ function buildLineChart(title, unit, labels, values, options = {}) {
     const plotHeight = height - paddingTop - paddingBottom;
 
     const wrapper = document.createElement('div');
-    wrapper.className = 'dashboardChart';
+    // dashboardChartHalf: zusammen mit dem #dashboardBody-Flex-Layout in index.html sorgt das
+    // dafuer, dass zwei dieser (schmaleren) Liniendiagramme nebeneinander passen, statt wie bisher
+    // jedes einzeln volle Breite einzunehmen - siehe .dashboardChartHalf dort. Andere
+    // Dashboard-Widgets (Energiefluss, Wetter-Streifen, Einsatzplan-Karte) bleiben bewusst
+    // vollbreit, bekommen die Klasse also nicht.
+    wrapper.className = 'dashboardChart dashboardChartHalf';
     const titleEl = document.createElement('div');
     titleEl.className = 'dashboardChartTitle';
     const parenthetical = [subtitle, unit].filter(Boolean).join(', ');
@@ -4022,7 +4027,12 @@ function buildPvForecastActualChart(labels, forecast, actual) {
     const plotHeight = height - paddingTop - paddingBottom;
 
     const wrapper = document.createElement('div');
-    wrapper.className = 'dashboardChart';
+    // dashboardChartHalf: zusammen mit dem #dashboardBody-Flex-Layout in index.html sorgt das
+    // dafuer, dass zwei dieser (schmaleren) Liniendiagramme nebeneinander passen, statt wie bisher
+    // jedes einzeln volle Breite einzunehmen - siehe .dashboardChartHalf dort. Andere
+    // Dashboard-Widgets (Energiefluss, Wetter-Streifen, Einsatzplan-Karte) bleiben bewusst
+    // vollbreit, bekommen die Klasse also nicht.
+    wrapper.className = 'dashboardChart dashboardChartHalf';
     const titleEl = document.createElement('div');
     titleEl.className = 'dashboardChartTitle';
     titleEl.textContent = 'PV-Leistung: Prognose vs. Ist (kW)';

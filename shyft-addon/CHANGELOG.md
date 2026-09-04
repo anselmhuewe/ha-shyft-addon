@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.0.44.84
+
+* **Dashboard-Diagramme sind jetzt kleiner und stehen zu zweit nebeneinander** (ab ~700px Breite), statt jeweils volle Breite einzunehmen - Strompreis, Außentemperatur, PV-Leistung, Raumtemperatur, Warmwasser, Ladestand Heimspeicher und Ladestand Auto. Energiefluss-Widget, Wetter-Streifen und Einsatzplan-Karte bleiben bewusst vollbreit. Auf schmalen Bildschirmen (Handy) fällt das Layout automatisch wieder auf ein Diagramm pro Zeile zurück.
+
 ## 0.0.44.83
 
 * **Automations- und Entitäts-Dropdowns bekommen jetzt echte Überschriften.** Ein natives `<datalist>`-Vorschlagspopup kann in keinem Browser eine Kopfzeile anzeigen - alle Felder, die aus einer HA-Automation ("HA-Automation auswählen" u.ä.) oder einer beliebigen Entität wählen lassen, zeigen ihre Vorschlagsliste deshalb jetzt über ein selbst gezeichnetes Panel mit Überschrift ("HOME-ASSISTANT-AUTOMATION" bzw. "HOME-ASSISTANT-ENTITÄT"), analog zum bestehenden Geräte-Dropdown. Die Eingabefelder selbst (freie Texteingabe, Tippen zum Filtern, "×" zum Leeren) verhalten sich unverändert.

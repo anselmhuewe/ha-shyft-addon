@@ -840,8 +840,35 @@
             margin-bottom: 0.3em;
         }
 
+        /* #dashboardBody-Kinder sind eine flache Abfolge unterschiedlicher Widgets (siehe
+           loadDashboard in app.js): die meisten (Energiefluss, Wetter-Streifen, Einsatzplan-Karte,
+           Auto-Verbrauchsprognose) bleiben vollbreit (flex-basis 100%), nur die eigentlichen
+           Liniendiagramme (.dashboardChartHalf, siehe buildLineChart/buildPvForecastActualChart)
+           werden schmaler, damit zwei davon nebeneinander passen. */
+        #dashboardBody {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 1.5em 1.2em;
+        }
+        #dashboardBody > * {
+            flex: 1 1 100%;
+            min-width: 0;
+        }
+        #dashboardBody > .dashboardChartHalf {
+            flex: 1 1 calc(50% - 0.6em);
+            max-width: calc(50% - 0.6em);
+        }
+        /* Unter ~700px reicht die Breite nicht mehr fuer zwei lesbare Diagramme nebeneinander -
+           dann wieder je eins pro Zeile, wie bisher. */
+        @media (max-width: 700px) {
+            #dashboardBody > .dashboardChartHalf {
+                flex-basis: 100%;
+                max-width: none;
+            }
+        }
+
         .dashboardChart {
-            margin-bottom: 2em;
+            margin-bottom: 0;
         }
 
         /* Wetter-Streifen ueber dem PV-Chart (siehe buildWeatherStrip / pv_forecast.py) */
