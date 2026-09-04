@@ -2337,6 +2337,16 @@ def _run_pv_surplus_charging_tick_impl():
     eine "Auto laden"-Aktion laufen hat (siehe Kommentar oben) - die "Auto laden"-Logik wandert
     perspektivisch ohnehin vollständig ins Addon."""
     config = _read_current_config()
+
+    # Unabhaengig von der Fallback-Session unten: eine laufende Optimierer-PV-Ueberschuss-Aktion
+    # (anderer Store, siehe _recheck_active_pv_surplus_optimizer_action) bekommt hier denselben
+    # 5-Minuten-/Live-Sensor-Trigger fuer ihre Nachkorrektur mit. Try/except haelt einen Fehler hier
+    # von der (bewusst komplett unabhaengigen) Fallback-Logik unten fern.
+    try:
+        _recheck_active_pv_surplus_optimizer_action(config)
+    except Exception as e:
+        print("[Shyft] PV-Überschussladen (laufende Optimierer-Aktion): Nachkorrektur-Tick fehlgeschlagen:", repr(e))
+
     actions = _read_pv_surplus_actions()
     session = _find_active_pv_surplus_session(actions)
 
@@ -3409,16 +3419,23 @@ def compute_ev_charge_actions(config, output_rows, input_rows, start, optimizer_
     return result
 
 
-def _apply_ev_pv_surplus_start_correction(action, config):
-    """Im tatsaechlichen Startmoment einer PV-Ueberschuss-'Auto laden'-Aktion (siehe
-    handle_shyft_action_start) wird der bei der Berechnung gespeicherte, unkorrigierte Zielwert
-    (EV_sum aus der Optimierung, siehe compute_ev_charge_actions) durch die dann aktuell gemessene
-    PV-Leistung korrigiert, statt den ggf. schon veralteten Optimierungswert unveraendert zu
+def _apply_ev_pv_surplus_start_correction(action, config, context="bei Start"):
+    """Korrigiert den bei der Berechnung gespeicherten, unkorrigierten Zielwert einer PV-Ueberschuss-
+    'Auto laden'-Aktion (EV_sum aus der Optimierung, siehe compute_ev_charge_actions) anhand der
+    JETZT gemessenen PV-Leistung, statt den ggf. schon veralteten Optimierungswert unveraendert zu
     uebernehmen: EV_sum plus die Haelfte der Differenz zwischen jetzt gemessener PV-Leistung und der
     PV-Prognose des Optimierungslaufs ("PV Sum Forecast"), gedeckelt auf 6A/1-phasig bis zur
     maximalen Wallbox-Leistung. Aendert 'action' in-place und persistiert die Korrektur sofort im
     Store (siehe _update_computed_action). Nicht-PV-Ueberschuss-Aktionen bleiben unveraendert; ohne
-    aktuellen PV-Messwert bleibt ebenfalls der urspruengliche Zielwert bestehen."""
+    aktuellen PV-Messwert bleibt ebenfalls der urspruengliche Zielwert bestehen.
+
+    Wird sowohl im tatsaechlichen Startmoment aufgerufen (siehe handle_shyft_action_start, context=
+    "bei Start", Default) als auch periodisch waehrend die Aktion laeuft (siehe
+    _recheck_active_pv_surplus_optimizer_action, context="laufend") - EV_sum/PV Sum Forecast bleiben
+    dabei immer die FESTEN Werte aus der urspruenglichen Optimierung, nur live_pv_kw aendert sich von
+    Aufruf zu Aufruf, wodurch sich der Zielwert mit der tatsaechlichen PV-Erzeugung mitbewegt statt
+    (wie zuvor) nur einmalig beim Start festgezurrt zu werden und dann eine volle Stunde lang stehen
+    zu bleiben, selbst wenn sich die PV-Leistung zwischenzeitlich stark aendert."""
     if not action.get("PV Surplus"):
         return action.get("Target Value")
     live_pv_kw = _read_mapped_numeric(config, "photovoltaic_powerflow_pv")
@@ -3430,11 +3447,36 @@ def _apply_ev_pv_surplus_start_correction(action, config):
     corrected = round(max(PV_SURPLUS_MIN_KW, min(compute_wallbox_max_kw(config), boosted)), 1)
     if corrected != action.get("Target Value"):
         timestamp = datetime.now().strftime("%d.%m. %H:%M Uhr")
-        note = f"{timestamp}: Zielwert bei Start auf {corrected:.1f} kW korrigiert (PV-Überschuss, aktuell gemessen)"
+        note = f"{timestamp}: Zielwert {context} auf {corrected:.1f} kW korrigiert (PV-Überschuss, aktuell gemessen)"
         action["Log"] = (action.get("Log") + "\n" + note) if action.get("Log") else note
         action["Target Value"] = corrected
         _update_computed_action(action)
     return corrected
+
+
+def _recheck_active_pv_surplus_optimizer_action(config):
+    """Periodisches Gegenstueck zu _apply_ev_pv_surplus_start_correction: laeuft gerade eine
+    Optimierer-basierte PV-Ueberschuss-'Auto laden'-Aktion (Status "aktiv", wirklich gestartet - nicht
+    nur simuliert), wird ihr Zielwert erneut anhand der aktuellen PV-Leistung nachkorrigiert UND bei
+    Aenderung sofort an die Wallbox weitergegeben (execute_car_charge_start) - sonst wuerde eine
+    Korrektur zwar im Log/Store landen, aber nie tatsaechlich an der Wallbox ankommen. Aufgerufen aus
+    _run_pv_surplus_charging_tick_impl, damit dieselbe 5-Minuten-Cron- UND Live-Sensor-Trigger-
+    Infrastruktur wie die Fallback-Regelung mitgenutzt wird, ohne beide Systeme zu vermischen: die
+    Fallback-Session (PV_SURPLUS_ACTIONS_PATH) bleibt komplett unangetastet, hier geht es
+    ausschliesslich um die separate, optimierer-eigene Aktion im COMPUTED_ACTIONS_PATH-Store."""
+    action = next((a for a in _read_computed_actions()
+                    if a.get("Action Name") == EV_CHARGE_ACTION_NAME and (a.get("Status") or "").lower() == "aktiv"
+                    and a.get("PV Surplus") and a.get("Execution Status") == "yes, started"), None)
+    if not action:
+        return
+    previous = action.get("Target Value")
+    corrected = _apply_ev_pv_surplus_start_correction(action, config, context="laufend")
+    if corrected == previous:
+        return
+    try:
+        execute_car_charge_start(corrected)
+    except Exception as e:
+        print("[Shyft] PV-Überschussladen (laufende Optimierer-Aktion): Nachkorrektur fehlgeschlagen:", repr(e))
 
 
 # ============================================================================

@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.0.44.87
+
+* **Fix: PV-Überschussladen ("Auto laden") wurde bisher nur EINMAL beim Start korrigiert und blieb dann die ganze Stunde auf diesem Zielwert stehen**, egal wie sich die tatsächliche PV-Leistung währenddessen entwickelte - live per MCP nachvollzogen: eine Stunde lang konstant ca. 10,3-10,5 kW an der Wallbox, obwohl die PV-Erzeugung in derselben Zeit zwischen 0,55 und 5,06 kW schwankte (der Großteil kam also aus dem Netz, nicht aus PV-Überschuss). Die Nachkorrektur läuft jetzt wie die bestehende Fallback-Regelung alle 5 Minuten sowie sofort bei relevanten Sensoränderungen mit und gibt eine geänderte Zielleistung sofort an die Wallbox weiter.
+* **Gerätesteuerung: Die Aktionsliste aktualisiert sich jetzt automatisch alle 30 Sekunden**, solange der Tab geöffnet und sichtbar ist - ein Statuswechsel (z.B. "aktiv" → "beendet" zur vollen Stunde) war bisher erst nach manuellem Neuladen der Seite sichtbar.
+
 ## 0.0.44.86
 
 * **Fix: Aktionen mit winzigem Zeitfenster (z.B. "10:59 - 11:00") können nicht mehr entstehen.** Lief die Berechnung eines Optimierungslaufs so spät ab, dass "jetzt" schon in den letzten 10 Minuten der Stunde lag, wurde die "laufende" Aktion trotzdem mit "Date Start = jetzt" angelegt - bei allen sieben Aktionstypen (Auto laden, Warmwasser, Heizung, Verbraucher an, alle drei Batterie-Aktionen). Neue Regel: in den letzten 10 Minuten der aktuellen Stunde wird so eine Aktion nur noch angelegt, wenn sie sich auch in die nächste Stunde verlängern würde (also z.B. 8:59-10:00 bleibt erlaubt, 8:59-9:00 nicht mehr).

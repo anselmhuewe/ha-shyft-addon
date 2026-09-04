@@ -5397,6 +5397,20 @@ async function refreshEinsatzplanCard() {
 
 setInterval(refreshEinsatzplanCard, ENERGY_FLOW_REFRESH_INTERVAL_MS);
 
+// Wie refreshEnergyFlowWidget/refreshEinsatzplanCard oben: die Gerätesteuerung-Liste wurde bisher
+// nur einmal beim Öffnen der Seite geladen (loadShyftActions) - ein zwischenzeitlicher Statuswechsel
+// (z.B. "aktiv" -> "beendet" zur vollen Stunde, siehe run_hourly_action_transition) blieb im Browser
+// unsichtbar, bis man die Seite manuell neu laedt. loadShyftActions baut die Liste komplett neu auf
+// (renderShyftActions) - das ist unproblematisch, da maybeAutoScrollToActiveShyftActions sich schon
+// selbst merkt, dass der Auto-Scroll nur beim allerersten Mal passieren soll.
+async function refreshShyftActions() {
+    if (document.visibilityState !== 'visible') return;
+    const panel = document.getElementById('tab-geraetesteuerung');
+    if (!panel || !panel.classList.contains('active')) return;
+    await loadShyftActions();
+}
+setInterval(refreshShyftActions, ENERGY_FLOW_REFRESH_INTERVAL_MS);
+
 function setupTabs() {
     const buttons = document.querySelectorAll('.tabButton');
     for (const button of buttons) {
