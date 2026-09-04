@@ -158,6 +158,67 @@
             color: var(--color-text);
         }
 
+        /* Ersatz fuer die native list=-Vorschlagsliste (siehe attachEntityDropdown in app.js) - kein
+           Browser kann darin eine Kopfzeile anzeigen, ein eigenes Panel schon. Optisch an
+           .integrationPickerPanel angelehnt. */
+        .entityDropdownWrapper {
+            position: relative;
+            display: block;
+            width: 100%;
+        }
+        .entityDropdownPanel {
+            position: absolute;
+            top: calc(100% + 4px);
+            left: 0;
+            right: 0;
+            z-index: 20;
+            background: var(--color-input-bg);
+            border: 1px solid var(--color-input-border);
+            border-radius: 6px;
+            box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
+            padding: 0.5em;
+            max-height: 260px;
+            overflow-y: auto;
+        }
+        .entityDropdownHeader {
+            padding: 0.3em 0.3em 0.4em;
+            color: var(--color-text-secondary);
+            font-size: 0.75em;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.03em;
+        }
+        .entityDropdownOption {
+            padding: 0.35em 0.5em;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 0.9em;
+        }
+        .entityDropdownOption:hover {
+            background: var(--color-bg-card);
+        }
+        .entityDropdownEmpty {
+            padding: 0.4em 0.5em;
+            color: var(--color-text-secondary);
+            font-size: 0.85em;
+        }
+        /* "Neue Automation erstellen"-Zeile ganz oben (siehe topAction in attachEntityDropdown) -
+           farblich abgesetzt und mit Trennlinie darunter, damit klar ist, dass sie eine Aktion
+           ausloest statt das Feld zu befuellen. */
+        .entityDropdownAction {
+            padding: 0.35em 0.5em;
+            margin-bottom: 0.3em;
+            border-bottom: 1px solid var(--color-border);
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 0.9em;
+            font-weight: 600;
+            color: var(--color-accent);
+        }
+        .entityDropdownAction:hover {
+            background: var(--color-bg-card);
+        }
+
         #deviceSections table {
             width: 100%;
             border-collapse: collapse;

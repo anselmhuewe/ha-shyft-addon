@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.0.44.83
+
+* **Automations- und Entitäts-Dropdowns bekommen jetzt echte Überschriften.** Ein natives `<datalist>`-Vorschlagspopup kann in keinem Browser eine Kopfzeile anzeigen - alle Felder, die aus einer HA-Automation ("HA-Automation auswählen" u.ä.) oder einer beliebigen Entität wählen lassen, zeigen ihre Vorschlagsliste deshalb jetzt über ein selbst gezeichnetes Panel mit Überschrift ("HOME-ASSISTANT-AUTOMATION" bzw. "HOME-ASSISTANT-ENTITÄT"), analog zum bestehenden Geräte-Dropdown. Die Eingabefelder selbst (freie Texteingabe, Tippen zum Filtern, "×" zum Leeren) verhalten sich unverändert.
+* **Automations-Dropdowns bekommen als oberste Zeile "+ Neue Automation erstellen"** - ein Klick öffnet den Home-Assistant-Automation-Editor für eine neue Automation in einem neuen Tab, statt dass man erst manuell dorthin navigieren muss.
+
 ## 0.0.44.82
 
 * **Batterie-Steuerung: neuer Bereich "Steuerung" bei der Batterie-Gerätekachel**, analog zum bestehenden Wallbox-Muster - für alle vier Batterie-Aktionstypen ("Batterie-Laden verschieben (PV-Überschuss)", "Batterie-Entladen verschieben", "Batterie netzladen", "Batterie-Aktion beenden") lässt sich jetzt eine "Variante" wählen: entweder eine selbst erstellte HA-Automation (wie bisher) oder direkte Entitäts-Steuerung durch das Addon selbst. Bei "Batterie netzladen"/"Batterie-Aktion beenden" kommt zusätzlich ein Dropdown für den passenden Rohwert der Batterie-Modus-Entität hinzu ("Modus 'Netzladen'" bzw. "Modus zurückstellen auf 'Eigenverbrauchsmaximierung'"), gespeist aus dem neuen Endpoint `/battery-mode-options` (Historie + aktueller Live-Wert + deklarierte `options`-Attribute der Entität, analog zu `/wallbox-connection-status-options`). Die Lade-/Entladeleistungs- und Timeout-Entitäten sind zwischen den vier Aktionstypen "gekoppelt": einmal einer Entität zugeordnet, wird sie an den anderen Stellen nur noch schreibgeschützt angezeigt statt erneut abgefragt.

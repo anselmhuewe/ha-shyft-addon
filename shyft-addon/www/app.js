@@ -1239,8 +1239,8 @@ function buildIntegrationPicker(section, currentIds, onChange) {
 
         // Ueberschrift ganz oben (siehe Nutzer-Wunsch nach durchgaengigen Dropdown-Ueberschriften) -
         // rein optisch/nicht interaktiv, listet nicht als eigene Option mit (anders als bei einem
-        // <datalist>, wo eine "Kopfzeile" technisch nicht moeglich ist - siehe buildAutomationEntityRow/
-        // allEntityOptions, dort bleibt es beim reinen Feld-Label).
+        // <datalist>, wo eine "Kopfzeile" technisch nicht moeglich ist - siehe attachEntityDropdown,
+        // das denselben Wunsch fuer alle Automations-/Entitaets-Felder auf andere Weise loest).
         const header = document.createElement('div');
         header.className = 'integrationPickerHeader';
         header.textContent = 'Gerät';
@@ -2007,6 +2007,117 @@ function buildVariantSelect(id, currentValue, directLabel) {
     return select;
 }
 
+// Oeffnet den Automation-Editor von Home Assistant fuer eine neue Automation in einem neuen Tab -
+// verwendet in jedem Automations-Dropdown als oberste, immer sichtbare Zeile (siehe
+// attachEntityDropdown/topAction). Das Addon laeuft per Ingress auf demselben Origin wie das
+// HA-Frontend selbst (kein separater Host), daher genuegt window.location.origin als Basis-URL.
+function openNewAutomationBuilder() {
+    window.open(window.location.origin + '/config/automation/edit/new', '_blank', 'noopener');
+}
+
+// Ersetzt fuer ein bestehendes Eingabefeld die native list=<datalistId>-Vorschlagsliste durch ein
+// selbst gezeichnetes Panel mit Kopfzeile - kein Browser kann in einem nativen <datalist>-Popup eine
+// Kopfzeile darstellen (harte Grenze, kein CSS/JS-Trick hilft), ein eigenes Panel schon. Liest seine
+// Optionen weiterhin live aus dem (weiterhin unsichtbar im DOM vorhandenen) <datalist> aus - die
+// eigentliche Optionsbefuellung an jeder Aufrufstelle bleibt dadurch unveraendert, nur die Darstellung
+// der Vorschlagsliste aendert sich. topAction (optional) fuegt eine anklickbare Extra-Zeile ganz oben
+// ein (z.B. "Neue Automation erstellen"), die beim Klick eine eigene Aktion ausloest statt das Feld
+// zu befuellen. Gibt einen Wrapper zurueck, der ANSTELLE des bisherigen "cell.appendChild(input)" ins
+// DOM eingehaengt wird; das <input>-Element selbst bleibt unveraendert (gleiche id, gleiche externen
+// 'change'-Listener, siehe dispatchEvent unten).
+function attachEntityDropdown(input, {datalistId, headerText, topAction}) {
+    input.removeAttribute('list');
+
+    const wrapper = document.createElement('span');
+    wrapper.className = 'entityDropdownWrapper';
+    wrapper.appendChild(input);
+
+    const panel = document.createElement('div');
+    panel.className = 'entityDropdownPanel';
+    panel.hidden = true;
+    wrapper.appendChild(panel);
+
+    function selectValue(value) {
+        input.value = value;
+        input.dispatchEvent(new Event('change', {bubbles: true}));
+        panel.hidden = true;
+    }
+
+    function renderPanel() {
+        panel.innerHTML = '';
+        if (topAction) {
+            const actionRow = document.createElement('div');
+            actionRow.className = 'entityDropdownAction';
+            actionRow.textContent = topAction.label;
+            // mousedown statt click + preventDefault: verhindert, dass das Input vorher den Fokus
+            // verliert (blur schliesst das Panel, siehe unten) und der Klick dadurch ins Leere geht.
+            actionRow.addEventListener('mousedown', (event) => {
+                event.preventDefault();
+                topAction.onClick();
+                panel.hidden = true;
+            });
+            panel.appendChild(actionRow);
+        }
+
+        const header = document.createElement('div');
+        header.className = 'entityDropdownHeader';
+        header.textContent = headerText;
+        panel.appendChild(header);
+
+        const datalist = document.getElementById(datalistId);
+        const allOptions = datalist
+            ? Array.from(datalist.options).map(opt => ({value: opt.value, label: opt.textContent || opt.value}))
+            : [];
+        const filterText = input.value.trim().toLowerCase();
+        const filtered = filterText ? allOptions.filter(opt => opt.label.toLowerCase().includes(filterText)) : allOptions;
+
+        if (filtered.length === 0) {
+            const empty = document.createElement('div');
+            empty.className = 'entityDropdownEmpty';
+            empty.textContent = 'Keine Treffer';
+            panel.appendChild(empty);
+            return;
+        }
+        for (const opt of filtered) {
+            const row = document.createElement('div');
+            row.className = 'entityDropdownOption';
+            row.textContent = opt.label;
+            row.addEventListener('mousedown', (event) => {
+                event.preventDefault();
+                selectValue(opt.value);
+            });
+            panel.appendChild(row);
+        }
+    }
+
+    input.addEventListener('focus', () => {
+        renderPanel();
+        panel.hidden = false;
+    });
+    // Klick zusaetzlich zu 'focus' noetig: ein Klick auf ein Feld, das (z.B. nach einer Auswahl,
+    // siehe selectValue/preventDefault) schon fokussiert ist, loest kein neues 'focus' mehr aus -
+    // ohne diesen Handler bliebe das Panel dann faelschlich zu.
+    input.addEventListener('click', () => {
+        renderPanel();
+        panel.hidden = false;
+    });
+    input.addEventListener('input', () => {
+        renderPanel();
+        panel.hidden = false;
+    });
+    input.addEventListener('blur', () => {
+        panel.hidden = true;
+    });
+    input.addEventListener('keydown', (event) => {
+        if (event.key === 'Escape') {
+            panel.hidden = true;
+            input.blur();
+        }
+    });
+
+    return wrapper;
+}
+
 // One "pick a HA automation" input + datalist, used for every ha_automation variant field (see
 // buildCarChargeControl for the original inline version this generalizes).
 function buildAutomationEntityRow(labelText, tooltipText, inputId, value, placeholder) {
@@ -2032,10 +2143,12 @@ function buildAutomationEntityRow(labelText, tooltipText, inputId, value, placeh
         datalist.appendChild(option);
     }
     valueCell.appendChild(datalist);
-    input.setAttribute('list', datalistId);
     input.placeholder = placeholder;
     input.addEventListener('change', autoSave);
-    valueCell.appendChild(input);
+    valueCell.appendChild(attachEntityDropdown(input, {
+        datalistId, headerText: 'Home-Assistant-Automation',
+        topAction: {label: '+ Neue Automation erstellen', onClick: openNewAutomationBuilder}
+    }));
     row.appendChild(labelCell);
     row.appendChild(valueCell);
     tbody.appendChild(row);
@@ -2492,6 +2605,7 @@ function buildBranchedStageFields(idPrefix, stageKey, label, tooltip, candidateS
                 input.className = 'sensorInput';
                 input.setAttribute('autocomplete', 'off');
                 input.value = (stageData.sharedFields || {})[field.name] || '';
+                let inputEl = input;
                 if (field.isEntity) {
                     // an "entity_id" target selector (e.g. number.set_value) has no fixed
                     // choices of its own - offer a searchable dropdown of known entities
@@ -2511,13 +2625,13 @@ function buildBranchedStageFields(idPrefix, stageKey, label, tooltip, candidateS
                         entityDatalist.appendChild(option);
                     }
                     fieldsContainer.appendChild(entityDatalist);
-                    input.setAttribute('list', entityDatalistId);
                     input.placeholder = amountUnit
                         ? `z.B. number.wallbox_ladestrom (gefiltert nach Einheit "${amountUnit}")`
                         : 'z.B. number.wallbox_ladestrom';
+                    inputEl = attachEntityDropdown(input, {datalistId: entityDatalistId, headerText: 'Home-Assistant-Entität'});
                 }
                 input.addEventListener('change', autoSave);
-                valueCell.appendChild(input);
+                valueCell.appendChild(inputEl);
                 row.appendChild(keyCell);
                 row.appendChild(valueCell);
                 staticTbody.appendChild(row);
@@ -2677,10 +2791,12 @@ function buildCarChargeControl() {
         automationDatalist.appendChild(option);
     }
     automationValueCell.appendChild(automationDatalist);
-    automationInput.setAttribute('list', automationDatalistId);
     automationInput.placeholder = 'z.B. automation.mein_auto_laden';
     automationInput.addEventListener('change', autoSave);
-    automationValueCell.appendChild(automationInput);
+    automationValueCell.appendChild(attachEntityDropdown(automationInput, {
+        datalistId: automationDatalistId, headerText: 'Home-Assistant-Automation',
+        topAction: {label: '+ Neue Automation erstellen', onClick: openNewAutomationBuilder}
+    }));
     automationRow.appendChild(automationLabelCell);
     automationRow.appendChild(automationValueCell);
     automationTbody.appendChild(automationRow);
@@ -3055,14 +3171,13 @@ function buildBatteryCoupledEntityField(sensorKey, datalistId, onChange) {
     input.id = sensorKey + VALUE_POSTFIX;
     input.className = 'sensorInput';
     input.setAttribute('autocomplete', 'off');
-    if (datalistId) input.setAttribute('list', datalistId);
     input.addEventListener('change', () => {
         configData['sensorMappings'] = configData['sensorMappings'] || {};
         configData['sensorMappings'][sensorKey] = extractEntityId(input.value);
         autoSave();
         if (onChange) onChange();
     });
-    return input;
+    return datalistId ? attachEntityDropdown(input, {datalistId, headerText: 'Home-Assistant-Entität'}) : input;
 }
 
 // Ein einzelner Aktionstyp-Block innerhalb "Steuerung": Ueberschrift+Toggle, "Varianten"-Auswahl,
@@ -3224,7 +3339,6 @@ function buildMappingRow(key, value, helpInfo, valuePostfix, datalistId, showLiv
     const inputValue = document.createElement('input');
     inputValue.id = key + valuePostfix;
     inputValue.value = showLiveValue ? formatEntityDisplay(value) : value;
-    inputValue.setAttribute("list", datalistId);
     inputValue.setAttribute("class", "sensorInput");
     inputValue.setAttribute("autocomplete", "off");
     inputValue.addEventListener('change', () => {
@@ -3233,7 +3347,7 @@ function buildMappingRow(key, value, helpInfo, valuePostfix, datalistId, showLiv
         }
         autoSave();
     });
-    inputWrapper.appendChild(inputValue);
+    inputWrapper.appendChild(attachEntityDropdown(inputValue, {datalistId, headerText: 'Home-Assistant-Entität'}));
 
     const clearButton = document.createElement('button');
     clearButton.type = 'button';
