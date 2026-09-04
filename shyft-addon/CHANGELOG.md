@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.0.44.88
+
+* **Fix: "PV-Überschuss"-Klassifizierung für "Auto laden" konnte fälschlich zutreffen, obwohl der Ladestrom überwiegend aus dem Netz kam.** Bisher wurde eine Stunde als PV-Überschuss gewertet, wenn laut Optimierer kaum Netzeinspeisung stattfand (`PV_GR`) UND die Batterie nicht ins Auto entlud (`B_EV`) - beides kann aber auch aus anderen Gründen niedrig sein (z.B. kaum PV vorhanden UND eine parallele "Batterie nicht entladen"-Aktion), ohne dass tatsächlich PV-Überschuss vorliegt. Neue, direkte dritte Bedingung: `GR_EV` (Netzstrom, der laut Optimierer direkt ans Auto geht) muss ebenfalls niedrig sein. Am konkreten Fall vom 04.09. (`GR_EV` ≈ 10 kW) hätte das die fehlerhafte Klassifizierung verhindert.
+
 ## 0.0.44.87
 
 * **Fix: PV-Überschussladen ("Auto laden") wurde bisher nur EINMAL beim Start korrigiert und blieb dann die ganze Stunde auf diesem Zielwert stehen**, egal wie sich die tatsächliche PV-Leistung währenddessen entwickelte - live per MCP nachvollzogen: eine Stunde lang konstant ca. 10,3-10,5 kW an der Wallbox, obwohl die PV-Erzeugung in derselben Zeit zwischen 0,55 und 5,06 kW schwankte (der Großteil kam also aus dem Netz, nicht aus PV-Überschuss). Die Nachkorrektur läuft jetzt wie die bestehende Fallback-Regelung alle 5 Minuten sowie sofort bei relevanten Sensoränderungen mit und gibt eine geänderte Zielleistung sofort an die Wallbox weiter.

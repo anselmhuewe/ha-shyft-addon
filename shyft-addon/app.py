@@ -3273,10 +3273,18 @@ EV_CHARGE_ACTION_NAME = "Auto laden"
 EV_CHARGE_ID_PREFIX = "auto_laden"
 EV_CHARGE_HOUR_WINDOW = 10
 EV_SUM_TRIGGER_KW = 0.3
-# PV-Ueberschuss liegt vor, wenn kaum Netzeinspeisung stattfindet (PV_GR) UND die Batterie nicht
-# nennenswert zum Laden beitraegt (B_EV) - der Ladestrom kommt dann ueberwiegend direkt von der PV.
+# PV-Ueberschuss liegt vor, wenn kaum Netzeinspeisung stattfindet (PV_GR), die Batterie nicht
+# nennenswert zum Laden beitraegt (B_EV) UND kaum Netzstrom direkt ans Auto geht (GR_EV) - der
+# Ladestrom kommt dann ueberwiegend direkt von der PV. GR_EV ist die eigentlich entscheidende
+# Bedingung (siehe Nutzer-Vorgabe vom 2026-09-04: PV_GR<1.0 UND B_EV<0.3 koennen beide zutreffen,
+# obwohl der Ladestrom tatsaechlich ueberwiegend aus dem Netz kommt - z.B. wenn kaum PV da ist
+# [PV_GR niedrig, weil nichts einzuspeisen ist] UND parallel eine "Batterie nicht entladen"-Aktion
+# laeuft [B_EV niedrig aus einem ganz anderen Grund]. GR_EV prueft das direkt statt indirekt ueber
+# Ausschluss, macht die B_EV/PV_GR-Bedingungen aber nicht ueberfluessig: sie schliessen zusaetzlich
+# aus, dass eine PV-Ueberschuss-Stunde in Wahrheit von Batterie-Entladung getragen wird.
 EV_PV_SURPLUS_PV_GR_MAX_KW = 1.0
 EV_PV_SURPLUS_B_EV_MAX_KW = 0.3
+EV_PV_SURPLUS_GR_EV_MAX_KW = 0.3
 
 
 def _read_computed_actions():
@@ -3327,7 +3335,8 @@ def _hourly_average_price(output_row, input_row):
 def _is_ev_pv_surplus(output_row):
     pv_gr = _safe_float(output_row.get("PV_GR"))
     b_ev = _safe_float(output_row.get("B_EV"))
-    return pv_gr < EV_PV_SURPLUS_PV_GR_MAX_KW and b_ev < EV_PV_SURPLUS_B_EV_MAX_KW
+    gr_ev = _safe_float(output_row.get("GR_EV"))
+    return pv_gr < EV_PV_SURPLUS_PV_GR_MAX_KW and b_ev < EV_PV_SURPLUS_B_EV_MAX_KW and gr_ev < EV_PV_SURPLUS_GR_EV_MAX_KW
 
 
 def _ev_charge_action_id(hour_start):
