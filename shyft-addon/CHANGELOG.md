@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.0.44.85
+
+* **Gerätesteuerung: beim ersten Öffnen wird jetzt automatisch zur gerade laufenden Aktion gescrollt** (bzw. zur Mitte einer Gruppe gleichzeitig laufender Aktionen), statt dass man erst manuell zum passenden Tagesabschnitt scrollen muss - so sind bereits geplante Aktionen darüber und schon beendete darunter auf einen Blick sichtbar. Ohne aktive Aktion ändert sich nichts an der gewohnten Startposition.
+
 ## 0.0.44.84
 
 * **Dashboard-Diagramme sind jetzt kleiner und stehen zu zweit nebeneinander** (ab ~700px Breite), statt jeweils volle Breite einzunehmen - Strompreis, Außentemperatur, PV-Leistung, Raumtemperatur, Warmwasser, Ladestand Heimspeicher und Ladestand Auto. Energiefluss-Widget, Wetter-Streifen und Einsatzplan-Karte bleiben bewusst vollbreit. Auf schmalen Bildschirmen (Handy) fällt das Layout automatisch wieder auf ein Diagramm pro Zeile zurück.

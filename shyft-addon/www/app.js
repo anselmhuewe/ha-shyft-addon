@@ -3577,6 +3577,35 @@ function renderShyftActions(container, actions) {
 
         container.appendChild(dayDiv);
     }
+
+    maybeAutoScrollToActiveShyftActions();
+}
+
+// Einmalig beim ersten Aufruf der Gerätesteuerung: zur aktuell laufenden Aktion (bzw. zur Gruppe
+// gleichzeitig laufender Aktionen, siehe is-active) scrollen, statt dass man erst manuell zum
+// passenden Tagesabschnitt scrollen muss - zentriert deren Mitte auf der Bildschirmmitte, sodass
+// geplante Aktionen darüber und bereits beendete darunter sichtbar sind (Karten sind absteigend nach
+// "Date End" sortiert, siehe renderShyftActions). Wird sowohl nach dem Rendern der Aktionen als auch
+// beim Tab-Wechsel aufgerufen (setupTabs) - je nachdem, was zuerst fertig ist (Daten laden vs. Tab
+// öffnen); der jeweils andere Aufruf ist dann ein no-op. Ohne aktive Aktion passiert nichts - die
+// Seite bleibt an ihrer normalen Startposition.
+let shyftActionsAutoScrollDone = false;
+function maybeAutoScrollToActiveShyftActions() {
+    if (shyftActionsAutoScrollDone) return;
+    const panel = document.getElementById('tab-geraetesteuerung');
+    if (!panel || !panel.classList.contains('active')) return;
+    const container = document.getElementById('shyftActionsBody');
+    const activeCards = container ? container.querySelectorAll('.shyftActionCard.is-active') : [];
+    if (activeCards.length === 0) return;
+    shyftActionsAutoScrollDone = true;
+    // rAF, damit Layout (inkl. evtl. noch nicht geladener Icon-Bilder) sicher steht, bevor die
+    // Positionen gemessen werden.
+    requestAnimationFrame(() => {
+        const first = activeCards[0].getBoundingClientRect();
+        const last = activeCards[activeCards.length - 1].getBoundingClientRect();
+        const groupCenter = (first.top + last.bottom) / 2;
+        window.scrollBy({top: groupCenter - window.innerHeight / 2, behavior: 'auto'});
+    });
 }
 
 async function loadShyftActions() {
@@ -5365,6 +5394,9 @@ function setupTabs() {
                 panel.classList.remove('active');
             }
             document.getElementById('tab-' + button.dataset.tab).classList.add('active');
+            if (button.dataset.tab === 'geraetesteuerung') {
+                maybeAutoScrollToActiveShyftActions();
+            }
         });
     }
 }
