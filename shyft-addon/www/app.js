@@ -3796,7 +3796,7 @@ function computePvEnergySummary(labels, values) {
 //                 should always show its full possible range (Ladestand)
 //   decimals    - digits shown in the hover/tap tooltip
 function buildLineChart(title, unit, labels, values, options = {}) {
-    const {stepped = false, colorBands = null, slopeBands = null, valueScale = 1, minY = null, fixedMin = null, fixedMax = null, decimals = 1, round = false, subtitle = '', presenceForecast = null} = options;
+    const {stepped = false, colorBands = null, slopeBands = null, valueScale = 1, minY = null, fixedMin = null, fixedMax = null, decimals = 1, round = false, subtitle = '', presenceForecast = null, blurredLabel = null} = options;
     const width = 600, height = 220;
     // presenceForecast reserves an extra strip just above the x-axis labels for the
     // Anwesenheitsprognose overlay bar (see below)
@@ -3999,7 +3999,7 @@ function buildLineChart(title, unit, labels, values, options = {}) {
     }
 
     const chartContainer = document.createElement('div');
-    chartContainer.className = 'dashboardChartContainer';
+    chartContainer.className = 'dashboardChartContainer' + (blurredLabel ? ' dashboardChartContainer--blurred' : '');
     chartContainer.innerHTML = `
         <svg viewBox="0 0 ${width} ${height}" class="dashboardChartSvg">
             <line x1="${paddingLeft}" y1="${paddingTop}" x2="${paddingLeft}" y2="${baseline.toFixed(1)}" stroke="var(--color-border)" />
@@ -4012,6 +4012,13 @@ function buildLineChart(title, unit, labels, values, options = {}) {
             ${xLabels}
         </svg>`;
     wrapper.appendChild(chartContainer);
+
+    if (blurredLabel) {
+        const overlay = document.createElement('div');
+        overlay.className = 'dashboardChartBlurOverlay';
+        overlay.textContent = blurredLabel;
+        chartContainer.appendChild(overlay);
+    }
 
     const tooltip = document.createElement('div');
     tooltip.className = 'dashboardChartTooltip';
@@ -5233,8 +5240,9 @@ async function loadDashboard() {
         } catch (err) {
             console.log(err);
         }
+        let flowData = null;
         try {
-            const flowData = await getJson(insideHomeAssistant + '/dashboard/energy-flow');
+            flowData = await getJson(insideHomeAssistant + '/dashboard/energy-flow');
             container.appendChild(buildEnergyFlowWidget(flowData));
         } catch (err) {
             // best-effort: ein fehlgeschlagenes Energiefluss-Widget darf die restlichen Charts nicht verhindern
@@ -5281,6 +5289,13 @@ async function loadDashboard() {
             stepped: true,
             round: true,
             decimals: 0,
+            // Solange "Heizung aktiviert?" (heatpump_heating_activated) explizit auf Aus steht,
+            // berechnet das Addon keine Heizungs-Aktionen mehr (siehe compute_heizung_actions in
+            // app.py) - der Chart bleibt technisch bestehen, wird aber bewusst als "gerade nicht
+            // relevant" markiert. null/nicht zugeordnet blendet nichts aus (kein falscher Alarm).
+            blurredLabel: (flowData && flowData.heatpump && flowData.heatpump.heatingOn === false)
+                ? 'Heizung deaktiviert - keine Heizungs-Aktionen'
+                : null,
         }));
         container.appendChild(buildLineChart('Warmwasser', '°C', data.output_labels, data.t_hw, {
             slopeBands: {riseColor: 'var(--color-accent)', dropColor: 'var(--color-error)', flatColor: 'var(--color-text-secondary)', bigDropThreshold: 1},

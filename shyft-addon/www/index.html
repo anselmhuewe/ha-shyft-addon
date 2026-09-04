@@ -1122,6 +1122,26 @@
             pointer-events: none;
             z-index: 5;
         }
+
+        /* Chart optisch "deaktiviert" darstellen (siehe blurredLabel in buildLineChart), z.B.
+           Raumtemperatur-Chart, solange "Heizung aktiviert?" auf Aus steht - Werte bleiben
+           technisch vorhanden/im DOM, wirken aber bewusst nicht mehr relevant. */
+        .dashboardChartContainer--blurred .dashboardChartSvg {
+            filter: blur(3px);
+            opacity: 0.5;
+        }
+        .dashboardChartBlurOverlay {
+            position: absolute;
+            inset: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            text-align: center;
+            padding: 1em;
+            font-weight: 600;
+            color: var(--color-text-secondary);
+            pointer-events: none;
+        }
         @media (max-width: 600px) {
             .dashboardChartSvg text {
                 font-size: 12px;

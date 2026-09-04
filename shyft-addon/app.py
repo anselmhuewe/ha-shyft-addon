@@ -3527,9 +3527,14 @@ def compute_heizung_actions(config, output_rows, input_rows, start, optimizer_ru
     T_i_Target (auf 0 Stellen gerundet) weicht vom aktuell aktiven Sollwert ab (Live-Wert des
     Controls "heatpump_heating_target_temp_normal", das die Aktion bei Ausfuehrung selbst setzt -
     derselbe Bezugswert fuer alle Stunden dieses Laufs, nicht rollierend von Stunde zu Stunde). Ohne
-    lesbaren aktuellen Sollwert wird nichts erzeugt (keine sinnvolle Abweichung feststellbar)."""
+    lesbaren aktuellen Sollwert wird nichts erzeugt (keine sinnvolle Abweichung feststellbar).
+    Steht "heatpump_heating_activated" explizit auf Aus, werden gar keine Heizungs-Aktionen erzeugt
+    (Warmwasser/compute_dhw_actions ist davon unberuehrt) - nicht zugeordnet/nicht lesbar (None)
+    blockiert nichts, um bestehende Installationen ohne diesen Sensor nicht stillzulegen."""
     result = {}
     if not _is_heatpump_configured(config):
+        return result
+    if _read_mapped_bool_on(config, "heatpump_heating_activated") is False:
         return result
 
     current_target = _read_mapped_numeric(config, "heatpump_heating_target_temp_normal")
@@ -3994,6 +3999,29 @@ def _reconcile_computed_actions(config, action_name, id_prefix, computed_by_hour
         _write_current_config(config)
 
 
+# Wie nah am Ende der aktuellen Stunde eine neu berechnete "laufende" Aktion (Stunde 0, Date Start =
+# jetzt) noch angelegt werden darf - siehe _suppress_near_boundary_singleton.
+NEAR_HOUR_BOUNDARY_MINUTES = 10
+
+
+def _suppress_near_boundary_singleton(result, start):
+    """Verhindert ein Ergebnis wie "8:59 - 9:00": laeuft der Optimierungslauf (bzw. das Warten auf
+    dessen Ergebnis, siehe schedule_optimizer_result_wait) so spaet ab, dass "jetzt" schon in den
+    letzten NEAR_HOUR_BOUNDARY_MINUTES Minuten der Stunde liegt, waere das fuer Stunde 0 berechnete
+    Aktionsfenster (Date Start = jetzt, Date End = Stundenende) nur noch wenige Minuten breit - ein
+    Geraet fuer 1-10 Minuten anzusteuern ist selten sinnvoll. Nur unterdrueckt, wenn dieselbe Aktion
+    NICHT auch fuer die unmittelbar folgende Stunde vorgesehen ist (result[1] fehlt): wuerde sie sich
+    verlaengern, wird das kurze Startfenster ohnehin gleich beim naechsten stuendlichen Uebergang
+    (run_hourly_action_transition) auf eine volle Stunde ausgedehnt und ist unproblematisch."""
+    if 0 not in result:
+        return result
+    hour_end = start + timedelta(hours=1)
+    now = datetime.now(timezone.utc)
+    if now >= hour_end - timedelta(minutes=NEAR_HOUR_BOUNDARY_MINUTES) and 1 not in result:
+        del result[0]
+    return result
+
+
 def recompute_actions_from_optimizer_run(input_csv, output_csv, creation_date_ms, optimizer_run_id):
     "Wird bei jedem frischen Optimierungslauf aufgerufen (siehe _write_dashboard_cache) - berechnet und reconciled alle addon-seitigen Aktionstypen neu: 'Auto laden', 'Warmwasser', 'Heizung Soll-Temperatur', 'Verbraucher an', 'Batterie-Entladen verschieben', 'Batterie netzladen' und 'Batterie-Laden verschieben (PV-Ueberschuss)' - alle sieben bisher geplanten Aktionstypen sind damit umgesetzt."
     if is_demo_mode():
@@ -4003,24 +4031,24 @@ def recompute_actions_from_optimizer_run(input_csv, output_csv, creation_date_ms
         start = datetime.fromtimestamp(creation_date_ms / 1000, tz=timezone.utc).replace(minute=0, second=0, microsecond=0)
         input_rows = list(csv.DictReader(io.StringIO(input_csv), delimiter=";")) if input_csv else []
         output_rows = list(csv.DictReader(io.StringIO(output_csv))) if output_csv else []
-        ev_actions = compute_ev_charge_actions(config, output_rows, input_rows, start, optimizer_run_id)
+        ev_actions = _suppress_near_boundary_singleton(compute_ev_charge_actions(config, output_rows, input_rows, start, optimizer_run_id), start)
         _reconcile_computed_actions(config, EV_CHARGE_ACTION_NAME, EV_CHARGE_ID_PREFIX, ev_actions, start)
-        dhw_actions = compute_dhw_actions(config, output_rows, input_rows, start, optimizer_run_id)
+        dhw_actions = _suppress_near_boundary_singleton(compute_dhw_actions(config, output_rows, input_rows, start, optimizer_run_id), start)
         _reconcile_computed_actions(config, DHW_ACTION_NAME, DHW_ID_PREFIX, dhw_actions, start)
-        heizung_actions = compute_heizung_actions(config, output_rows, input_rows, start, optimizer_run_id)
+        heizung_actions = _suppress_near_boundary_singleton(compute_heizung_actions(config, output_rows, input_rows, start, optimizer_run_id), start)
         _reconcile_computed_actions(config, HEIZUNG_ACTION_NAME, HEIZUNG_ID_PREFIX, heizung_actions, start)
-        od_actions = compute_od_actions(config, output_rows, input_rows, start, optimizer_run_id)
+        od_actions = _suppress_near_boundary_singleton(compute_od_actions(config, output_rows, input_rows, start, optimizer_run_id), start)
         _reconcile_computed_actions(config, OD_ACTION_NAME, OD_ID_PREFIX, od_actions, start)
         # VOR "Batterie netzladen" berechnen+reconcilen: dessen Vorrang-Check
         # (_discharge_shift_reserved_for_hour) liest den Store und braucht deshalb den frischen
         # Stand aus DIESEM Lauf, nicht den von der letzten Optimierung. Die umgekehrte Pruefung
         # (compute_battery_discharge_shift_actions gibt "Batterie netzladen" Vorrang) rechnet GR_B
         # direkt aus output_csv nach, ist also unabhaengig von der Reihenfolge hier korrekt.
-        battery_discharge_shift_actions = compute_battery_discharge_shift_actions(config, output_rows, input_rows, start, optimizer_run_id)
+        battery_discharge_shift_actions = _suppress_near_boundary_singleton(compute_battery_discharge_shift_actions(config, output_rows, input_rows, start, optimizer_run_id), start)
         _reconcile_computed_actions(config, BATTERY_DISCHARGE_SHIFT_ACTION_NAME, BATTERY_DISCHARGE_SHIFT_ID_PREFIX, battery_discharge_shift_actions, start, hour_window=BATTERY_HOUR_WINDOW)
-        battery_grid_charge_actions = compute_battery_grid_charge_actions(config, output_rows, input_rows, start, optimizer_run_id)
+        battery_grid_charge_actions = _suppress_near_boundary_singleton(compute_battery_grid_charge_actions(config, output_rows, input_rows, start, optimizer_run_id), start)
         _reconcile_computed_actions(config, BATTERY_GRID_CHARGE_ACTION_NAME, BATTERY_GRID_CHARGE_ID_PREFIX, battery_grid_charge_actions, start, hour_window=BATTERY_HOUR_WINDOW, replace_running=True)
-        battery_charge_shift_actions = compute_battery_charge_shift_actions(config, output_rows, input_rows, start, optimizer_run_id)
+        battery_charge_shift_actions = _suppress_near_boundary_singleton(compute_battery_charge_shift_actions(config, output_rows, input_rows, start, optimizer_run_id), start)
         _reconcile_computed_actions(config, BATTERY_CHARGE_SHIFT_ACTION_NAME, BATTERY_CHARGE_SHIFT_ID_PREFIX, battery_charge_shift_actions, start, hour_window=BATTERY_HOUR_WINDOW)
     except Exception as e:
         print("[Shyft] Aktionsberechnung aus Optimierungslauf fehlgeschlagen:", repr(e))

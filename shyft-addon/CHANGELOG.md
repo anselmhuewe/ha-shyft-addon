@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.0.44.86
+
+* **Fix: Aktionen mit winzigem Zeitfenster (z.B. "10:59 - 11:00") können nicht mehr entstehen.** Lief die Berechnung eines Optimierungslaufs so spät ab, dass "jetzt" schon in den letzten 10 Minuten der Stunde lag, wurde die "laufende" Aktion trotzdem mit "Date Start = jetzt" angelegt - bei allen sieben Aktionstypen (Auto laden, Warmwasser, Heizung, Verbraucher an, alle drei Batterie-Aktionen). Neue Regel: in den letzten 10 Minuten der aktuellen Stunde wird so eine Aktion nur noch angelegt, wenn sie sich auch in die nächste Stunde verlängern würde (also z.B. 8:59-10:00 bleibt erlaubt, 8:59-9:00 nicht mehr).
+* **Heizung: Ist der Sensor "Heizung aktiviert?" explizit auf Aus, werden keine "Heizung Soll-Temperatur"-Aktionen mehr berechnet** (Warmwasser bleibt davon unberührt). Der Raumtemperatur-Chart im Dashboard wird in diesem Fall passend unscharf dargestellt ("Heizung deaktiviert - keine Heizungs-Aktionen"). Ohne zugeordneten Sensor ändert sich nichts.
+
 ## 0.0.44.85
 
 * **Gerätesteuerung: beim ersten Öffnen wird jetzt automatisch zur gerade laufenden Aktion gescrollt** (bzw. zur Mitte einer Gruppe gleichzeitig laufender Aktionen), statt dass man erst manuell zum passenden Tagesabschnitt scrollen muss - so sind bereits geplante Aktionen darüber und schon beendete darunter auf einen Blick sichtbar. Ohne aktive Aktion ändert sich nichts an der gewohnten Startposition.
