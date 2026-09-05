@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.0.44.98
+
+* **PV-Überschussladen-Regelung: Sperrfrist zwischen automatischen Ziel-Anpassungen von 5 auf 2 Minuten verkürzt.** Zusätzlich gilt jetzt: eine automatische Erhöhung wird nur noch angewendet, wenn sich der Netz-Sensor seit der letzten Erhöhung tatsächlich spürbar verändert hat (mind. 0,1 kW) - reine verstrichene Zeit ohne echte neue Messung reicht nicht mehr aus. Verhindert, dass mehrere schnell aufeinanderfolgende Ticks noch auf derselben (von Wallbox/Auto noch gar nicht umgesetzten) Messung aufbauen. Der Absenk-Zweig ist davon bewusst ausgenommen, da er durch Prozentsatz und feste Untergrenze bereits selbstbegrenzend ist.
+
 ## 0.0.44.97
 
 * **Neue Wärmepumpen-Konfiguration "Warmwasser: Solltemperatur (°C)".** Die "Warmwasser"-Aktion berechnet längst einen Zielwert (die vom Optimierer prognostizierte Warmwassertemperatur), der bisher nirgends an ein Gerät ging - die Aktivierung löste nur den festen "einmalig aufheizen"-Befehl aus, ohne Zieltemperatur. Ist jetzt eine `number`- oder `climate`-Entität hinterlegt, wird sie zu Beginn der "Warmwasser"-Aktion auf den berechneten Zielwert gesetzt (mit Schreib-/Lese-Verifikation und Wiederholung) und beim Beenden der Aktion wieder auf den Wert zurückgesetzt, der unmittelbar davor an ihr eingestellt war. Der Ausgangswert wird an der Aktion selbst gemerkt und übersteht damit einen Addon-Neustart zwischen Start und Ende.

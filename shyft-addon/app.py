@@ -119,8 +119,11 @@ PV_SURPLUS_RESTART_COOLDOWN_MS = 5 * 60 * 1000
 # denselben Ueberschuss wie vor der Anhebung. Ohne diese Sperre summierte sich das: jeder
 # Live-Tick sah denselben, noch nicht abgebauten Ueberschuss und addierte erneut PV_SURPLUS_INCREASE_OVERSHOOT
 # obendrauf, wodurch das Ziel innerhalb weniger Minuten bis zur Wallbox-Obergrenze hochschnellte,
-# obwohl real gar keine so grosse PV-Spitze vorlag.
-PV_SURPLUS_REGULATION_MIN_INTERVAL_MS = 5 * 60 * 1000
+# obwohl real gar keine so grosse PV-Spitze vorlag. Ergaenzend dazu (siehe unten,
+# last_regulation_grid_kw) wird zusaetzlich verlangt, dass sich der Netz-Sensor seit der letzten
+# Anpassung ueberhaupt spuerbar veraendert hat - reine Zeit ohne echte neue Messung rechtfertigt
+# fuer sich genommen noch keinen weiteren Schritt.
+PV_SURPLUS_REGULATION_MIN_INTERVAL_MS = 2 * 60 * 1000
 # Batterie-Vorzeichen ist nicht herstellerunabhaengig standardisiert (siehe
 # detect_battery_flow_sign_convention) - 7 Tage Historie reichen normalerweise fuer mehrere klare
 # Lade-/Entladewechsel; unter BATTERY_SIGN_MIN_SAMPLES eindeutigen Stunden gilt die Erkennung als
@@ -2515,6 +2518,18 @@ def _run_pv_surplus_charging_tick_impl():
 
         target_kw = session.get("target_kw", PV_SURPLUS_MIN_KW)
         if grid_kw <= PV_SURPLUS_REGULATION_THRESHOLD_KW:
+            # Selbst nach Ablauf der obigen Frist: ohne eine tatsaechlich neue Netz-Messung seit dem
+            # letzten Erhoehungsschritt ist "weiter draufaddieren" nur eine Wiederholung derselben
+            # (moeglicherweise noch veralteten) Messung, waehrend Wallbox/Auto die vorherige Erhoehung
+            # noch gar nicht umgesetzt haben - genau das fuehrte zur Eskalation bis zum Anschlag.
+            # PV_SURPLUS_LIVE_UPDATE_THRESHOLD_KW ist dieselbe Schwelle, ab der der Live-Trigger eine
+            # Aenderung ueberhaupt erst als real genug einstuft. Gilt bewusst nur fuer den additiven
+            # Erhoehungs-Zweig - der Absenk-Zweig unten ist durch den Prozentsatz + die feste Untergrenze
+            # bereits selbstbegrenzend und darf/soll auch bei unveraendertem (weiterhin niedrigem)
+            # Messwert schrittweise weiter absinken.
+            last_regulation_grid_kw = session.get("last_regulation_grid_kw")
+            if last_regulation_grid_kw is not None and abs(grid_kw - last_regulation_grid_kw) < PV_SURPLUS_LIVE_UPDATE_THRESHOLD_KW:
+                return
             increase = abs(grid_kw) * PV_SURPLUS_INCREASE_OVERSHOOT
             if not has_battery:
                 increase *= PV_SURPLUS_NO_BATTERY_INCREASE_SCALE
@@ -2549,6 +2564,7 @@ def _run_pv_surplus_charging_tick_impl():
         _append_pv_surplus_log(session, new_target)
         session["target_kw"] = new_target
         session["last_regulation_ms"] = int(now_ms)
+        session["last_regulation_grid_kw"] = grid_kw
         _write_pv_surplus_actions(actions)
     else:
         if grid_kw is None or not car_ready:
@@ -2581,7 +2597,8 @@ def _run_pv_surplus_charging_tick_impl():
             return
 
         new_session = {"active": True, "target_kw": target_kw, "has_battery": has_battery,
-                        "start_ms": int(now_ms), "planned_end_ms": _next_full_hour_ms(now_ms), "log": []}
+                        "start_ms": int(now_ms), "planned_end_ms": _next_full_hour_ms(now_ms), "log": [],
+                        "last_regulation_grid_kw": grid_kw}
         _append_pv_surplus_log(new_session, target_kw, note="gestartet")
         actions.append(new_session)
         _write_pv_surplus_actions(actions)
