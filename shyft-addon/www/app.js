@@ -4010,6 +4010,7 @@ function buildLineChart(title, unit, labels, values, options = {}) {
             ${dayBoundaryMarkup}
             ${yLabels}
             ${xLabels}
+            <circle class="dashboardChartMarker" r="4.5" cx="0" cy="0" visibility="hidden" />
         </svg>`;
     wrapper.appendChild(chartContainer);
 
@@ -4026,7 +4027,11 @@ function buildLineChart(title, unit, labels, values, options = {}) {
     chartContainer.appendChild(tooltip);
 
     const svgEl = chartContainer.querySelector('svg');
+    const marker = chartContainer.querySelector('.dashboardChartMarker');
 
+    // Sichtbarer Punkt auf der Linie an der gerade ausgewaehlten Stunde - vor allem fuers Touch-
+    // Swipen auf dem Handy gedacht (siehe Nutzer-Feedback): der Finger verdeckt die beruehrte
+    // Stelle selbst, ohne einen Marker war dort nicht erkennbar, welche Stunde man gerade trifft.
     function showTooltip(clientX) {
         const rect = svgEl.getBoundingClientRect();
         if (rect.width === 0) return;
@@ -4039,12 +4044,21 @@ function buildLineChart(title, unit, labels, values, options = {}) {
         tooltip.style.left = (points[idx][0] * scale).toFixed(1) + 'px';
         tooltip.style.top = (points[idx][1] * scale).toFixed(1) + 'px';
         tooltip.hidden = false;
+        marker.setAttribute('cx', points[idx][0].toFixed(1));
+        marker.setAttribute('cy', points[idx][1].toFixed(1));
+        marker.setAttribute('visibility', 'visible');
+    }
+
+    function hideTooltip() {
+        tooltip.hidden = true;
+        marker.setAttribute('visibility', 'hidden');
     }
 
     svgEl.addEventListener('mousemove', e => showTooltip(e.clientX));
-    svgEl.addEventListener('mouseleave', () => { tooltip.hidden = true; });
+    svgEl.addEventListener('mouseleave', hideTooltip);
     svgEl.addEventListener('touchstart', e => { if (e.touches[0]) showTooltip(e.touches[0].clientX); }, {passive: true});
     svgEl.addEventListener('touchmove', e => { if (e.touches[0]) showTooltip(e.touches[0].clientX); }, {passive: true});
+    svgEl.addEventListener('touchend', hideTooltip);
 
     return wrapper;
 }
@@ -4182,6 +4196,7 @@ function buildPvForecastActualChart(labels, forecast, actual) {
             ${dayBoundaryMarkup}
             ${yLabels}
             ${xLabels}
+            <circle class="dashboardChartMarker" r="4.5" cx="0" cy="0" visibility="hidden" />
         </svg>`;
     wrapper.appendChild(chartContainer);
 
@@ -4203,7 +4218,11 @@ function buildPvForecastActualChart(labels, forecast, actual) {
     chartContainer.appendChild(tooltip);
 
     const svgEl = chartContainer.querySelector('svg');
+    const marker = chartContainer.querySelector('.dashboardChartMarker');
 
+    // Sichtbarer Punkt auf der Linie an der gerade ausgewaehlten Stunde - vor allem fuers Touch-
+    // Swipen auf dem Handy gedacht (siehe Nutzer-Feedback): der Finger verdeckt die beruehrte
+    // Stelle selbst, ohne einen Marker war dort nicht erkennbar, welche Stunde man gerade trifft.
     function showTooltip(clientX) {
         const rect = svgEl.getBoundingClientRect();
         if (rect.width === 0) return;
@@ -4216,15 +4235,25 @@ function buildPvForecastActualChart(labels, forecast, actual) {
         if (forecast[idx] !== null && forecast[idx] !== undefined) parts.push(`Prognose ${forecast[idx].toFixed(1)} kW`);
         if (actual[idx] !== null && actual[idx] !== undefined) parts.push(`Ist ${actual[idx].toFixed(1)} kW`);
         tooltip.textContent = `${dateText}: ${parts.join(' / ') || '–'}`;
+        const markerY = yFor(forecast[idx] ?? actual[idx] ?? yMin);
         tooltip.style.left = xFor(idx).toFixed(1) * scale + 'px';
-        tooltip.style.top = yFor(forecast[idx] ?? actual[idx] ?? yMin).toFixed(1) * scale + 'px';
+        tooltip.style.top = markerY.toFixed(1) * scale + 'px';
         tooltip.hidden = false;
+        marker.setAttribute('cx', xFor(idx).toFixed(1));
+        marker.setAttribute('cy', markerY.toFixed(1));
+        marker.setAttribute('visibility', 'visible');
+    }
+
+    function hideTooltip() {
+        tooltip.hidden = true;
+        marker.setAttribute('visibility', 'hidden');
     }
 
     svgEl.addEventListener('mousemove', e => showTooltip(e.clientX));
-    svgEl.addEventListener('mouseleave', () => { tooltip.hidden = true; });
+    svgEl.addEventListener('mouseleave', hideTooltip);
     svgEl.addEventListener('touchstart', e => { if (e.touches[0]) showTooltip(e.touches[0].clientX); }, {passive: true});
     svgEl.addEventListener('touchmove', e => { if (e.touches[0]) showTooltip(e.touches[0].clientX); }, {passive: true});
+    svgEl.addEventListener('touchend', hideTooltip);
 
     return wrapper;
 }

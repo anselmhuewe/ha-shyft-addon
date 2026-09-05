@@ -1123,6 +1123,18 @@
             z-index: 5;
         }
 
+        /* Markiert die per Maus/Touch gerade ausgewaehlte Stunde direkt auf der Linie (siehe
+           showTooltip in buildLineChart/buildPvForecastActualChart) - v.a. fuers Touch-Swipen auf
+           dem Handy: der Finger verdeckt die beruehrte Stelle, ohne diesen Punkt war dort nicht
+           erkennbar, welche Stunde man gerade trifft. pointer-events:none, damit der Punkt selbst
+           keine Touch-/Maus-Events abfaengt (die sollen weiter ans <svg> durchgereicht werden). */
+        .dashboardChartMarker {
+            fill: var(--color-text);
+            stroke: var(--color-bg);
+            stroke-width: 2px;
+            pointer-events: none;
+        }
+
         /* Chart optisch "deaktiviert" darstellen (siehe blurredLabel in buildLineChart), z.B.
            Raumtemperatur-Chart, solange "Heizung aktiviert?" auf Aus steht - Werte bleiben
            technisch vorhanden/im DOM, wirken aber bewusst nicht mehr relevant. */

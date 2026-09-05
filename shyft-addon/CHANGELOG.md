@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.0.44.90
+
+* **Dashboard-Charts zeigen jetzt einen Punkt auf der Linie an der gerade ausgewählten Stunde**, synchron mit dem Tooltip - vor allem fürs Touch-Swipen auf dem Handy gedacht: der Finger verdeckt die berührte Stelle selbst, ohne diesen Punkt war dort nicht erkennbar, welche Stunde man gerade trifft.
+
 ## 0.0.44.89
 
 * **Fix: Dashboard-Charts zeigten als erste Stunde noch den Stand des letzten Cache-Schreibens, statt zur aktuellen Stunde vorzurücken**, solange keine neue Optimierung ankam (z.B. um 8:56 Uhr begannen die Charts noch bei 7:00 statt bei 8:00). `/dashboard/chart-data` schneidet jetzt bei jedem Abruf bereits vergangene volle Stunden vom Anfang der Zeitreihen ab, unabhängig davon, wann die zugrunde liegenden Daten zuletzt aktualisiert wurden.
