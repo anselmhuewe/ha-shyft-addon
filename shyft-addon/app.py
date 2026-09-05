@@ -1202,6 +1202,9 @@ EV_DEFAULT_WEEKEND_BLOCK_HOURS = [15, 16, 17]
 # prognostizierte Fahrt: der Verbrauch des Tages wird nur auf solche Stunden verteilt, und
 # ev_usage_h (siehe build_ev_optimizer_fields) enthaelt genau sie.
 EV_AWAY_THRESHOLD = 0.5
+# Fuer den "kein prognostizierter Abwesenheitsblock"-Notnagel gesperrte Stunden ab jetzt: so nah am
+# Jetzt ist der Auto-Zustand faktisch bekannt, dort eine Fahrt zu simulieren waere falsch.
+NEAR_TERM_NO_SIM_HOURS = 3
 
 
 def _recency_weight(sample_dt, now):
@@ -1404,8 +1407,16 @@ def compute_car_presence_forecast(hours=48):
             target_idxs = [i for i in idxs if p_away_list[i] > EV_AWAY_THRESHOLD]
             weights = [p_away_list[i] for i in target_idxs]
         if not target_idxs:
-            # kein Abwesenheitsblock im Horizont fuer diesen Tag -> auf die "am ehesten abwesende" Stunde
-            target_idxs = [max(idxs, key=lambda i: p_away_list[i])]
+            # kein Abwesenheitsblock im Horizont fuer diesen Tag -> auf die "am ehesten abwesende"
+            # Stunde. Die naechsten NEAR_TERM_NO_SIM_HOURS Stunden bleiben dabei ausgeschlossen: so
+            # nah am Jetzt ist der Auto-Zustand faktisch bekannt (Stunde 0 sowieso, siehe
+            # probabilities[0]) - dort eine Fahrt zu erfinden, nur um die Tagessumme zu treffen,
+            # waere schlicht falsch. Bleibt dann nichts uebrig, wird dieser (sehr kurze) Rest-Tag
+            # gar nicht bestueckt.
+            candidates = [i for i in idxs if i >= NEAR_TERM_NO_SIM_HOURS]
+            if not candidates:
+                continue
+            target_idxs = [max(candidates, key=lambda i: p_away_list[i])]
             weights = [1.0]
         wsum = sum(weights) or 1.0
         for i, w in zip(target_idxs, weights):

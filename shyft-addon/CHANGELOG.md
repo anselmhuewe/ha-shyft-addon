@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.0.45.3
+
+* **EV-Verbrauchsprognose: der Notnagel für Tage ohne prognostizierte Abwesenheit legt keine simulierte Fahrt mehr in die nächsten 3 Stunden.** So nah am Jetzt ist der Auto-Zustand faktisch bekannt (die aktuelle Stunde sowieso) - dort einen Verbrauch zu erfinden, nur um die Tagessumme zu treffen, war schlicht falsch. Bleibt für den (dann sehr kurzen) Rest-Tag keine Stunde übrig, wird er gar nicht mehr bestückt. (Teilkorrektur - die weitergehende Umstellung der Zuteilung auf tatsächlich als "unterwegs" prognostizierte Stunden folgt separat.)
+
 ## 0.0.45.2
 
 * **Fix: Autarkiegrad im Einsatzplan konnte weit über 100 % anzeigen** (z.B. 243 %) und schwankte zwischen zwei Optimierungsläufen extrem. Ursache: eingespeister Strom (negativer Netto-`GR_sum`) wurde gegen den Bezug gegengerechnet und landete so im Zähler. Jetzt zählt für die Autarkie nur noch der pro Stunde tatsächlich **eingekaufte** Netzstrom (Einspeise-Stunden auf 0 gesetzt, keine Verrechnung mit Bezug) – der Wert liegt damit von Natur aus zwischen 0 % und 100 %.
