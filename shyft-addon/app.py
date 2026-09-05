@@ -1202,9 +1202,6 @@ EV_DEFAULT_WEEKEND_BLOCK_HOURS = [15, 16, 17]
 # prognostizierte Fahrt: der Verbrauch des Tages wird nur auf solche Stunden verteilt, und
 # ev_usage_h (siehe build_ev_optimizer_fields) enthaelt genau sie.
 EV_AWAY_THRESHOLD = 0.5
-# Fuer den "kein prognostizierter Abwesenheitsblock"-Notnagel gesperrte Stunden ab jetzt: so nah am
-# Jetzt ist der Auto-Zustand faktisch bekannt, dort eine Fahrt zu simulieren waere falsch.
-NEAR_TERM_NO_SIM_HOURS = 3
 
 
 def _recency_weight(sample_dt, now):
@@ -1224,9 +1221,11 @@ def _recency_weighted_mean(samples, now):
     return (acc / total_w) if total_w > 0 else None
 
 
-def compute_car_presence_forecast(hours=48):
+def compute_car_presence_forecast(hours=48, buffer_hours=0):
     """hours-ahead (default 48h) stuendliche Anwesenheits- und EV-Verbrauchsprognose aus
-    CAR_PRESENCE_LOG_PATH, in zwei getrennten Stufen:
+    CAR_PRESENCE_LOG_PATH, in zwei getrennten Stufen. buffer_hours: wie viele der letzten
+    Horizontstunden nur Puffer sind (siehe build_ev_optimizer_fields) und deshalb NICHT als
+    Notnagel-Ziel taugen - die "letzte Stunde im Optimierungszeitraum" ist dann hours-1-buffer_hours.
 
     1. Anwesenheit: time-inhomogene Markov-Kette (Wochentag, Stunde, aktueller Zustand), forward-
        simuliert ab dem live beobachteten Zustand. Alle gelernten Raten sind recency-gewichtet
@@ -1407,20 +1406,17 @@ def compute_car_presence_forecast(hours=48):
             target_idxs = [i for i in idxs if p_away_list[i] > EV_AWAY_THRESHOLD]
             weights = [p_away_list[i] for i in target_idxs]
         if not target_idxs:
-            # kein Abwesenheitsblock im Horizont fuer diesen Tag -> auf die "am ehesten abwesende"
-            # Stunde. Die naechsten NEAR_TERM_NO_SIM_HOURS Stunden bleiben dabei ausgeschlossen: so
-            # nah am Jetzt ist der Auto-Zustand faktisch bekannt (Stunde 0 sowieso, siehe
-            # probabilities[0]) - dort eine Fahrt zu erfinden, nur um die Tagessumme zu treffen,
-            # waere schlicht falsch. Bleibt dann nichts uebrig, wird dieser (sehr kurze) Rest-Tag
-            # gar nicht bestueckt.
-            candidates = [i for i in idxs if i >= NEAR_TERM_NO_SIM_HOURS]
-            if not candidates:
-                continue
-            target_idxs = [max(candidates, key=lambda i: p_away_list[i])]
+            # Kein prognostizierter Abwesenheitsblock fuer diesen Tag: E_day trotzdem im Plan
+            # halten, aber auf die letzte Stunde des Optimierungszeitraums schieben (Nutzer-Vorgabe)
+            # - dort verzerrt ein erfundener Verbrauch die Optimierung am wenigsten (maximaler
+            # Vorlauf, und die Stunde wird laengst durch frische Daten ersetzt, bevor sie eintritt),
+            # statt eine plausibel aussehende naheliegende Stunde zu treffen. Mehrere solche Tage
+            # summieren sich dort auf (deshalb +=).
+            target_idxs = [max(0, hours - 1 - buffer_hours)]
             weights = [1.0]
         wsum = sum(weights) or 1.0
         for i, w in zip(target_idxs, weights):
-            consumption_kwh_forecast[i] = e_day * w / wsum
+            consumption_kwh_forecast[i] += e_day * w / wsum
 
     low_data_basis = [consumption_basis != "ok"] * hours
 
@@ -1462,7 +1458,7 @@ def build_ev_optimizer_fields(config, optimizer_period=48):
         return {}
 
     hours = optimizer_period + 1
-    labels, probabilities, _, _, consumption_kwh_forecast, _, _ = compute_car_presence_forecast(hours=hours)
+    labels, probabilities, _, _, consumption_kwh_forecast, _, _ = compute_car_presence_forecast(hours=hours, buffer_hours=1)
 
     usage_hours_zero_based = [i for i in range(hours) if consumption_kwh_forecast[i] > 0]
 

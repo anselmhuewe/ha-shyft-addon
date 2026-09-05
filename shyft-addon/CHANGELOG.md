@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.0.45.4
+
+* **EV-Verbrauchsprognose-Notnagel: die 3-Stunden-Sperre (0.0.45.3) zurückgerollt.** Stattdessen schiebt der Notnagel den Tages-`E_day` eines Tages ohne prognostizierte Abwesenheit jetzt auf die **letzte Stunde des Optimierungszeitraums** – dort verzerrt ein erfundener Verbrauch die Optimierung am wenigsten (maximaler Vorlauf, die Stunde wird längst durch frische Daten ersetzt, bevor sie eintritt). Mehrere solche Tage summieren sich dort auf. (Die Pufferstunde jenseits des Optimierungszeitraums bleibt frei.)
+
 ## 0.0.45.3
 
 * **EV-Verbrauchsprognose: der Notnagel für Tage ohne prognostizierte Abwesenheit legt keine simulierte Fahrt mehr in die nächsten 3 Stunden.** So nah am Jetzt ist der Auto-Zustand faktisch bekannt (die aktuelle Stunde sowieso) - dort einen Verbrauch zu erfinden, nur um die Tagessumme zu treffen, war schlicht falsch. Bleibt für den (dann sehr kurzen) Rest-Tag keine Stunde übrig, wird er gar nicht mehr bestückt. (Teilkorrektur - die weitergehende Umstellung der Zuteilung auf tatsächlich als "unterwegs" prognostizierte Stunden folgt separat.)
