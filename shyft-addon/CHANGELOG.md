@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.0.44.91
+
+* **Fix: Gerätesteuerung scrollte nur beim allerersten Seitenaufruf zur aktiven Aktion, nicht bei jedem Tab-Wechsel.** Da das Addon als dauerhaftes HA-Ingress-Panel läuft, passiert ein "echter" Seitenaufruf praktisch nie mehr - jetzt scrollt jeder Klick auf "Gerätesteuerung" erneut zur laufenden Aktion.
+* **Anwesenheitsprognose: neue Überschrift + Erklärung** ("mindestens drei Beobachtungen für den Wochentag, sonst Rückfall auf Standardprofil") über dem Chart auf dem Dashboard.
+* **Fix: Anwesenheitsprognose sagte "abwesend" voraus, obwohl das Auto gerade eingesteckt lädt.** Ohne genug historische Daten für die konkrete (Wochentag, Stunde)-Kombination fiel die Vorhersage bisher auf den reinen Tagesdurchschnitt zurück und ignorierte dabei den aktuellen Zustand komplett. Neuer Fallback: ohne abweichende starke Historie bleibt der aktuelle Zustand mit ~90 % Wahrscheinlichkeit auch die nächste Stunde bestehen (eingesteckt bleibt eingesteckt, abwesend bleibt abwesend).
+* **Fix: Verbrauchsprognose fürs Auto überschätzte die tägliche Fahrleistung teils massiv** (z.B. ~200 km statt realer ~30 km/Tag), weil ein möglicherweise verrauschter Pro-Stunde-Durchschnitt unabhängig auf jede Stunde mit Fahrwahrscheinlichkeit angewendet wurde und sich über mehrere Stunden am Tag aufaddierte. Die Fallback-Prognose verteilt die historische durchschnittliche Tagesleistung jetzt proportional zur stündlichen Fahrwahrscheinlichkeit auf den jeweiligen Kalendertag - die Tagessumme entspricht damit wieder der historischen Realität.
+* **Mobile: Tooltip-Blasen (info-"?") laufen nicht mehr über den Bildschirmrand hinaus** - zentriert jetzt am Icon statt links ausgerichtet, mit engerer Breite auf schmalen Bildschirmen.
+* **Konfiguration: mehr Abstand zwischen Toggle-Schaltern und ihrem Info-"?"** bei den Batterie-Aktionstypen.
+* **Neuer Hinweis auf dem Dashboard**: "X Probleme erfordern deine Aufmerksamkeit →" direkt unter der Navigation, sobald auf der Konfigurationsseite etwas ansteht - ein Klick springt direkt dorthin.
+* **Neue Konfigurations-Warnung**: ein Gerät wird jetzt als "noch nicht vollständig konfiguriert" gemeldet, wenn eines seiner Pflicht-Sensor- oder Steuerungsfelder leer ist (variantenbewusst: berücksichtigt pro Aktionstyp, ob "Direkte Entitäts-Steuerung" oder "HA-Automation" gewählt ist). Ausgenommen als optional: Wärmepumpen-Leistung, Raumtemperatur-Sensor, §14a und PV-Einspeisung begrenzen.
+* **Batterie-Steuerung bekommt "Testen"-Buttons** (bisher nur bei anderen Aktionstypen vorhanden): steuert bei "Direkte Entitäts-Steuerung" wirklich das Gerät an, zeigt die aktuellen Werte der betroffenen Entitäten sowie grünen Haken/rotes Ausrufezeichen bei Erfolg/Fehlschlag. Ein erfolgreicher Test gibt eine zuvor gemeldete "Aktion konnte nicht … werden"-Fehlermeldung wieder frei, ohne auf den nächsten echten (erfolgreichen) Optimierer-Lauf warten zu müssen.
+* **Fehlgeschlagene Aktionen zeigen jetzt einen Link "zu den Einstellungen"**, der direkt zur betroffenen Gerätekachel scrollt und sie aufklappt.
+
 ## 0.0.44.90
 
 * **Dashboard-Charts zeigen jetzt einen Punkt auf der Linie an der gerade ausgewählten Stunde**, synchron mit dem Tooltip - vor allem fürs Touch-Swipen auf dem Handy gedacht: der Finger verdeckt die berührte Stelle selbst, ohne diesen Punkt war dort nicht erkennbar, welche Stunde man gerade trifft.

@@ -597,9 +597,12 @@ async function saveConfigurationNow() {
 
 let saveStatusTimeout = null;
 
-// Sammelstelle fuer Konfigurations-Warnhinweise ("muss behoben werden, bevor Shyft
-// funktioniert") oben auf der Konfigurationsseite - aktuell nur die unvollstaendige
-// Wallbox-Status-Zuordnung, siehe compute_config_warnings in app.py fuer den Ausbau.
+// Sammelstelle fuer Konfigurations-Warnhinweise ("muss behoben werden, bevor Shyft funktioniert")
+// oben auf der Konfigurationsseite - zwei Quellen: backend-seitige Pruefungen, die Live-Daten
+// brauchen (siehe compute_config_warnings in app.py, z.B. die Wallbox-Status-Zuordnung), und die
+// rein client-seitige computeMissingRequiredFieldsWarnings oben (fehlende Pflichtfelder je Geraet -
+// braucht nur configData, das liegt schon vollstaendig im Frontend vor). Ein Klick auf eine Zeile
+// mit sectionKey scrollt zur betroffenen Geraetekachel (siehe scrollToIntegrationSection).
 async function renderConfigWarnings() {
     const container = document.getElementById('configWarnings');
     if (!container) return;
@@ -609,15 +612,36 @@ async function renderConfigWarnings() {
         warnings = result.warnings || [];
     } catch (err) {
         console.log(err);
-        return;
     }
+    warnings = warnings.concat(computeMissingRequiredFieldsWarnings());
     container.innerHTML = '';
     for (const warning of warnings) {
         const item = document.createElement('div');
         item.className = 'configWarningItem';
         item.textContent = '⚠ ' + warning.message;
+        if (warning.sectionKey) {
+            item.classList.add('configWarningItem--clickable');
+            item.addEventListener('click', () => scrollToIntegrationSection(warning.sectionKey));
+        }
         container.appendChild(item);
     }
+}
+
+// Scrollt zur Geraetekachel eines Abschnitts (siehe INTEGRATION_SECTIONS) und klappt sie bei Bedarf
+// auf - gemeinsam genutzt von den Konfigurations-Warnungen oben und der "zu den Einstellungen"-Zeile
+// an fehlgeschlagenen Aktionen (siehe renderSystemHealth). Wechselt dafuer selbst auf den
+// Konfigurations-Tab, falls man gerade woanders ist (z.B. vom Dashboard-Problem-Banner aus).
+function scrollToIntegrationSection(sectionKey) {
+    const konfigButton = document.querySelector('.tabButton[data-tab="konfiguration"]');
+    if (konfigButton && !konfigButton.classList.contains('active')) konfigButton.click();
+    const sectionDiv = document.querySelector(`.integrationSection[data-section-key="${sectionKey}"]`);
+    if (!sectionDiv) return;
+    const bodyDiv = document.getElementById('section_body_' + sectionKey);
+    if (bodyDiv && bodyDiv.style.display === 'none') {
+        const toggleButton = sectionDiv.querySelector('.sectionToggleButton');
+        if (toggleButton) toggleButton.click();
+    }
+    requestAnimationFrame(() => sectionDiv.scrollIntoView({behavior: 'smooth', block: 'start'}));
 }
 
 // Nutzer-sichtbare Fehler-/Statuskarte ganz oben auf der Konfigurationsseite: entweder
@@ -659,10 +683,93 @@ async function renderSystemHealth() {
     list.className = 'systemHealthProblemList';
     for (const problem of problems) {
         const item = document.createElement('li');
-        item.textContent = problem.message;
+        item.appendChild(document.createTextNode(problem.message));
+        const sectionKey = actionFailedProblemSectionKey(problem.id);
+        if (sectionKey) {
+            const link = document.createElement('a');
+            link.href = '#';
+            link.className = 'systemHealthProblemLink';
+            link.textContent = 'zu den Einstellungen';
+            link.addEventListener('click', (event) => {
+                event.preventDefault();
+                scrollToIntegrationSection(sectionKey);
+            });
+            item.appendChild(document.createTextNode(' '));
+            item.appendChild(link);
+        }
         list.appendChild(item);
     }
     container.appendChild(list);
+}
+
+// Ordnet ein "action_failed:<slug>"-Problem (siehe _action_problem_id/_note_action_outcome in
+// app.py) der Geraetekachel zu, zu der die fehlgeschlagene Aktion inhaltlich gehoert - fuer den
+// "zu den Einstellungen"-Link an fehlgeschlagenen Aktionen (siehe renderSystemHealth). <slug> ist
+// derselbe deterministische Slug wie serverseitig (Kleinbuchstaben, alles ausser a-z/0-9 zu "_"),
+// hier als feste Tabelle statt neu berechnet, da es nur die derzeit sieben moeglichen Aktionsnamen
+// betrifft.
+const ACTION_FAILED_SLUG_TO_SECTION = {
+    'auto_laden': 'wallbox',
+    'warmwasser': 'waermepumpe',
+    'batterie_netzladen': 'batterie',
+    'batterie_entladen_verschieben': 'batterie',
+    'batterie_laden_verschieben_pv_berschuss': 'batterie',
+    'heizung_soll_temperatur': 'waermepumpe',
+    'verbraucher_an': 'sonstiger_verbraucher',
+    'pv_einspeisung_begrenzen': 'wechselrichter',
+    'verbrauch_begrenzen_14a': 'wechselrichter',
+};
+
+function actionFailedProblemSectionKey(problemId) {
+    if (!problemId || !problemId.startsWith('action_failed:')) return null;
+    return ACTION_FAILED_SLUG_TO_SECTION[problemId.slice('action_failed:'.length)] || null;
+}
+
+// Kurzer, klickbarer Hinweis ganz oben auf dem Dashboard, sobald es auf der Konfigurationsseite
+// etwas zu beheben gibt - fasst dieselben zwei Quellen zusammen, die dort separat angezeigt werden
+// (renderSystemHealth/renderConfigWarnings): Laufzeit-Probleme (/system-health) UND
+// Konfigurations-Warnungen (/config/warnings). Ein Klick wechselt direkt auf den
+// Konfigurations-Tab (simuliert denselben Tab-Button-Klick wie der Nutzer selbst, statt die
+// Tab-Wechsel-Logik hier zu duplizieren).
+async function renderDashboardProblemBanner() {
+    const banner = document.getElementById('dashboardProblemBanner');
+    if (!banner) return;
+    let problemCount = 0;
+    try {
+        const health = await getJson(systemHealthUri);
+        if (!health.ok) {
+            problemCount += health.problemCount || (health.problems || []).length;
+        }
+    } catch (err) {
+        console.log(err);
+    }
+    try {
+        const warningsResult = await getJson(insideHomeAssistant + '/config/warnings');
+        problemCount += (warningsResult.warnings || []).length;
+    } catch (err) {
+        console.log(err);
+    }
+    problemCount += computeMissingRequiredFieldsWarnings().length;
+    if (problemCount === 0) {
+        banner.hidden = true;
+        return;
+    }
+    banner.innerHTML = '';
+    const text = document.createElement('span');
+    text.textContent = problemCount === 1
+        ? '1 Problem erfordert deine Aufmerksamkeit'
+        : `${problemCount} Probleme erfordern deine Aufmerksamkeit`;
+    banner.appendChild(text);
+    const arrow = document.createElement('span');
+    arrow.className = 'dashboardProblemBannerArrow';
+    arrow.textContent = '→';
+    arrow.setAttribute('aria-hidden', 'true');
+    banner.appendChild(arrow);
+    banner.hidden = false;
+    banner.onclick = () => {
+        const konfigButton = document.querySelector('.tabButton[data-tab="konfiguration"]');
+        if (konfigButton) konfigButton.click();
+    };
 }
 
 async function autoSave() {
@@ -732,6 +839,7 @@ const loadConfiguration = async (event) => {
         renderNotificationSection();
         renderConfigWarnings();
         renderSystemHealth();
+        renderDashboardProblemBanner();
     } catch (err) {
         console.log(err);
     }
@@ -861,6 +969,99 @@ function isSectionComplete(section, currentIds) {
     return true;
 }
 
+// Sensor-/Steuerungsfelder, die auch bei konfiguriertem Geraet leer bleiben duerfen (Nutzer-Vorgabe)
+// - anders als isSectionComplete oben (das behandelt bewusst ALLE Felder als Voraussetzung fuer die
+// Abschnitts-Checkmarkierung) gelten diese hier NICHT als Pflichtfeld fuer die Warnmeldung unten:
+// die Waermepumpen-Leistung ist rein informativ, der Raumtemperatur-Sensor hat einen eigenen
+// Auto-Simulations-Fallback (siehe dessen description oben in INTEGRATION_SECTIONS), und §14a/
+// PV-Einspeisung sind seltene Zusatzfunktionen, keine Grundvoraussetzung.
+const REQUIRED_FIELD_OPTIONAL_SENSOR_KEYS = new Set(['heatpump_current_power_elect', 'heatpump_temp_indoor_measured']);
+const REQUIRED_FIELD_OPTIONAL_ACTION_KEYS = new Set(['consumption_limit_14a', 'pv_feed_in_limit']);
+
+// Ausfuehrlichere Schwester von isSectionComplete oben: statt nur true/false liefert das hier je
+// unvollstaendigem Geraet die konkret fehlenden Feldbezeichnungen - Grundlage fuer die
+// "noch nicht vollstaendig konfiguriert"-Warnung (siehe renderConfigWarnings/
+// renderDashboardProblemBanner). Spiegelt dieselbe Variantenlogik wie isSectionComplete (Direkte
+// Entitaets-Steuerung vs. HA-Automation, je nach Aktionstyp in controlVariant/hotWaterRecipe.type/
+// carChargeRecipe.type gespeichert), nur mit den oben genannten Ausnahmen und lesbaren Labels statt
+// eines fruehen Abbruchs.
+function computeMissingRequiredFieldsWarnings() {
+    const integrationMappings = configData['integrationMappings'] || {};
+    const sensorMappings = configData['sensorMappings'] || {};
+    const actorMappings = configData['actorMappings'] || {};
+    const warnings = [];
+
+    for (const section of INTEGRATION_SECTIONS) {
+        const currentIds = integrationMappings[section.key] || [];
+        if (currentIds.length === 0) continue;
+        if (currentIds.length === 1 && currentIds[0] === DEMO_INTEGRATION_ID) continue;
+
+        const missing = [];
+
+        for (const key of section.sensors) {
+            if (REQUIRED_FIELD_OPTIONAL_SENSOR_KEYS.has(key)) continue;
+            if (!sensorMappings[key]) missing.push((helpinformation[key] || {}).label || key);
+        }
+
+        for (const control of AUTO_MANAGED_CONTROLS) {
+            if (!control.actionKeys.some(k => section.actions.includes(k))) continue;
+            if (control.actionKeys.every(k => REQUIRED_FIELD_OPTIONAL_ACTION_KEYS.has(k))) continue;
+            const variant = control.hasAutomationVariant ? ((configData['controlVariant'] || {})[control.key] || 'direct') : 'direct';
+            if (variant === 'ha_automation') {
+                if (control.type === 'number') {
+                    if (!actorMappings[control.key]) missing.push(control.titleLabel + ' (Automation)');
+                } else if (!actorMappings['consumer_on'] || !actorMappings['consumer_off']) {
+                    missing.push(control.titleLabel + ' (Automation)');
+                }
+            } else if (!sensorMappings[control.sensorField]) {
+                missing.push(control.titleLabel);
+            }
+        }
+
+        const manualActions = section.actions.filter(key => !AUTO_MANAGED_ACTION_KEYS.has(key) && !CAR_CHARGE_ACTION_KEYS.has(key) && !HOT_WATER_ACTION_KEYS.has(key) && !BATTERY_DIRECT_ACTION_KEYS.has(key));
+        for (const key of manualActions) {
+            if (REQUIRED_FIELD_OPTIONAL_ACTION_KEYS.has(key)) continue;
+            if (!actorMappings[key]) missing.push((actorHelpInformation[key] || {}).label || key);
+        }
+
+        for (const key of section.actions.filter(k => BATTERY_DIRECT_ACTION_KEYS.has(k))) {
+            const variant = (configData['controlVariant'] || {})[key] || 'ha_automation';
+            const label = (actorHelpInformation[key] || {}).label || key;
+            if (variant === 'ha_automation') {
+                if (!actorMappings[key]) missing.push(label);
+            } else if (!sensorMappings[BATTERY_DIRECT_REQUIRED_SENSOR_FIELDS[key]]) {
+                missing.push(label);
+            }
+        }
+
+        if (section.actions.some(k => CAR_CHARGE_ACTION_KEYS.has(k))) {
+            const recipe = configData['carChargeRecipe'] || {};
+            const amperageStage = recipe.amperage || {};
+            const isThreeStageComplete = recipe.type === 'three_stage' && (recipe.phaseCount || {}).service
+                && amperageStage.service && (amperageStage.amountFields || []).length > 0 && (recipe.control || {}).service;
+            const isHaAutomationComplete = recipe.type === 'ha_automation' && !!recipe.haAutomationEntityId;
+            if (!(isThreeStageComplete || isHaAutomationComplete)) {
+                missing.push('Auto laden (Ladesteuerung)');
+            }
+        }
+
+        if (section.actions.some(k => HOT_WATER_ACTION_KEYS.has(k))) {
+            const recipe = configData['hotWaterRecipe'] || {};
+            const isComplete = recipe.type === 'ha_automation' ? !!recipe.haAutomationEntityId : !!recipe.service;
+            if (!isComplete) missing.push('Warmwasser');
+        }
+
+        if (missing.length > 0) {
+            warnings.push({
+                key: 'missing_required_fields:' + section.key,
+                sectionKey: section.key,
+                message: `${section.label} noch nicht vollständig konfiguriert - es fehlen: ${missing.join(', ')}.`,
+            });
+        }
+    }
+    return warnings;
+}
+
 // Catches errors that only show up after an async status fetch resolves (e.g. an entity that's
 // mapped but currently unreadable) - forces the tile open the moment one appears, even though
 // the initial synchronous isSectionComplete check couldn't have known about it yet.
@@ -906,6 +1107,9 @@ function renderIntegrationSections() {
     for (const section of INTEGRATION_SECTIONS) {
         const sectionDiv = document.createElement('div');
         sectionDiv.className = 'integrationSection';
+        // Fuer scrollToIntegrationSection (Konfigurations-Warnungen/fehlgeschlagene Aktionen) - die
+        // Heading-Zeile selbst hat keine eigene id, nur bodyDiv ('section_body_'+key).
+        sectionDiv.dataset.sectionKey = section.key;
 
         const currentIds = integrationMappings[section.key] || [];
         currentIntegrationSelections[section.key] = currentIds;
@@ -3180,6 +3384,81 @@ function buildBatteryCoupledEntityField(sensorKey, datalistId, onChange) {
     return datalistId ? attachEntityDropdown(input, {datalistId, headerText: 'Home-Assistant-Entität'}) : input;
 }
 
+// "Testen"-Zeile fuer die "direkte Entitaets-Steuerung"-Variante eines Batterie-Aktionstyps: ein
+// Klick fuehrt echt die gleiche Schreib-/Verifikationslogik aus wie eine reale Aktion (siehe
+// execute_battery_direct/testBatteryDirectControl in app.py, kuerzere Frist, keine Push bei
+// Fehlschlag), zeigt die aktuellen Live-Werte der betroffenen Entitaeten und markiert Erfolg/
+// Fehlschlag mit einem gruenen Haken bzw. roten Ausrufezeichen. Ein erfolgreicher Test gibt eine
+// zuvor gemeldete "Aktion konnte nicht ... werden"-Fehlermeldung wieder frei (siehe
+// renderSystemHealth/_note_action_outcome) - ohne diesen Button blieb die sonst stehen, bis der
+// Aktionstyp naechste zufaellig durch den Optimierer erneut UND dabei erfolgreich ausgeloest wurde.
+function buildBatteryDirectTestRow(actionKey) {
+    const wrapper = document.createElement('div');
+    wrapper.className = 'autoActionControl';
+
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.textContent = 'Testen';
+
+    const valuesDisplay = document.createElement('span');
+    valuesDisplay.className = 'autoActionValue';
+    valuesDisplay.textContent = 'Lade Werte...';
+
+    const statusIcon = document.createElement('span');
+    statusIcon.className = 'batteryTestStatusIcon';
+    statusIcon.hidden = true;
+
+    function renderValues(values) {
+        valuesDisplay.textContent = (values || [])
+            .map(v => `${v.label}: ${(v.value === null || v.value === undefined) ? '–' : v.value}`)
+            .join(' | ');
+    }
+
+    async function refreshValues() {
+        try {
+            const result = await getJson(insideHomeAssistant + '/actions/battery/' + actionKey + '/status');
+            renderValues(result.values);
+        } catch (err) {
+            console.log(err);
+            valuesDisplay.textContent = 'Werte konnten nicht geladen werden.';
+        }
+    }
+
+    button.addEventListener('click', async () => {
+        button.disabled = true;
+        statusIcon.hidden = true;
+        valuesDisplay.textContent = 'Teste...';
+        try {
+            const response = await fetch(insideHomeAssistant + '/actions/battery/' + actionKey + '/test', {method: 'POST'});
+            const result = await response.json();
+            renderValues(result.values);
+            statusIcon.textContent = result.success ? '✓' : '!';
+            statusIcon.className = 'batteryTestStatusIcon ' + (result.success ? 'status-ok' : 'status-error');
+            statusIcon.title = result.success ? '' : (result.message || 'Test fehlgeschlagen');
+            statusIcon.hidden = false;
+        } catch (err) {
+            console.log(err);
+            statusIcon.textContent = '!';
+            statusIcon.className = 'batteryTestStatusIcon status-error';
+            statusIcon.title = 'Test fehlgeschlagen';
+            statusIcon.hidden = false;
+            valuesDisplay.textContent = 'Fehler beim Testen';
+        } finally {
+            button.disabled = false;
+        }
+    });
+
+    const controls = document.createElement('div');
+    controls.className = 'autoActionButtons';
+    controls.appendChild(button);
+    controls.appendChild(valuesDisplay);
+    controls.appendChild(statusIcon);
+    wrapper.appendChild(controls);
+
+    refreshValues();
+    return wrapper;
+}
+
 // Ein einzelner Aktionstyp-Block innerhalb "Steuerung": Ueberschrift+Toggle, "Varianten"-Auswahl,
 // darunter je nach Variante entweder die Direkt-Steuerungsfelder (buildDirectFields liefert sie)
 // oder ein Automations-Feld.
@@ -3194,7 +3473,13 @@ function buildBatteryControlBlock(actionKey, label, tooltip, buildDirectFields) 
     if (tooltip) title.appendChild(buildTooltip(tooltip));
     headingRow.appendChild(title);
     const actionTypeEnabled = configData['actionTypeEnabled'] || {};
-    headingRow.appendChild(buildToggleSwitch(actionKey + ACTION_TOGGLE_POSTFIX, actionTypeEnabled[actionKey] !== false));
+    const toggle = buildToggleSwitch(actionKey + ACTION_TOGGLE_POSTFIX, actionTypeEnabled[actionKey] !== false);
+    // margin-left:auto statt eines generischen Gaps auf .integrationHeadingRow (das wird auch fuer
+    // die Geraete-Abschnitts-Ueberschriften mit anderer Kindanzahl verwendet) - schiebt hier gezielt
+    // nur diesen Toggle an den rechten Rand, mit spuerbarem Abstand zum Info-"?" davor (siehe
+    // Nutzer-Screenshot: beide sassen ohne Abstand direkt nebeneinander).
+    toggle.style.marginLeft = 'auto';
+    headingRow.appendChild(toggle);
     wrapper.appendChild(headingRow);
 
     const variant = (configData['controlVariant'] || {})[actionKey] || 'ha_automation';
@@ -3204,6 +3489,7 @@ function buildBatteryControlBlock(actionKey, label, tooltip, buildDirectFields) 
     const directFields = document.createElement('div');
     directFields.style.display = variant === 'direct' ? '' : 'none';
     directFields.appendChild(buildDirectFields());
+    directFields.appendChild(buildBatteryDirectTestRow(actionKey));
     wrapper.appendChild(directFields);
 
     const automationRow = buildAutomationEntityRow('HA-Automation auswählen',
@@ -3581,23 +3867,36 @@ function renderShyftActions(container, actions) {
     maybeAutoScrollToActiveShyftActions();
 }
 
-// Einmalig beim ersten Aufruf der Gerätesteuerung: zur aktuell laufenden Aktion (bzw. zur Gruppe
-// gleichzeitig laufender Aktionen, siehe is-active) scrollen, statt dass man erst manuell zum
-// passenden Tagesabschnitt scrollen muss - zentriert deren Mitte auf der Bildschirmmitte, sodass
-// geplante Aktionen darüber und bereits beendete darunter sichtbar sind (Karten sind absteigend nach
-// "Date End" sortiert, siehe renderShyftActions). Wird sowohl nach dem Rendern der Aktionen als auch
-// beim Tab-Wechsel aufgerufen (setupTabs) - je nachdem, was zuerst fertig ist (Daten laden vs. Tab
-// öffnen); der jeweils andere Aufruf ist dann ein no-op. Ohne aktive Aktion passiert nichts - die
-// Seite bleibt an ihrer normalen Startposition.
-let shyftActionsAutoScrollDone = false;
+// Bei JEDEM Wechsel auf die Gerätesteuerung (nicht nur beim allerersten Seitenaufruf, siehe
+// Nutzer-Korrektur: das Addon laeuft als HA-Ingress-Panel und ein "Seitenaufruf" im Sinne von
+// document.readyState passiert praktisch nur einmal pro Browser-Tab - ein erneuter Klick auf den
+// Tab soll aber trotzdem jedes Mal zur aktuell laufenden Aktion scrollen) zur laufenden Aktion (bzw.
+// zur Gruppe gleichzeitig laufender Aktionen, siehe is-active) scrollen - zentriert deren Mitte auf
+// der Bildschirmmitte, sodass geplante Aktionen darüber und bereits beendete darunter sichtbar sind
+// (Karten sind absteigend nach "Date End" sortiert, siehe renderShyftActions).
+//
+// shyftActionsScrollPending: "beim naechsten fertigen Render dieses Tabs einmal scrollen" - wird von
+// requestShyftActionsAutoScroll() (Tab-Klick, siehe setupTabs) gesetzt. maybeAutoScrollToActiveShyftActions
+// wird zusaetzlich nach JEDEM Rendern der Aktionsliste aufgerufen (Erstladen UND der 30-Sekunden-
+// Auto-Refresh, siehe refreshShyftActions) - ohne gesetztes Pending-Flag ist das dort ein no-op,
+// daher stoert der periodische Hintergrund-Refresh die Scrollposition nicht. Das Flag wird erst
+// verbraucht, sobald die Liste tatsaechlich befuellt ist (container.children.length > 0) - vorher
+// koennte ein Klick kurz vor Abschluss des ersten Ladevorgangs sonst die einzige Scroll-Chance
+// verpassen, weil die Karten (und damit is-active) noch gar nicht im DOM stehen.
+let shyftActionsScrollPending = false;
+function requestShyftActionsAutoScroll() {
+    shyftActionsScrollPending = true;
+    maybeAutoScrollToActiveShyftActions();
+}
 function maybeAutoScrollToActiveShyftActions() {
-    if (shyftActionsAutoScrollDone) return;
+    if (!shyftActionsScrollPending) return;
     const panel = document.getElementById('tab-geraetesteuerung');
     if (!panel || !panel.classList.contains('active')) return;
     const container = document.getElementById('shyftActionsBody');
-    const activeCards = container ? container.querySelectorAll('.shyftActionCard.is-active') : [];
+    if (!container || container.children.length === 0) return; // Daten noch nicht geladen - Pending bleibt gesetzt
+    shyftActionsScrollPending = false; // ab hier: genau ein Versuch pro Tab-Oeffnen, egal ob Karten gefunden werden
+    const activeCards = container.querySelectorAll('.shyftActionCard.is-active');
     if (activeCards.length === 0) return;
-    shyftActionsAutoScrollDone = true;
     // rAF, damit Layout (inkl. evtl. noch nicht geladener Icon-Bilder) sicher steht, bevor die
     // Positionen gemessen werden.
     requestAnimationFrame(() => {
@@ -3818,6 +4117,12 @@ function buildLineChart(title, unit, labels, values, options = {}) {
     wrapper.appendChild(titleEl);
 
     if (presenceForecast) {
+        const subheading = document.createElement('div');
+        subheading.className = 'dashboardChartSubheading';
+        subheading.textContent = 'Anwesenheitsprognose';
+        subheading.appendChild(buildTooltip('Statistische Vorhersage aus der bisher geloggten Anwesenheits-/Fahrhistorie: für jede Kombination aus Wochentag und Uhrzeit werden mindestens drei historische Beobachtungen benötigt, sonst greift ein grober Rückfall auf ein Standardprofil (weniger verlässlich).'));
+        wrapper.appendChild(subheading);
+
         const legend = document.createElement('div');
         legend.className = 'dashboardChartLegend';
         for (const [color, label] of [
@@ -5430,8 +5735,9 @@ setInterval(refreshEinsatzplanCard, ENERGY_FLOW_REFRESH_INTERVAL_MS);
 // nur einmal beim Öffnen der Seite geladen (loadShyftActions) - ein zwischenzeitlicher Statuswechsel
 // (z.B. "aktiv" -> "beendet" zur vollen Stunde, siehe run_hourly_action_transition) blieb im Browser
 // unsichtbar, bis man die Seite manuell neu laedt. loadShyftActions baut die Liste komplett neu auf
-// (renderShyftActions) - das ist unproblematisch, da maybeAutoScrollToActiveShyftActions sich schon
-// selbst merkt, dass der Auto-Scroll nur beim allerersten Mal passieren soll.
+// (renderShyftActions) - das ist unproblematisch, da maybeAutoScrollToActiveShyftActions ohne von
+// requestShyftActionsAutoScroll gesetztes Pending-Flag (siehe dort) ein no-op ist und diesen
+// periodischen Hintergrund-Refresh daher nicht ungefragt scrollt.
 async function refreshShyftActions() {
     if (document.visibilityState !== 'visible') return;
     const panel = document.getElementById('tab-geraetesteuerung');
@@ -5453,7 +5759,7 @@ function setupTabs() {
             }
             document.getElementById('tab-' + button.dataset.tab).classList.add('active');
             if (button.dataset.tab === 'geraetesteuerung') {
-                maybeAutoScrollToActiveShyftActions();
+                requestShyftActionsAutoScroll();
             }
         });
     }

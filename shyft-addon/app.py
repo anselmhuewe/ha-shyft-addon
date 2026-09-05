@@ -54,6 +54,14 @@ PV_FORECAST_SNAPSHOT_PATH = "/data/pv_forecast_snapshot.json"
 CAR_PRESENCE_LOG_PATH = "/data/car_presence_log.json"
 CAR_PRESENCE_LOG_MAX_DAYS = 180
 CAR_PRESENCE_MIN_SAMPLES = 3
+# Fallback-Prior fuer transition_rate(), wenn fuer (Wochentag, Stunde, aktueller Zustand) noch nicht
+# genug Beobachtungen vorliegen (siehe CAR_PRESENCE_MIN_SAMPLES) - siehe Nutzer-Vorgabe: ohne
+# abweichende starke Historie soll der Zustand einfach als bestehen bleibend angenommen werden
+# ("eingesteckt jetzt" -> sehr wahrscheinlich auch naechste Stunde noch eingesteckt, und umgekehrt),
+# statt (wie zuvor) auf die reine Randverteilung marginal_rate() zurueckzufallen - die ignoriert den
+# aktuellen Zustand komplett und liess die Prognose z.B. trotz gerade laufender Ladung ueberraschend
+# schnell auf "abwesend" kippen.
+CAR_PRESENCE_PERSISTENCE_FALLBACK = 0.9
 # Feste Sicherheits-Heuristik (siehe away_return_ceiling): eine normale Tages-Abwesenheit bleibt
 # unangetastet (GRACE_HOURS), danach halbiert sich die zulässige Rückkehrwahrscheinlichkeit je
 # weitere HALF_LIFE_HOURS - unabhängig davon, ob die gelernte Tabelle für so eine lange
@@ -1140,7 +1148,11 @@ def compute_car_presence_forecast(hours=48):
     kein eigenes Markov-Modell - "innerhalb der bestehenden Pipeline", nicht komplexer als nötig),
     und die erwarteten kWh sind diese Wahrscheinlichkeit mal der historisch durchschnittliche
     Verbrauch in diesem Bucket. Ein Bucket mit zu wenigen historischen Beobachtungen fällt auf eine
-    gröbere Ebene zurück statt eine unsichere Zahl vorzutäuschen."""
+    gröbere Ebene zurück statt eine unsichere Zahl vorzutäuschen - für die Verbrauchsprognose
+    speziell NICHT auf einen flachen globalen Pro-Stunde-Durchschnitt (der sich über mehrere
+    Fahrstunden am selben Tag unkontrolliert aufaddieren kann), sondern auf den historischen
+    Tagesdurchschnitt, verteilt proportional zur eigenen driving-Wahrscheinlichkeit auf die
+    betroffenen Stunden desselben Kalendertags (siehe overall_daily_avg_consumption_kwh unten)."""
     try:
         with open(CAR_PRESENCE_LOG_PATH, "r") as f:
             log = json.load(f)
@@ -1163,6 +1175,7 @@ def compute_car_presence_forecast(hours=48):
     consumption_samples = {}   # (weekday, hour) -> [kWh, nur "unterwegs"]
     overall_away_states = []   # alle "steht"/"unterwegs"-Labels, fuer den globalen Fallback-Anteil
     overall_consumption = []   # alle kWh-Werte "unterwegs", fuer den globalen Fallback-Durchschnitt
+    daily_consumption_totals = {}  # lokales Kalenderdatum -> Summe kWh "unterwegs" (0 fuer Tage ohne Fahrt)
 
     for ts, connected, item in entries:
         overall.append(connected)
@@ -1170,6 +1183,8 @@ def compute_car_presence_forecast(hours=48):
         next_ts = ts + timedelta(hours=1)
         if next_ts in by_hour:
             transitions_by_state.setdefault((ts.weekday(), ts.hour, connected), []).append(by_hour[next_ts])
+
+        daily_consumption_totals.setdefault(ts.astimezone().date(), 0.0)
 
         away_state = item.get("state")
         if not connected and away_state in ("steht", "unterwegs"):
@@ -1180,6 +1195,7 @@ def compute_car_presence_forecast(hours=48):
             if away_state == "unterwegs" and consumption_kwh is not None:
                 consumption_samples.setdefault((ts.weekday(), ts.hour), []).append(consumption_kwh)
                 overall_consumption.append(consumption_kwh)
+                daily_consumption_totals[ts.astimezone().date()] += consumption_kwh
 
     overall_rate = (sum(overall) / len(overall)) if overall else 0.5
     overall_driving_fraction = (
@@ -1189,6 +1205,16 @@ def compute_car_presence_forecast(hours=48):
     overall_avg_consumption = (
         sum(overall_consumption) / len(overall_consumption)
         if overall_consumption else CAR_CONSUMPTION_DEFAULT_KWH
+    )
+    # Durchschnittliche taegliche Fahrleistung (kWh) UEBER ALLE geloggten Kalendertage, nicht nur
+    # die mit tatsaechlicher Fahrt (ein fahrtloser Tag zaehlt als 0, siehe daily_consumption_totals
+    # oben) - Ankerwert fuer die Fallback-Normalisierung unten (siehe Nutzer-Vorgabe: die
+    # Prognosesumme eines Tages soll dieser historischen Tagesleistung entsprechen, statt einen
+    # unter Umstaenden verrauschten Pro-Stunde-Durchschnitt ueber mehrere Stunden hinweg zu
+    # summieren, was sich schnell zu einem Vielfachen der realen Tagesleistung aufaddieren kann).
+    overall_daily_avg_consumption_kwh = (
+        sum(daily_consumption_totals.values()) / len(daily_consumption_totals)
+        if daily_consumption_totals else None
     )
 
     # Jede *_rate/*_fraction-Funktion gibt zusaetzlich zurueck, ob sie auf die groebere
@@ -1206,8 +1232,8 @@ def compute_car_presence_forecast(hours=48):
         samples = transitions_by_state.get((weekday, hour, from_connected), [])
         if len(samples) >= CAR_PRESENCE_MIN_SAMPLES:
             return sum(samples) / len(samples), False
-        rate, _ = marginal_rate(weekday, hour)
-        return rate, True
+        fallback = CAR_PRESENCE_PERSISTENCE_FALLBACK if from_connected else (1 - CAR_PRESENCE_PERSISTENCE_FALLBACK)
+        return fallback, True
 
     def driving_fraction(weekday, hour):
         counts = away_state_counts.get((weekday, hour))
@@ -1269,6 +1295,7 @@ def compute_car_presence_forecast(hours=48):
     standing_probabilities = []
     driving_probabilities = []
     consumption_kwh_forecast = []
+    consumption_is_fallback = []
     for i in range(hours):
         ts_i = start + timedelta(hours=i)
         p_away = 1 - probabilities[i]
@@ -1279,7 +1306,34 @@ def compute_car_presence_forecast(hours=48):
         driving_probabilities.append(p_driving)
         avg_consumption, fb_consumption = expected_consumption_when_driving(ts_i.weekday(), ts_i.hour)
         consumption_kwh_forecast.append(p_driving * avg_consumption)
+        consumption_is_fallback.append(fb_consumption)
         low_data_basis[i] = low_data_basis[i] or fb_driving or fb_consumption
+
+    # Fallback-Normalisierung (Nutzer-Vorgabe): Stunden ohne eigene, gut abgesicherte
+    # (Wochentag, Stunde)-Verbrauchsstatistik (consumption_is_fallback) bekommen keinen flachen
+    # globalen Pro-Stunde-Durchschnitt mehr, der sich ueber mehrere Fahrstunden am selben Tag
+    # unkontrolliert aufaddieren kann - stattdessen wird je Kalendertag der historische
+    # Tagesdurchschnitt (overall_daily_avg_consumption_kwh) proportional zur eigenen
+    # driving-Wahrscheinlichkeit auf genau diese Fallback-Stunden verteilt. Bereits gut abgesicherte
+    # Stunden (nicht fallback) behalten ihren eigenen Wert unveraendert; der Tagesdurchschnitt wird
+    # nur auf den REST verteilt (Tagesdurchschnitt minus deren Summe), damit die Tagessumme in
+    # Summe weiterhin der historischen Tagesleistung entspricht.
+    if overall_daily_avg_consumption_kwh is not None:
+        day_hour_indices = {}
+        for i in range(hours):
+            day_key = (start + timedelta(hours=i)).astimezone().date()
+            day_hour_indices.setdefault(day_key, []).append(i)
+        for indices in day_hour_indices.values():
+            fallback_indices = [i for i in indices if consumption_is_fallback[i]]
+            if not fallback_indices:
+                continue
+            confident_sum = sum(consumption_kwh_forecast[i] for i in indices if not consumption_is_fallback[i])
+            remainder = max(0.0, overall_daily_avg_consumption_kwh - confident_sum)
+            weight_sum = sum(driving_probabilities[i] for i in fallback_indices)
+            if weight_sum <= 0:
+                continue
+            for i in fallback_indices:
+                consumption_kwh_forecast[i] = remainder * (driving_probabilities[i] / weight_sum)
 
     return labels, probabilities, standing_probabilities, driving_probabilities, consumption_kwh_forecast, low_data_basis
 
@@ -2931,14 +2985,16 @@ def _battery_value_matches(current_state, target_value):
         return str(current_state) == str(target_value)
 
 
-def _write_and_verify_battery_entity(entity_id, domain, service, data_key, target_value):
+def _write_and_verify_battery_entity(entity_id, domain, service, data_key, target_value, retry_timeout_seconds=BATTERY_RETRY_TIMEOUT_SECONDS):
     """Schreibt target_value auf entity_id und prueft per Live-Status, ob die Entitaet ihn wirklich
-    uebernommen hat - mit Retry alle BATTERY_RETRY_DELAY_SECONDS, bis zu BATTERY_RETRY_TIMEOUT_SECONDS.
-    True bei Erfolg, False wenn nach Ablauf der Frist immer noch keine Uebereinstimmung besteht (oder
-    keine Entitaet zugeordnet ist)."""
+    uebernommen hat - mit Retry alle BATTERY_RETRY_DELAY_SECONDS, bis zu retry_timeout_seconds (Default
+    BATTERY_RETRY_TIMEOUT_SECONDS fuer echte Aktionen; der manuelle "Testen"-Button in der
+    Konfiguration nutzt eine kuerzere Frist, siehe testBatteryDirectControl, damit der Klick nicht bis
+    zu zwei Minuten blockiert). True bei Erfolg, False wenn nach Ablauf der Frist immer noch keine
+    Uebereinstimmung besteht (oder keine Entitaet zugeordnet ist)."""
     if not entity_id:
         return False
-    deadline = time.time() + BATTERY_RETRY_TIMEOUT_SECONDS
+    deadline = time.time() + retry_timeout_seconds
     attempt = 0
     while True:
         attempt += 1
@@ -2970,13 +3026,16 @@ def _notify_battery_control_failure(action_key, phase, failed_fields, config):
     print("[Shyft]", message)
 
 
-def execute_battery_direct(action_key, phase, target_kw, config):
+def execute_battery_direct(action_key, phase, target_kw, config, retry_timeout_seconds=BATTERY_RETRY_TIMEOUT_SECONDS, notify_on_failure=True):
     """Fuehrt die 'direkte Entitaets-Steuerung'-Variante eines Batterie-Aktionstyps aus (siehe
     Modulkommentar oben). target_kw ist der Target Value der Aktion (kW) - fuer "Batterie netzladen"
     der Ladezielwert, fuer "Batterie-Laden verschieben" der (kleine) Begrenzungswert, sonst
     ungenutzt. Raised, wenn nach den Retries noch mindestens ein Wert falsch steht (fuer
     _note_action_outcome/die Problem-Registry) - hat aber vorher schon die Push-Benachrichtigung
-    verschickt."""
+    verschickt (falls notify_on_failure). retry_timeout_seconds/notify_on_failure werden vom
+    manuellen "Testen"-Button (testBatteryDirectControl) auf eine kuerzere Frist bzw. False gesetzt -
+    ein Testklick soll weder bis zu zwei Minuten blockieren noch bei einem misslungenen Testversuch
+    eine echte Push-Benachrichtigung ausloesen."""
     sensor_mappings = config.get("sensorMappings", {})
     mode_entity = sensor_mappings.get("battery_storage_command_mode")
     charge_limit_entity = sensor_mappings.get("battery_charge_limit_current")
@@ -2989,13 +3048,13 @@ def execute_battery_direct(action_key, phase, target_kw, config):
     failed = []
 
     def write_number(entity_id, watts, label):
-        if not _write_and_verify_battery_entity(entity_id, "number", "set_value", "value", watts):
+        if not _write_and_verify_battery_entity(entity_id, "number", "set_value", "value", watts, retry_timeout_seconds):
             failed.append(label)
 
     def write_mode(mode_value, label):
         if not mode_value:
             return  # kein Modus-Wert konfiguriert - ueberspringen statt grundlos zu scheitern
-        if not _write_and_verify_battery_entity(mode_entity, "select", "select_option", "option", mode_value):
+        if not _write_and_verify_battery_entity(mode_entity, "select", "select_option", "option", mode_value, retry_timeout_seconds):
             failed.append(label)
 
     if action_key == "battery_grid_charge":
@@ -3019,12 +3078,99 @@ def execute_battery_direct(action_key, phase, target_kw, config):
             write_number(charge_limit_entity, max_charge_watts, "Ladeleistung")
 
     if failed:
-        _notify_battery_control_failure(action_key, phase, failed, config)
+        if notify_on_failure:
+            _notify_battery_control_failure(action_key, phase, failed, config)
         raise Exception(f"Batterie-Steuerung unvollstaendig: {', '.join(failed)}")
 
 
 def _battery_control_variant(config, action_key):
     return "direct" if config.get("controlVariant", {}).get(action_key) == "direct" else "ha_automation"
+
+
+# ============================================================================
+# Manueller "Testen"-Button je Batterie-Aktionstyp (Konfigurationsseite, "direkte Entitaets-
+# Steuerung"-Variante) - ruft dieselbe execute_battery_direct-Logik auf wie eine echte Aktion, nur
+# mit kuerzerer Verifikations-Frist und ohne Push-Benachrichtigung bei Fehlschlag (siehe deren
+# retry_timeout_seconds/notify_on_failure-Parameter). Ein erfolgreicher Test gibt ein zuvor
+# gemeldetes "Aktion konnte nicht ... werden"-Problem wieder frei (siehe _note_action_outcome) -
+# ohne diesen Button blieb so ein Problem sonst bestehen, bis der Aktionstyp naechste zufaellig
+# durch den Optimierer wieder ausgeloest UND dabei erfolgreich war (siehe Nutzer-Nachfrage).
+# ============================================================================
+
+BATTERY_DIRECT_TEST_TIMEOUT_SECONDS = 20
+# Kleiner, ungefaehrlicher Testwert (kW) fuer die beiden Aktionstypen mit einem echten Zielwert -
+# kein reales Ladeziel, nur um die Schreib-/Verifikationskette tatsaechlich durchzuspielen.
+BATTERY_DIRECT_TEST_TARGET_KW = 0.5
+
+# Je Aktionstyp die Entitaeten, die execute_battery_direct fuer ihn tatsaechlich schreibt (siehe
+# dort) - fuer die Live-Werte-Anzeige neben dem Testen-Button (buildBatteryControlBlock in app.js).
+BATTERY_DIRECT_TEST_FIELDS = {
+    "battery_grid_charge": [
+        ("battery_command_timeout", "Timeout"),
+        ("battery_charge_limit_current", "Ladeleistung"),
+        ("battery_storage_command_mode", "Modus"),
+    ],
+    "battery_discharge_shift": [
+        ("battery_command_timeout", "Timeout"),
+        ("battery_discharge_limit_current", "Entladeleistung"),
+    ],
+    "battery_charge_shift_pv_surplus": [
+        ("battery_storage_command_mode", "Modus"),
+        ("battery_charge_limit_current", "Ladeleistung"),
+    ],
+    "battery_action_stop": [
+        ("battery_storage_command_mode", "Modus"),
+        ("battery_discharge_limit_current", "Entladeleistung"),
+        ("battery_charge_limit_current", "Ladeleistung"),
+    ],
+}
+
+
+def _battery_direct_field_values(config, action_key):
+    "Aktuelle Live-Werte der fuer diesen Batterie-Aktionstyp relevanten Entitaeten - siehe BATTERY_DIRECT_TEST_FIELDS."
+    result = []
+    for sensor_key, label in BATTERY_DIRECT_TEST_FIELDS.get(action_key, []):
+        entity_id = (config.get("sensorMappings", {}) or {}).get(sensor_key)
+        if not entity_id:
+            result.append({"label": label, "value": None})
+            continue
+        if sensor_key == "battery_storage_command_mode":
+            value = _read_mapped_raw_state(config, sensor_key)
+        else:
+            value = _read_mapped_numeric(config, sensor_key)
+        result.append({"label": label, "value": value})
+    return result
+
+
+def _battery_test_problem_labels(action_key):
+    "Welche 'Aktion konnte nicht ... werden'-Problem-Labels ein erfolgreicher Test dieses Aktionstyps freigeben soll. battery_action_stop wird von allen drei Batterie-Verschiebe-Aktionstypen gemeinsam beim Beenden genutzt (siehe handle_shyft_action_end) - ein fehlgeschlagener Stop wird also unter DEREN Namen gemeldet, nicht unter einem eigenen; ein erfolgreicher Stop-Test gibt deshalb alle drei frei."
+    if action_key == "battery_action_stop":
+        return [ACTION_TYPE_TOGGLE_KEYS[key] for key in BATTERY_SHIFT_ACTOR_KEYS]
+    return [ACTION_TYPE_TOGGLE_KEYS[action_key]]
+
+
+@app.route("/actions/battery/<action_key>/status", methods=["GET"])
+def batteryDirectControlStatus(action_key):
+    if action_key not in BATTERY_DIRECT_TEST_FIELDS:
+        return jsonify({"error": "unbekannte Steuerung"}), 404
+    config = _read_current_config()
+    return jsonify({"values": _battery_direct_field_values(config, action_key)})
+
+
+@app.route("/actions/battery/<action_key>/test", methods=["POST"])
+def testBatteryDirectControl(action_key):
+    if action_key not in BATTERY_DIRECT_TEST_FIELDS:
+        return jsonify({"success": False, "message": "unbekannte Steuerung"}), 404
+    config = _read_current_config()
+    try:
+        execute_battery_direct(action_key, "getestet", BATTERY_DIRECT_TEST_TARGET_KW, config,
+                                retry_timeout_seconds=BATTERY_DIRECT_TEST_TIMEOUT_SECONDS, notify_on_failure=False)
+        for label in _battery_test_problem_labels(action_key):
+            _note_action_outcome(label, "getestet", None)
+        return jsonify({"success": True, "values": _battery_direct_field_values(config, action_key)})
+    except Exception as e:
+        return jsonify({"success": False, "message": str(e), "values": _battery_direct_field_values(config, action_key)}), 500
+
 
 # Notification types the user can toggle in the "Benachrichtigungen" config section - extend this
 # dict as new types are added, the frontend renders one toggle row per entry.
