@@ -1255,8 +1255,23 @@ def compute_car_presence_forecast(hours=48):
         samples = transitions_by_state.get((weekday, hour, from_connected), [])
         if len(samples) >= CAR_PRESENCE_MIN_SAMPLES:
             return sum(samples) / len(samples), False
-        fallback = CAR_PRESENCE_PERSISTENCE_FALLBACK if from_connected else (1 - CAR_PRESENCE_PERSISTENCE_FALLBACK)
-        return fallback, True
+        # Fallback-Prior: EIN fester Wert fuer beide Richtungen (0.9 bleibt eingesteckt / 0.1 kehrt
+        # zurueck) haette den Markov-Prozess langfristig IMMER Richtung 50/50 konvergieren lassen,
+        # unabhaengig davon, wie oft das Auto historisch tatsaechlich eingesteckt war - fuer ein Auto
+        # mit z.B. 95% historischer Einsteck-Quote (Nutzer-Vorgabe: geringe Fahrleistung -> soll
+        # ueberwiegend als eingesteckt gelten) waere die Prognose nach ein paar Stunden faelschlich
+        # Richtung 50% abgesackt. p_hh/p_ah sind stattdessen so gewaehlt, dass die STATIONAERE
+        # Verteilung dieser Markov-Kette (p_ah / (p_ah + (1 - p_hh))) exakt overall_rate ergibt -
+        # kurzfristig bleibt ueber CAR_PRESENCE_PERSISTENCE_FALLBACK weiterhin eine starke "Zustand
+        # bleibt bestehen"-Tendenz erhalten, langfristig naehert sich die Prognose aber dem
+        # tatsaechlichen historischen Anteil an statt einem willkuerlichen Mittelpunkt.
+        p_hh = max(CAR_PRESENCE_PERSISTENCE_FALLBACK, overall_rate)
+        if overall_rate >= 1.0:
+            p_ah = 1.0
+        else:
+            p_ah = overall_rate * (1 - p_hh) / (1 - overall_rate)
+        fallback = p_hh if from_connected else p_ah
+        return min(1.0, fallback), True
 
     def driving_fraction(weekday, hour):
         counts = away_state_counts.get((weekday, hour))

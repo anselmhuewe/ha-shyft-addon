@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.0.44.94
+
+* **Fix: Anwesenheitsprognose blieb auch bei historisch geringer Fahrleistung nicht überwiegend "eingesteckt".** Die Fallback-Logik (ohne genug Daten für die konkrete Wochentag/Stunde-Kombination) nutzte bisher symmetrisch 90%/10%-Übergangsraten - das lässt die Prognose über mehrere Stunden hinweg unweigerlich Richtung 50/50 abdriften, egal wie oft das Auto historisch tatsächlich eingesteckt war. Die beiden Raten werden jetzt so berechnet, dass sich die Prognose langfristig dem tatsächlichen historischen Anteil verbundener Stunden annähert (z.B. ~95%, wenn das Auto nur selten fährt), kurzfristig aber weiterhin stark am aktuellen Zustand festhält.
+
 ## 0.0.44.93
 
 * **Fix: die Problem-Statuskarte auf der Konfigurationsseite zählte falsch** - ihre Überschrift ("3 Probleme erfordern deine Aufmerksamkeit") zählte nur die Laufzeit-Probleme aus `/system-health`, während direkt darunter unbeschriftet noch weitere Konfigurations-Warnungen standen, die nirgends mitgezählt wurden. Das widersprach der Summe im Hinweis-Banner auf dem Dashboard, der beide Quellen schon immer zusammenzählte. Beide Listen laufen jetzt unter einer gemeinsamen Überschrift mit der korrekten Gesamtzahl.
