@@ -1889,6 +1889,20 @@ def read_grid_power_kw(config):
         return None
 
 
+def read_pv_power_kw(config):
+    "Aktuell am Wechselrichter gemessene PV-Erzeugung in kW - None, wenn kein Sensor zugeordnet oder nicht lesbar. Deckelt PV-Ueberschussladen (Fallback) auf das, was PHYSIKALISCH ueberhaupt an Leistung zur Verfuegung steht: die Ladeleistung kann nie hoeher sein als die aktuell erzeugte PV-Leistung, unabhaengig davon, was die additive Erhoehungslogik anhand des Netz-Sensors sonst berechnen wuerde."
+    return _read_mapped_numeric(config, "photovoltaic_powerflow_pv")
+
+
+def _pv_surplus_target_ceiling_kw(config):
+    "Obergrenze fuer die PV-Ueberschussladen-Zielleistung: die Wallbox selbst kann nie mehr abnehmen als compute_wallbox_max_kw, UND die Ladeleistung kann - unabhaengig von einem evtl. vorhandenen Heimspeicher - physikalisch nie hoeher sein als die aktuell am Wechselrichter gemessene PV-Leistung (falls ein PV-Sensor zugeordnet ist). Ohne PV-Sensor bleibt nur die Wallbox-Grenze wirksam."
+    ceiling = compute_wallbox_max_kw(config)
+    pv_kw = read_pv_power_kw(config)
+    if pv_kw is not None:
+        ceiling = min(ceiling, pv_kw)
+    return ceiling
+
+
 def read_home_battery_soc(config):
     "Aktueller Heimspeicher-SOC in %, oder None, wenn kein Sensor zugeordnet, unavailable/unknown, oder nicht lesbar - das ist gleichzeitig das Signal 'kein Heimspeicher im System' fuer den Fallback ohne Batterie."
     entity_id = config.get("sensorMappings", {}).get("battery_state_of_charge", "")
@@ -2543,11 +2557,12 @@ def _run_pv_surplus_charging_tick_impl():
             else:
                 decrease = max(target_kw * PV_SURPLUS_NO_BATTERY_DECREASE_RATIO, PV_SURPLUS_NO_BATTERY_MIN_DECREASE_KW)
                 new_target = target_kw - decrease
-        # obere Grenze aus den Wallbox-Eckdaten (siehe compute_wallbox_max_kw) - ohne dieses Cap
-        # kann der additive Zweig oben (grid_kw <= Schwelle: "immer draufaddieren, solange
+        # obere Grenze aus den Wallbox-Eckdaten (siehe compute_wallbox_max_kw) UND der aktuell am
+        # Wechselrichter gemessenen PV-Leistung (siehe _pv_surplus_target_ceiling_kw) - ohne dieses
+        # Cap kann der additive Zweig oben (grid_kw <= Schwelle: "immer draufaddieren, solange
         # eingespeist wird") unbegrenzt weiter wachsen, weit ueber das hinaus, was die Wallbox
-        # ueberhaupt zulaesst.
-        new_target = max(PV_SURPLUS_MIN_KW, min(compute_wallbox_max_kw(config), new_target))
+        # ueberhaupt zulaesst bzw. was PV ueberhaupt hergibt.
+        new_target = max(PV_SURPLUS_MIN_KW, min(_pv_surplus_target_ceiling_kw(config), new_target))
 
         session["has_battery"] = has_battery
         try:
@@ -2589,7 +2604,7 @@ def _run_pv_surplus_charging_tick_impl():
         if grid_kw > start_threshold:
             return
 
-        target_kw = max(PV_SURPLUS_MIN_KW, min(compute_wallbox_max_kw(config), abs(grid_kw)))
+        target_kw = max(PV_SURPLUS_MIN_KW, min(_pv_surplus_target_ceiling_kw(config), abs(grid_kw)))
         try:
             execute_car_charge_start(target_kw)
         except Exception as e:

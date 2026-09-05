@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.0.44.99
+
+* **PV-Überschussladen (Fallback): Ladeleistung auf die tatsächlich am Wechselrichter gemessene PV-Leistung gedeckelt.** Bisher richtete sich das Ziel beim Starten und beim Erhöhen ausschließlich nach dem Netz-Sensor - physikalisch kann die Ladeleistung aber nie höher liegen als die aktuell erzeugte PV-Leistung. Ist ein PV-Erzeugungssensor zugeordnet, gilt diese Grenze jetzt zusätzlich zur Wallbox-Obergrenze (die jeweils engere gewinnt); ohne zugeordneten Sensor bleibt das Verhalten unverändert.
+
 ## 0.0.44.98
 
 * **PV-Überschussladen-Regelung: Sperrfrist zwischen automatischen Ziel-Anpassungen von 5 auf 2 Minuten verkürzt.** Zusätzlich gilt jetzt: eine automatische Erhöhung wird nur noch angewendet, wenn sich der Netz-Sensor seit der letzten Erhöhung tatsächlich spürbar verändert hat (mind. 0,1 kW) - reine verstrichene Zeit ohne echte neue Messung reicht nicht mehr aus. Verhindert, dass mehrere schnell aufeinanderfolgende Ticks noch auf derselben (von Wallbox/Auto noch gar nicht umgesetzten) Messung aufbauen. Der Absenk-Zweig ist davon bewusst ausgenommen, da er durch Prozentsatz und feste Untergrenze bereits selbstbegrenzend ist.
