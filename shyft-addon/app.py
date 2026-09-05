@@ -53,6 +53,10 @@ DASHBOARD_CACHE_PATH = "/data/dashboard_cache.json"
 PV_FORECAST_SNAPSHOT_PATH = "/data/pv_forecast_snapshot.json"
 CAR_PRESENCE_LOG_PATH = "/data/car_presence_log.json"
 CAR_PRESENCE_LOG_MAX_DAYS = 180
+# Ab so vielen historischen FAHRTAGEN gilt die EV-Verbrauchsprognose als belastbar (consumption_basis
+# "ok" -> Dashboard entfernt Hinweis + ~-Markierung). Darunter: "learning" (1..2 Fahrtage) bzw.
+# "default" (0). NICHT mehr die Mindest-Sample-Zahl je (Wochentag, Stunde)-Bucket - dort genuegt
+# jetzt eine einzige Beobachtung (siehe compute_car_presence_forecast).
 CAR_PRESENCE_MIN_SAMPLES = 3
 # Fallback-Prior fuer transition_rate(), wenn fuer (Wochentag, Stunde, aktueller Zustand) noch nicht
 # genug Beobachtungen vorliegen (siehe CAR_PRESENCE_MIN_SAMPLES) - siehe Nutzer-Vorgabe: ohne
@@ -1174,29 +1178,71 @@ def compute_hours_away(by_hour, current_connected, now_hour):
     return hours
 
 
-# Cold-Start-Defaults, bevor genug eigene Fahrhistorie existiert - bewusst konservativ (die
-# meisten abwesenden Stunden sind Standzeit anderswo, nicht aktives Fahren) statt eine Zahl ohne
-# Datengrundlage vorzutäuschen.
+# Recency-Gewichtung fuer alle aus dem Anwesenheits-Log gelernten Groessen: eine Beobachtung, die
+# CAR_PRESENCE_RECENCY_HALF_LIFE_DAYS alt ist, zaehlt halb so viel wie eine von jetzt (danach
+# exponentiell weiter abnehmend). Aeltere Fahrgewohnheiten (Jahreszeit, Jobwechsel, ...) verlieren
+# so von selbst an Gewicht, ohne hart abgeschnitten zu werden.
+CAR_PRESENCE_RECENCY_HALF_LIFE_DAYS = 30
+
+# Cold-Start-Fahrprofil, solange ueberhaupt kein eigener Fahrtag vorliegt (n_driving_days == 0 - z.B.
+# Auto gerade erst eingerichtet, oder Akkukapazitaet fehlt, ohne die sich SOC-Rueckgaenge nicht in
+# kWh umrechnen lassen). Tagesfahrleistung aus carAvgDailyDistanceKm (Config, sonst
+# EV_DEFAULT_DAILY_KM), km->kWh ueber carConsumptionKwhPer100km (Config, sonst
+# EV_DEFAULT_KWH_PER_100KM). Verteilung: an Werktagen je zur Haelfte auf 7-8 und 17-18 Uhr, am
+# Wochenende gleichmaessig auf 15-18 Uhr. Sobald echte Fahrtage vorliegen, wird dieses Profil nicht
+# mehr genutzt - dann zaehlt der recency-gewichtete historische Tagesdurchschnitt je Gruppe
+# {Werktag, Wochenende}.
 CAR_DRIVING_FRACTION_DEFAULT = 0.15
-CAR_CONSUMPTION_DEFAULT_KWH = 0.0
+EV_DEFAULT_DAILY_KM = 50
+EV_DEFAULT_KWH_PER_100KM = 18
+EV_DEFAULT_WEEKDAY_BLOCK_HOURS = [7, 17]
+EV_DEFAULT_WEEKEND_BLOCK_HOURS = [15, 16, 17]
+
+# Ab dieser Abwesenheits-Wahrscheinlichkeit (1 - P(eingesteckt)) zaehlt eine Stunde als
+# prognostizierte Fahrt: der Verbrauch des Tages wird nur auf solche Stunden verteilt, und
+# ev_usage_h (siehe build_ev_optimizer_fields) enthaelt genau sie.
+EV_AWAY_THRESHOLD = 0.5
+
+
+def _recency_weight(sample_dt, now):
+    "Exponentieller Abfall nach Alter - siehe CAR_PRESENCE_RECENCY_HALF_LIFE_DAYS."
+    age_days = max(0.0, (now - sample_dt).total_seconds() / 86400.0)
+    return 0.5 ** (age_days / CAR_PRESENCE_RECENCY_HALF_LIFE_DAYS)
+
+
+def _recency_weighted_mean(samples, now):
+    "samples: Liste von (datetime, zahl). Recency-gewichteter Mittelwert, oder None wenn leer. Bei genau einer Beobachtung ist diese die alleinige Grundlage (das Gewicht kuerzt sich weg)."
+    total_w = 0.0
+    acc = 0.0
+    for ts, value in samples:
+        w = _recency_weight(ts, now)
+        total_w += w
+        acc += w * value
+    return (acc / total_w) if total_w > 0 else None
 
 
 def compute_car_presence_forecast(hours=48):
-    """Builds an hours-ahead (default 48h), hourly Anwesenheits- UND Fahrverhalten-/Verbrauchsprognose aus
-    CAR_PRESENCE_LOG_PATH. Der eingesteckt/abwesend-Teil ist eine time-inhomogene Markov-Kette
-    (Wochentag, Stunde, aktueller Zustand), forward-simuliert ab dem live beobachteten Zustand -
-    unverändert gegenüber der ursprünglichen Anwesenheitsprognose. Zusätzlich wird jede als
-    "abwesend" geloggte Stunde (siehe _classify_away_state_and_consumption) in "steht" vs.
-    "unterwegs" aufgeteilt: die abwesend-Wahrscheinlichkeit einer Stunde wird mit dem historischen
-    Anteil "unterwegs" an diesem (Wochentag, Stunde)-Bucket multipliziert (reine Randverteilung,
-    kein eigenes Markov-Modell - "innerhalb der bestehenden Pipeline", nicht komplexer als nötig),
-    und die erwarteten kWh sind diese Wahrscheinlichkeit mal der historisch durchschnittliche
-    Verbrauch in diesem Bucket. Ein Bucket mit zu wenigen historischen Beobachtungen fällt auf eine
-    gröbere Ebene zurück statt eine unsichere Zahl vorzutäuschen - für die Verbrauchsprognose
-    speziell NICHT auf einen flachen globalen Pro-Stunde-Durchschnitt (der sich über mehrere
-    Fahrstunden am selben Tag unkontrolliert aufaddieren kann), sondern auf den historischen
-    Tagesdurchschnitt, verteilt proportional zur eigenen driving-Wahrscheinlichkeit auf die
-    betroffenen Stunden desselben Kalendertags (siehe overall_daily_avg_consumption_kwh unten)."""
+    """hours-ahead (default 48h) stuendliche Anwesenheits- und EV-Verbrauchsprognose aus
+    CAR_PRESENCE_LOG_PATH, in zwei getrennten Stufen:
+
+    1. Anwesenheit: time-inhomogene Markov-Kette (Wochentag, Stunde, aktueller Zustand), forward-
+       simuliert ab dem live beobachteten Zustand. Alle gelernten Raten sind recency-gewichtet
+       (siehe _recency_weight); schon EINE Beobachtung fuer einen (Wochentag, Stunde)-Bucket
+       genuegt, um sie statt des groben Fallbacks zu nutzen - der Fallback greift nur bei GAR
+       keiner Beobachtung.
+    2. EV-Verbrauch: NICHT als P(fahren)*Ø-Verbrauch pro Stunde verschmiert. Stattdessen wird je
+       Kalendertag eine Tagesfahrleistung E_day bestimmt - recency-gewichteter historischer
+       Tagesdurchschnitt (kWh) je Gruppe {Werktag, Wochenende}, inkl. fahrtloser Tage als 0 - und
+       VOLLSTAENDIG auf die fuer diesen Tag prognostizierten Abwesenheitsstunden verteilt
+       (P(abwesend) > EV_AWAY_THRESHOLD), gewichtet nach P(abwesend). Damit gilt per Konstruktion:
+       Summe(consumption_kwh_forecast ueber den Tag) == E_day, und ein Wert > 0 steht genau in den
+       Abwesenheitsstunden - deckungsgleich mit ev_usage_h (siehe build_ev_optimizer_fields). Ohne
+       jeden Fahrtag greift ein festes Default-Profil (EV_DEFAULT_*).
+
+    Rueckgabe zusaetzlich consumption_basis: "default" (kein Fahrtag -> Default-Profil), "learning"
+    (1..CAR_PRESENCE_MIN_SAMPLES-1 Fahrtage) oder "ok" (>= CAR_PRESENCE_MIN_SAMPLES Fahrtage) -
+    steuert Hinweistext und ~-Markierung im Dashboard.
+    """
     try:
         with open(CAR_PRESENCE_LOG_PATH, "r") as f:
             log = json.load(f)
@@ -1211,103 +1257,81 @@ def compute_car_presence_forecast(hours=48):
             continue
     entries.sort(key=lambda e: e[0])
     by_hour = {ts: connected for ts, connected, _ in entries}
+    now = datetime.now(timezone.utc)
 
-    transitions_by_state = {}  # (weekday, hour, from_connected) -> [outcomes]
-    marginal = {}              # (weekday, hour) -> [outcomes]
-    overall = []
-    away_state_counts = {}     # (weekday, hour) -> {"steht": n, "unterwegs": n}
-    consumption_samples = {}   # (weekday, hour) -> [kWh, nur "unterwegs"]
-    overall_away_states = []   # alle "steht"/"unterwegs"-Labels, fuer den globalen Fallback-Anteil
-    overall_consumption = []   # alle kWh-Werte "unterwegs", fuer den globalen Fallback-Durchschnitt
-    daily_consumption_totals = {}  # lokales Kalenderdatum -> Summe kWh "unterwegs" (0 fuer Tage ohne Fahrt)
+    transitions_by_state = {}    # (weekday, hour, from_connected) -> [(ts, 1.0 wenn Folgestunde eingesteckt)]
+    marginal = {}               # (weekday, hour) -> [(ts, 1.0 wenn eingesteckt)]
+    overall = []                # roh/ungewichtet - nur fuer den Stationaer-Prior im transition-Fallback
+    away_driving_by_bucket = {}  # (weekday, hour) -> [(ts, 1.0 wenn "unterwegs", 0.0 wenn "steht")]
+    daily_total_kwh = {}         # lokales Kalenderdatum -> Summe kWh "unterwegs" (0.0 fuer Tage ohne Fahrt)
 
     for ts, connected, item in entries:
-        overall.append(connected)
-        marginal.setdefault((ts.weekday(), ts.hour), []).append(connected)
+        overall.append(1.0 if connected else 0.0)
+        marginal.setdefault((ts.weekday(), ts.hour), []).append((ts, 1.0 if connected else 0.0))
         next_ts = ts + timedelta(hours=1)
         if next_ts in by_hour:
-            transitions_by_state.setdefault((ts.weekday(), ts.hour, connected), []).append(by_hour[next_ts])
+            transitions_by_state.setdefault((ts.weekday(), ts.hour, connected), []).append(
+                (ts, 1.0 if by_hour[next_ts] else 0.0))
 
-        daily_consumption_totals.setdefault(ts.astimezone().date(), 0.0)
+        local_date = ts.astimezone().date()
+        daily_total_kwh.setdefault(local_date, 0.0)
 
         away_state = item.get("state")
         if not connected and away_state in ("steht", "unterwegs"):
-            bucket = away_state_counts.setdefault((ts.weekday(), ts.hour), {"steht": 0, "unterwegs": 0})
-            bucket[away_state] += 1
-            overall_away_states.append(away_state)
+            away_driving_by_bucket.setdefault((ts.weekday(), ts.hour), []).append(
+                (ts, 1.0 if away_state == "unterwegs" else 0.0))
             consumption_kwh = item.get("consumption_kwh")
             if away_state == "unterwegs" and consumption_kwh is not None:
-                consumption_samples.setdefault((ts.weekday(), ts.hour), []).append(consumption_kwh)
-                overall_consumption.append(consumption_kwh)
-                daily_consumption_totals[ts.astimezone().date()] += consumption_kwh
+                daily_total_kwh[local_date] += consumption_kwh
 
     overall_rate = (sum(overall) / len(overall)) if overall else 0.5
-    overall_driving_fraction = (
-        overall_away_states.count("unterwegs") / len(overall_away_states)
-        if overall_away_states else CAR_DRIVING_FRACTION_DEFAULT
-    )
-    overall_avg_consumption = (
-        sum(overall_consumption) / len(overall_consumption)
-        if overall_consumption else CAR_CONSUMPTION_DEFAULT_KWH
-    )
-    # Durchschnittliche taegliche Fahrleistung (kWh) UEBER ALLE geloggten Kalendertage, nicht nur
-    # die mit tatsaechlicher Fahrt (ein fahrtloser Tag zaehlt als 0, siehe daily_consumption_totals
-    # oben) - Ankerwert fuer die Fallback-Normalisierung unten (siehe Nutzer-Vorgabe: die
-    # Prognosesumme eines Tages soll dieser historischen Tagesleistung entsprechen, statt einen
-    # unter Umstaenden verrauschten Pro-Stunde-Durchschnitt ueber mehrere Stunden hinweg zu
-    # summieren, was sich schnell zu einem Vielfachen der realen Tagesleistung aufaddieren kann).
-    overall_daily_avg_consumption_kwh = (
-        sum(daily_consumption_totals.values()) / len(daily_consumption_totals)
-        if daily_consumption_totals else None
-    )
 
-    # Jede *_rate/*_fraction-Funktion gibt zusaetzlich zurueck, ob sie auf die groebere
-    # Fallback-Ebene ausweichen musste (zu wenige Beobachtungen fuer diesen konkreten
-    # (Wochentag, Stunde)-Bucket) - das speist low_data_basis unten, damit der Nutzer im Dashboard
-    # sieht, welche Stunden noch auf einer duennen Datenbasis stehen, statt eine vermeintlich
-    # praezise Zahl ohne Kontext zu zeigen.
-    def marginal_rate(weekday, hour):
-        samples = marginal.get((weekday, hour), [])
-        if len(samples) >= CAR_PRESENCE_MIN_SAMPLES:
-            return sum(samples) / len(samples), False
-        return overall_rate, True
-
-    def transition_rate(weekday, hour, from_connected):
-        samples = transitions_by_state.get((weekday, hour, from_connected), [])
-        if len(samples) >= CAR_PRESENCE_MIN_SAMPLES:
-            return sum(samples) / len(samples), False
-        # Fallback-Prior: EIN fester Wert fuer beide Richtungen (0.9 bleibt eingesteckt / 0.1 kehrt
-        # zurueck) haette den Markov-Prozess langfristig IMMER Richtung 50/50 konvergieren lassen,
-        # unabhaengig davon, wie oft das Auto historisch tatsaechlich eingesteckt war - fuer ein Auto
-        # mit z.B. 95% historischer Einsteck-Quote (Nutzer-Vorgabe: geringe Fahrleistung -> soll
-        # ueberwiegend als eingesteckt gelten) waere die Prognose nach ein paar Stunden faelschlich
-        # Richtung 50% abgesackt. p_hh/p_ah sind stattdessen so gewaehlt, dass die STATIONAERE
-        # Verteilung dieser Markov-Kette (p_ah / (p_ah + (1 - p_hh))) exakt overall_rate ergibt -
-        # kurzfristig bleibt ueber CAR_PRESENCE_PERSISTENCE_FALLBACK weiterhin eine starke "Zustand
-        # bleibt bestehen"-Tendenz erhalten, langfristig naehert sich die Prognose aber dem
-        # tatsaechlichen historischen Anteil an statt einem willkuerlichen Mittelpunkt.
-        p_hh = max(CAR_PRESENCE_PERSISTENCE_FALLBACK, overall_rate)
-        if overall_rate >= 1.0:
-            p_ah = 1.0
-        else:
-            p_ah = overall_rate * (1 - p_hh) / (1 - overall_rate)
-        fallback = p_hh if from_connected else p_ah
-        return min(1.0, fallback), True
-
-    def driving_fraction(weekday, hour):
-        counts = away_state_counts.get((weekday, hour))
-        total = (counts["steht"] + counts["unterwegs"]) if counts else 0
-        if not counts or total < CAR_PRESENCE_MIN_SAMPLES:
-            return overall_driving_fraction, True
-        return counts["unterwegs"] / total, False
-
-    def expected_consumption_when_driving(weekday, hour):
-        samples = consumption_samples.get((weekday, hour), [])
-        if len(samples) < CAR_PRESENCE_MIN_SAMPLES:
-            return overall_avg_consumption, True
-        return sum(samples) / len(samples), False
+    # E_day je Gruppe {Werktag, Wochenende}: recency-gewichteter Tagesdurchschnitt inkl. der 0-Tage.
+    daily_totals_by_group = {"weekday": [], "weekend": []}
+    for local_date, total in daily_total_kwh.items():
+        group = "weekend" if local_date.weekday() >= 5 else "weekday"
+        day_dt = datetime(local_date.year, local_date.month, local_date.day, 12, tzinfo=timezone.utc)
+        daily_totals_by_group[group].append((day_dt, total))
+    n_driving_days = sum(1 for v in daily_total_kwh.values() if v > 0)
+    coldstart = n_driving_days == 0
 
     config = _read_current_config()
+    default_km = config.get("carAvgDailyDistanceKm") or EV_DEFAULT_DAILY_KM
+    default_kwh_per_100 = config.get("carConsumptionKwhPer100km") or EV_DEFAULT_KWH_PER_100KM
+    default_e_day = max(0.0, float(default_km) * float(default_kwh_per_100) / 100.0)
+
+    if coldstart:
+        consumption_basis = "default"
+    elif n_driving_days < CAR_PRESENCE_MIN_SAMPLES:
+        consumption_basis = "learning"
+    else:
+        consumption_basis = "ok"
+
+    def e_day_for_group(group):
+        if coldstart:
+            return default_e_day
+        m = _recency_weighted_mean(daily_totals_by_group.get(group, []), now)
+        return m if m is not None else default_e_day
+
+    def marginal_rate(weekday, hour):
+        m = _recency_weighted_mean(marginal.get((weekday, hour), []), now)
+        return (m, False) if m is not None else (overall_rate, True)
+
+    def transition_rate(weekday, hour, from_connected):
+        m = _recency_weighted_mean(transitions_by_state.get((weekday, hour, from_connected), []), now)
+        if m is not None:
+            return m, False
+        # Stationaer-Prior (unveraendert): p_hh/p_ah so gewaehlt, dass die stationaere Verteilung der
+        # Markov-Kette exakt overall_rate ergibt - kurzfristig starke Persistenz ("Zustand bleibt"),
+        # langfristig Rueckkehr zur historischen Einsteck-Quote statt zu einem willkuerlichen 50/50.
+        p_hh = max(CAR_PRESENCE_PERSISTENCE_FALLBACK, overall_rate)
+        p_ah = 1.0 if overall_rate >= 1.0 else overall_rate * (1 - p_hh) / (1 - overall_rate)
+        return min(1.0, p_hh if from_connected else p_ah), True
+
+    def driving_fraction(weekday, hour):
+        m = _recency_weighted_mean(away_driving_by_bucket.get((weekday, hour), []), now)
+        return m if m is not None else CAR_DRIVING_FRACTION_DEFAULT
+
     sensor_mappings = config.get("sensorMappings", {})
 
     entity_id = sensor_mappings.get("wallbox_plugged", "")
@@ -1332,74 +1356,64 @@ def compute_car_presence_forecast(hours=48):
     hours_away_now = compute_hours_away(by_hour, current_connected, start)
 
     probabilities = []
-    low_data_basis = []
     if current_connected is None:
-        p, fb0 = marginal_rate(start.weekday(), start.hour)
+        p, _ = marginal_rate(start.weekday(), start.hour)
     else:
-        p, fb0 = (1.0 if current_connected else 0.0), False
+        p = 1.0 if current_connected else 0.0
     probabilities.append(p)
-    low_data_basis.append(fb0)
     for i in range(1, hours):
         source_ts = start + timedelta(hours=i - 1)
-        p_home_given_home, fb_home = transition_rate(source_ts.weekday(), source_ts.hour, True)
-        p_home_given_away, fb_away = transition_rate(source_ts.weekday(), source_ts.hour, False)
+        p_home_given_home, _ = transition_rate(source_ts.weekday(), source_ts.hour, True)
+        p_home_given_away, _ = transition_rate(source_ts.weekday(), source_ts.hour, False)
         p_home_given_away *= soc_factor
         if hours_away_now > 0:
             p_home_given_away = min(p_home_given_away, away_return_ceiling(hours_away_now + i))
         p_home_given_away = min(1.0, p_home_given_away)
         p = p * p_home_given_home + (1 - p) * p_home_given_away
         probabilities.append(p)
-        low_data_basis.append(fb_home or fb_away)
 
+    p_away_list = [1.0 - p for p in probabilities]
+
+    # 3-Zustands-Aufteilung NUR fuer die Chart-Anzeige (eingesteckt / steht / unterwegs) - fliesst
+    # nicht mehr in den Verbrauch ein (Vampire/Standzeit-Verbrauch wird bewusst vernachlaessigt).
     standing_probabilities = []
     driving_probabilities = []
-    consumption_kwh_forecast = []
-    consumption_is_fallback = []
     for i in range(hours):
         ts_i = start + timedelta(hours=i)
-        p_away = 1 - probabilities[i]
-        frac_driving, fb_driving = driving_fraction(ts_i.weekday(), ts_i.hour)
-        p_driving = p_away * frac_driving
-        p_standing = p_away * (1 - frac_driving)
-        standing_probabilities.append(p_standing)
-        driving_probabilities.append(p_driving)
-        avg_consumption, fb_consumption = expected_consumption_when_driving(ts_i.weekday(), ts_i.hour)
-        consumption_kwh_forecast.append(p_driving * avg_consumption)
-        consumption_is_fallback.append(fb_consumption)
-        low_data_basis[i] = low_data_basis[i] or fb_driving or fb_consumption
+        frac_driving = driving_fraction(ts_i.weekday(), ts_i.hour)
+        driving_probabilities.append(p_away_list[i] * frac_driving)
+        standing_probabilities.append(p_away_list[i] * (1.0 - frac_driving))
 
-    # Fallback-Normalisierung (Nutzer-Vorgabe): Stunden ohne eigene, gut abgesicherte
-    # (Wochentag, Stunde)-Verbrauchsstatistik (consumption_is_fallback) bekommen keinen flachen
-    # globalen Pro-Stunde-Durchschnitt mehr, der sich ueber mehrere Fahrstunden am selben Tag
-    # unkontrolliert aufaddieren kann - stattdessen wird je Kalendertag der historische
-    # Tagesdurchschnitt (overall_daily_avg_consumption_kwh) proportional zur eigenen
-    # driving-Wahrscheinlichkeit auf genau diese Fallback-Stunden verteilt. Bereits gut abgesicherte
-    # Stunden (nicht fallback) behalten ihren eigenen Wert unveraendert; der Tagesdurchschnitt wird
-    # nur auf den REST verteilt (Tagesdurchschnitt minus deren Summe), damit die Tagessumme in
-    # Summe weiterhin der historischen Tagesleistung entspricht.
-    if overall_daily_avg_consumption_kwh is not None:
-        day_hour_indices = {}
-        for i in range(hours):
-            day_key = (start + timedelta(hours=i)).astimezone().date()
-            day_hour_indices.setdefault(day_key, []).append(i)
-        for indices in day_hour_indices.values():
-            fallback_indices = [i for i in indices if consumption_is_fallback[i]]
-            if not fallback_indices:
-                continue
-            confident_sum = sum(consumption_kwh_forecast[i] for i in indices if not consumption_is_fallback[i])
-            remainder = max(0.0, overall_daily_avg_consumption_kwh - confident_sum)
-            weight_sum = sum(driving_probabilities[i] for i in fallback_indices)
-            if weight_sum <= 0:
-                continue
-            for i in fallback_indices:
-                consumption_kwh_forecast[i] = remainder * (driving_probabilities[i] / weight_sum)
+    # E_day je Kalendertag VOLLSTAENDIG auf dessen prognostizierte Abwesenheitsstunden verteilen
+    # (bzw. im Cold-Start auf die festen Default-Bloecke der Gruppe).
+    consumption_kwh_forecast = [0.0] * hours
+    day_indices = {}
+    for i in range(hours):
+        day_indices.setdefault((start + timedelta(hours=i)).astimezone().date(), []).append(i)
 
-    return labels, probabilities, standing_probabilities, driving_probabilities, consumption_kwh_forecast, low_data_basis
+    for local_date, idxs in day_indices.items():
+        group = "weekend" if local_date.weekday() >= 5 else "weekday"
+        e_day = e_day_for_group(group)
+        if e_day <= 0:
+            continue
+        if coldstart:
+            block_hours = EV_DEFAULT_WEEKEND_BLOCK_HOURS if group == "weekend" else EV_DEFAULT_WEEKDAY_BLOCK_HOURS
+            target_idxs = [i for i in idxs if (start + timedelta(hours=i)).astimezone().hour in block_hours]
+            weights = [1.0] * len(target_idxs)
+        else:
+            target_idxs = [i for i in idxs if p_away_list[i] > EV_AWAY_THRESHOLD]
+            weights = [p_away_list[i] for i in target_idxs]
+        if not target_idxs:
+            # kein Abwesenheitsblock im Horizont fuer diesen Tag -> auf die "am ehesten abwesende" Stunde
+            target_idxs = [max(idxs, key=lambda i: p_away_list[i])]
+            weights = [1.0]
+        wsum = sum(weights) or 1.0
+        for i, w in zip(target_idxs, weights):
+            consumption_kwh_forecast[i] = e_day * w / wsum
 
+    low_data_basis = [consumption_basis != "ok"] * hours
 
-# Away-probability (1 - P(connected)) from which an hour counts as "car not at the wallbox" for
-# ev_usage_h - see build_ev_optimizer_fields.
-EV_AWAY_THRESHOLD = 0.5
+    return labels, probabilities, standing_probabilities, driving_probabilities, consumption_kwh_forecast, low_data_basis, consumption_basis
 
 
 def build_ev_optimizer_fields(config, optimizer_period=48):
@@ -1412,11 +1426,14 @@ def build_ev_optimizer_fields(config, optimizer_period=48):
     from optimization, same as before.
 
     Otherwise returns:
-      - "ev_usage_h": compact ";"-joined list of 1-based hour indices where the car is more
-        likely away than connected (>= EV_AWAY_THRESHOLD), mirroring EVDemandList.getValue(lineNumber)'s
-        packed-index format - NOT a per-hour-aligned vector.
-      - "d_ev_kwh": ";"-joined per-hour expected consumption (kWh), one value per hour, dense
-        (every hour has a value, mostly close to zero) - mirrors EVDemandList.getValue(datetime).
+      - "ev_usage_h": compact ";"-joined list of 1-based hour indices where the car is predicted
+        to be away (= exactly the hours where d_ev_kwh has a value > 0), mirroring
+        EVDemandList.getValue(lineNumber) in the original shyft, where ev_usage_h was literally
+        "the lines with demandInKwh > 0". compute_car_presence_forecast allocates the whole daily
+        driving energy onto those hours, so the two vectors are consistent by construction.
+      - "d_ev_kwh": ";"-joined per-hour expected consumption (kWh), one value per hour, exactly 0
+        outside predicted trips; the per-day sum equals E_day. 1:1 dieselben Werte wie
+        consumptionKwh im Dashboard (/dashboard/car-presence-forecast).
       - "baseTime": ISO timestamp of the first hour (hour 1), so Java can re-align if processing
         slips into the next full hour before this reaches the optimizer.
 
@@ -1424,24 +1441,23 @@ def build_ev_optimizer_fields(config, optimizer_period=48):
     Periods Site" in staticConfig, default 48). We compute one extra hour (optimizer_period + 1)
     as a buffer for that same clock-drift reason.
 
-    If nothing crosses EV_AWAY_THRESHOLD within optimizer_period, Julia would otherwise treat this
-    as "no EV" (isempty(ev_usage_h)) and disable charging entirely even though a car IS configured
-    - see the isempty(ev_usage_h) bypass in run_SHEMS.jl. To avoid that false negative, we force in
-    the single most-likely-away hour (within optimizer_period, not the buffer hour) when the
-    threshold catches nothing.
+    If d_ev_kwh is all zero within optimizer_period (e.g. history shows a car that never drives),
+    Julia would treat this as "no EV" (isempty(ev_usage_h)) and disable charging entirely even
+    though a car IS configured - see the isempty(ev_usage_h) bypass in run_SHEMS.jl. To avoid that
+    false negative, we force in the single most-likely-away hour (within optimizer_period) then.
     """
     has_ev = bool(config.get("integrationMappings", {}).get("auto"))
     if not has_ev:
         return {}
 
     hours = optimizer_period + 1
-    labels, probabilities, _, _, consumption_kwh_forecast, _ = compute_car_presence_forecast(hours=hours)
+    labels, probabilities, _, _, consumption_kwh_forecast, _, _ = compute_car_presence_forecast(hours=hours)
 
-    away_probabilities = [1 - p for p in probabilities]
-    usage_hours_zero_based = [i for i in range(hours) if away_probabilities[i] >= EV_AWAY_THRESHOLD]
+    usage_hours_zero_based = [i for i in range(hours) if consumption_kwh_forecast[i] > 0]
 
     # Fallback only looks within optimizer_period (not the buffer hour) - see docstring.
     if not any(i < optimizer_period for i in usage_hours_zero_based):
+        away_probabilities = [1 - p for p in probabilities]
         most_likely_away = max(range(optimizer_period), key=lambda i: away_probabilities[i])
         usage_hours_zero_based.append(most_likely_away)
         usage_hours_zero_based.sort()
@@ -1516,7 +1532,7 @@ def build_hot_water_optimizer_fields(config, optimizer_period=48):
 
 @app.route("/dashboard/car-presence-forecast", methods=["GET"])
 def carPresenceForecast():
-    labels, probabilities, standing_probabilities, driving_probabilities, consumption_kwh_forecast, low_data_basis = compute_car_presence_forecast()
+    labels, probabilities, standing_probabilities, driving_probabilities, consumption_kwh_forecast, low_data_basis, consumption_basis = compute_car_presence_forecast()
     return jsonify({
         "status": "success",
         "labels": labels,
@@ -1524,6 +1540,7 @@ def carPresenceForecast():
         "standingProbabilities": [round(p, 3) for p in standing_probabilities],
         "drivingProbabilities": [round(p, 3) for p in driving_probabilities],
         "consumptionKwh": [round(v, 3) for v in consumption_kwh_forecast],
+        "consumptionBasis": consumption_basis,
         "lowDataBasis": low_data_basis,
     })
 

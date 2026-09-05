@@ -1119,14 +1119,31 @@
             0%, 100% { opacity: 1; }
             50% { opacity: 0.45; }
         }
+        /* Kein negativer margin-top: der zog das <details> frueher in den unteren Rand des
+           Chart-SVGs hinein. Weil .dashboardChartContainer position:relative ist (fuer den
+           absolut positionierten Tooltip), zeichnet das SVG dort ueber dem <summary> - dadurch
+           ueberlappte der Text die X-Achsen-Beschriftung UND die Klicks landeten im SVG statt
+           auf dem Aufklapp-Element. */
+        /* Kein negativer margin-top: der zog das <details> frueher in den unteren Rand des
+           Chart-SVGs. Weil .dashboardChartContainer position:relative ist (fuer den absolut
+           positionierten Tooltip), zeichnete das SVG dort ueber dem <summary> - Text ueberlappte
+           die X-Achse UND Klicks landeten im SVG statt auf dem Aufklapp-Element. */
         .dashboardConsumptionForecast {
-            margin-top: -1.2em;
+            margin-top: 0.4em;
             margin-bottom: 2em;
         }
         .dashboardConsumptionForecast summary {
             font-size: 0.85em;
             color: var(--color-text-secondary);
             cursor: pointer;
+        }
+        /* Ruhiger Hinweis (kein Fehler-Rot), wenn die Verbrauchsprognose noch auf Standardprofil /
+           wenig Historie steht - siehe consumptionBasis in buildCarConsumptionForecastDetails. */
+        .dashboardConsumptionForecastNote {
+            font-size: 0.8em;
+            color: var(--color-text-secondary);
+            margin: 0.4em 0 0;
+            line-height: 1.4;
         }
         .dashboardConsumptionForecastList {
             font-size: 0.8em;

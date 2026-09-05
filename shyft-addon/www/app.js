@@ -559,6 +559,7 @@ async function saveConfigurationNow() {
         "wallboxConnectionStatusMapping": configData["wallboxConnectionStatusMapping"] || {},
         "carBatteryCapacityKwh": configData["carBatteryCapacityKwh"] ?? null,
         "carConsumptionKwhPer100km": configData["carConsumptionKwhPer100km"] ?? null,
+        "carAvgDailyDistanceKm": configData["carAvgDailyDistanceKm"] ?? 50,
         "wallboxMaxPhases": configData["wallboxMaxPhases"] ?? 3,
         "wallboxMaxCurrentAmps": configData["wallboxMaxCurrentAmps"] ?? 16,
         "batteryFlowSignOverride": configData["batteryFlowSignOverride"] ?? null,
@@ -1656,6 +1657,7 @@ function renderSectionBody(bodyDiv, section, entryIds) {
         if (section.key === 'auto') {
             bodyDiv.appendChild(buildCarBatteryCapacityField());
             bodyDiv.appendChild(buildCarConsumptionField());
+            bodyDiv.appendChild(buildCarAvgDailyDistanceField());
             bodyDiv.appendChild(buildEvSocNormalField());
             bodyDiv.appendChild(buildEvSocMaxPvSurplusField());
         }
@@ -2187,6 +2189,21 @@ function buildCarConsumptionField() {
         id: 'car_consumption_kwh_per_100km',
         configKey: 'carConsumptionKwhPer100km',
         placeholder: 'z.B. 18',
+    });
+}
+
+// Nur als Ausgangswert fuer die Verbrauchsprognose des Autos, solange noch keine eigene
+// Fahrhistorie (SOC-Verlauf) vorliegt - siehe compute_car_presence_forecast / EV_DEFAULT_DAILY_KM
+// in app.py. Sobald echte Fahrtage aufgezeichnet sind, wird dieser Wert nicht mehr verwendet.
+function buildCarAvgDailyDistanceField() {
+    return buildConfigNumberField({
+        label: 'Ø Fahrleistung (km/Tag)',
+        tooltip: 'Nur als Startwert, solange noch keine eigene Fahrhistorie vorliegt: geschätzte durchschnittliche tägliche Fahrleistung. Sobald genug Ladeverlauf deines Autos aufgezeichnet ist, lernt die Verbrauchsprognose daraus und dieser Wert wird nicht mehr genutzt.',
+        id: 'car_avg_daily_distance_km',
+        configKey: 'carAvgDailyDistanceKm',
+        placeholder: 'z.B. 50',
+        step: '1',
+        defaultValue: 50,
     });
 }
 
@@ -4720,24 +4737,30 @@ function mostLikelyPresenceState(entry) {
 // presenceForecast (optional, dieselbe {byLabel} Struktur wie beim Chart) faerbt jede Zeile nach
 // ihrem wahrscheinlichsten Zustand ein und nennt ihn explizit - vorher stand hier nur die kWh-Zahl
 // ohne erkennbaren Bezug zur Chart-Farbe.
-function buildCarConsumptionForecastDetails(labels, consumptionKwh, lowDataBasis, presenceForecast) {
+// consumptionBasis (siehe compute_car_presence_forecast in app.py): 'ok' -> belastbar, kein
+// Hinweis, keine ~-Markierung. 'learning' -> erst wenige Fahrtage Historie. 'default' -> noch gar
+// kein Fahrtag, Standard-Fahrprofil aktiv. Die kWh-Werte sind exakt die, die auch als d_ev_kwh in
+// die optimizer-input.csv gehen (build_ev_optimizer_fields).
+function buildCarConsumptionForecastDetails(labels, consumptionKwh, consumptionBasis, presenceForecast) {
     const details = document.createElement('details');
     details.className = 'dashboardConsumptionForecast';
     const summary = document.createElement('summary');
     summary.textContent = 'Verbrauchsprognose (48h) anzeigen';
     details.appendChild(summary);
-    const lowCount = (lowDataBasis || []).filter(Boolean).length;
-    if (lowCount > 0) {
+    const uncertain = consumptionBasis && consumptionBasis !== 'ok';
+    if (uncertain) {
         const note = document.createElement('p');
-        note.className = 'shyftActionsError';
-        note.textContent = `⚠ ${lowCount} von ${labels.length} Stunden (markiert mit ~) basieren auf wenig Datenbasis (Cold-Start oder wenig Historie) - Werte dort sind noch unsicher.`;
+        note.className = 'dashboardConsumptionForecastNote';
+        note.textContent = consumptionBasis === 'default'
+            ? 'Noch keine Fahrhistorie (bzw. Akkukapazität nicht gesetzt) – die Prognose nutzt vorerst ein Standard-Fahrprofil und lernt in den nächsten Tagen aus dem tatsächlichen Ladeverlauf deines Autos dazu.'
+            : 'Die Verbrauchsprognose basiert erst auf wenigen Tagen Historie und wird in den nächsten Tagen genauer.';
         details.appendChild(note);
     }
     const list = document.createElement('div');
     list.className = 'dashboardConsumptionForecastList';
     labels.forEach((label, i) => {
         const timeText = new Date(label).toLocaleString('de-DE', {weekday: 'short', hour: '2-digit', minute: '2-digit'}).replace('.', '');
-        const marker = (lowDataBasis && lowDataBasis[i]) ? '~' : ' ';
+        const marker = uncertain ? '~' : '';
         const state = presenceForecast ? mostLikelyPresenceState(presenceForecast.byLabel[label]) : null;
         const row = document.createElement('div');
         row.className = 'dashboardConsumptionForecastRow';
@@ -4748,7 +4771,7 @@ function buildCarConsumptionForecastDetails(labels, consumptionKwh, lowDataBasis
             row.appendChild(dot);
         }
         const text = document.createElement('span');
-        text.textContent = `${marker}${timeText}: ${consumptionKwh[i].toFixed(2)} kWh` + (state ? ` (${state.label})` : '');
+        text.textContent = `${marker}${timeText}: ${consumptionKwh[i].toFixed(3)} kWh` + (state ? ` (${state.label})` : '');
         row.appendChild(text);
         list.appendChild(row);
     });
@@ -5842,7 +5865,7 @@ async function loadDashboard() {
                     };
                 });
                 presenceForecast = {byLabel};
-                consumptionForecast = {labels: presenceData.labels, consumptionKwh: presenceData.consumptionKwh, lowDataBasis: presenceData.lowDataBasis};
+                consumptionForecast = {labels: presenceData.labels, consumptionKwh: presenceData.consumptionKwh, consumptionBasis: presenceData.consumptionBasis};
             }
         } catch (err) {
             console.log(err);
@@ -5861,7 +5884,7 @@ async function loadDashboard() {
         });
         if (consumptionForecast) {
             ladestandAutoChart.appendChild(buildCarConsumptionForecastDetails(
-                consumptionForecast.labels, consumptionForecast.consumptionKwh, consumptionForecast.lowDataBasis, presenceForecast));
+                consumptionForecast.labels, consumptionForecast.consumptionKwh, consumptionForecast.consumptionBasis, presenceForecast));
         }
         updateOrAppendDashboardWidget(container, 'ladestandAuto', ladestandAutoChart);
     } catch (err) {

@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.0.45.1
+
+* **Verbrauchsprognose fürs Auto grundlegend überarbeitet – konsistent mit der Anwesenheitsprognose.** Bisher wurde der erwartete Tagesverbrauch als „P(fahren) × Ø-Verbrauch" über *alle* Stunden verschmiert (plus eine Nachkorrektur nur für datenarme Stunden). Dadurch konnte der prognostizierte Ladestand über Tage abrutschen, obwohl die Anwesenheitsprognose „überwiegend eingesteckt" zeigte. Jetzt zweistufig: (1) Anwesenheit prognostizieren, (2) die historische Tagesfahrleistung **vollständig auf die für den Tag prognostizierten Abwesenheitsstunden** verteilen. Die Tagessumme der Prognose entspricht damit per Konstruktion der historischen Tagesfahrleistung, und die stündlichen kWh-Werte finden sich **1:1** in der `d_ev_kwh`-Spalte der Optimierer-Eingabe wieder (`ev_usage_h` ist jetzt exakt die Stundenmenge mit Verbrauch > 0).
+* **Werktag und Wochenende werden getrennt gelernt** (eigener recency-gewichteter Tagesdurchschnitt je Gruppe). Vampire-/Standzeit-Verbrauch wird bewusst vernachlässigt – klein gegenüber echten Fahrten und macht die Prognose verständlicher.
+* **Recency-Gewichtung:** alle aus dem Anwesenheits-Log gelernten Größen (Markov-Raten, Fahranteil, Tagesfahrleistung) gewichten neuere Beobachtungen stärker – eine ~30 Tage alte Beobachtung zählt halb so viel wie eine aktuelle. Außerdem genügt jetzt **eine** Beobachtung für einen (Wochentag, Stunde)-Bucket, um sie statt des groben Fallbacks zu nutzen; der Fallback greift nur noch bei gar keiner Beobachtung.
+* **Neues Feld „Ø Fahrleistung (km/Tag)"** (Abschnitt Auto, Standard 50): Startwert für die Verbrauchsprognose, solange keine eigene Fahrhistorie vorliegt. Ohne Historie greift ein festes Default-Profil (an Werktagen je 25 km um 7–8 und 17–18 Uhr, am Wochenende 50 km um 15–18 Uhr, km→kWh über den Verbrauchswert). Ein Hinweis unter der Prognose weist darauf hin und verschwindet (samt der `~`-Markierungen) automatisch, sobald genug echte Fahrtage vorliegen.
+* **Fix: das „Verbrauchsprognose (48h)"-Aufklapp-Element überlappte die Chart-Beschriftung und ließ sich nicht anklicken** – ein negativer oberer Außenabstand zog es unter das darüberliegende Chart-SVG.
+
 ## 0.0.45.0
 
 * **"Zu den Einstellungen"-Link scrollt jetzt bis zum konkret betroffenen Sensor-/Steuerungsfeld**, nicht nur zur Geraetekachel - liegt das Feld bei einer langen Kachel nach dem gewohnten Scrollen zur Kachel immer noch außerhalb des sichtbaren Bereichs, wird zusätzlich (nur so weit wie nötig) bis dorthin nachgescrollt.
