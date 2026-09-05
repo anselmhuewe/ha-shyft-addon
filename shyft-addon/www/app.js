@@ -603,30 +603,6 @@ let saveStatusTimeout = null;
 // rein client-seitige computeMissingRequiredFieldsWarnings oben (fehlende Pflichtfelder je Geraet -
 // braucht nur configData, das liegt schon vollstaendig im Frontend vor). Ein Klick auf eine Zeile
 // mit sectionKey scrollt zur betroffenen Geraetekachel (siehe scrollToIntegrationSection).
-async function renderConfigWarnings() {
-    const container = document.getElementById('configWarnings');
-    if (!container) return;
-    let warnings = [];
-    try {
-        const result = await getJson(insideHomeAssistant + '/config/warnings');
-        warnings = result.warnings || [];
-    } catch (err) {
-        console.log(err);
-    }
-    warnings = warnings.concat(computeMissingRequiredFieldsWarnings());
-    container.innerHTML = '';
-    for (const warning of warnings) {
-        const item = document.createElement('div');
-        item.className = 'configWarningItem';
-        item.textContent = '⚠ ' + warning.message;
-        if (warning.sectionKey) {
-            item.classList.add('configWarningItem--clickable');
-            item.addEventListener('click', () => scrollToIntegrationSection(warning.sectionKey));
-        }
-        container.appendChild(item);
-    }
-}
-
 // Scrollt zur Geraetekachel eines Abschnitts (siehe INTEGRATION_SECTIONS) und klappt sie bei Bedarf
 // auf - gemeinsam genutzt von den Konfigurations-Warnungen oben und der "zu den Einstellungen"-Zeile
 // an fehlgeschlagenen Aktionen (siehe renderSystemHealth). Wechselt dafuer selbst auf den
@@ -644,10 +620,36 @@ function scrollToIntegrationSection(sectionKey) {
     requestAnimationFrame(() => sectionDiv.scrollIntoView({behavior: 'smooth', block: 'start'}));
 }
 
+// Ein <li> fuer die Problemliste in renderSystemHealth - Text plus optionaler "zu den
+// Einstellungen"-Link, wenn ein sectionKey bekannt ist (gemeinsam fuer System-Health-Probleme und
+// Konfigurations-Warnungen genutzt, die den Link auf unterschiedlichen Wegen ermitteln).
+function buildProblemListItem(message, sectionKey) {
+    const item = document.createElement('li');
+    item.appendChild(document.createTextNode(message));
+    if (sectionKey) {
+        const link = document.createElement('a');
+        link.href = '#';
+        link.className = 'systemHealthProblemLink';
+        link.textContent = 'zu den Einstellungen';
+        link.addEventListener('click', (event) => {
+            event.preventDefault();
+            scrollToIntegrationSection(sectionKey);
+        });
+        item.appendChild(document.createTextNode(' '));
+        item.appendChild(link);
+    }
+    return item;
+}
+
 // Nutzer-sichtbare Fehler-/Statuskarte ganz oben auf der Konfigurationsseite: entweder
-// "Alle Systeme laufen" (dezent gruen) oder bis zu 5 laufende Probleme in Klartext.
-// Datenquelle ist /system-health (problem_registry.py serverseitig) - eine Problem-ID wird
-// vom jeweiligen Code-Pfad selbst wieder freigegeben, sobald er wieder erfolgreich laeuft.
+// "Alle Systeme laufen" (dezent gruen) oder eine einzige durchnummerierte Liste. Fasst ZWEI Quellen
+// unter EINER Ueberschrift/Zaehlung zusammen - Laufzeit-Probleme (/system-health,
+// problem_registry.py serverseitig; eine Problem-ID wird vom jeweiligen Code-Pfad selbst wieder
+// freigegeben, sobald er wieder erfolgreich laeuft) UND Konfigurations-Warnungen (/config/warnings
+// plus computeMissingRequiredFieldsWarnings). Vorher hatten diese zwei Quellen getrennte Blocks
+// (renderSystemHealth/renderConfigWarnings), wobei nur der System-Health-Block eine Ueberschrift mit
+// Anzahl hatte - die Zahl dort passte dadurch nicht zur Gesamtsumme im Dashboard-Problem-Banner
+// (siehe renderDashboardProblemBanner, das von Anfang an beide Quellen zusammenzaehlt).
 async function renderSystemHealth() {
     const container = document.getElementById('systemHealthCard');
     if (!container) return;
@@ -658,8 +660,19 @@ async function renderSystemHealth() {
         console.log(err);
         return;
     }
+    const problems = health.ok ? [] : (health.problems || []);
+    let warnings = [];
+    try {
+        const result = await getJson(insideHomeAssistant + '/config/warnings');
+        warnings = result.warnings || [];
+    } catch (err) {
+        console.log(err);
+    }
+    warnings = warnings.concat(computeMissingRequiredFieldsWarnings());
+
     container.innerHTML = '';
-    if (health.ok) {
+    const count = problems.length + warnings.length;
+    if (count === 0) {
         container.className = 'systemHealthCard is-ok';
         const icon = document.createElement('span');
         icon.className = 'systemHealthCardIcon';
@@ -671,8 +684,6 @@ async function renderSystemHealth() {
         return;
     }
     container.className = 'systemHealthCard has-problems';
-    const problems = health.problems || [];
-    const count = health.problemCount || problems.length;
     const title = document.createElement('div');
     title.className = 'systemHealthCardTitle';
     title.textContent = count === 1
@@ -682,22 +693,10 @@ async function renderSystemHealth() {
     const list = document.createElement('ul');
     list.className = 'systemHealthProblemList';
     for (const problem of problems) {
-        const item = document.createElement('li');
-        item.appendChild(document.createTextNode(problem.message));
-        const sectionKey = actionFailedProblemSectionKey(problem.id);
-        if (sectionKey) {
-            const link = document.createElement('a');
-            link.href = '#';
-            link.className = 'systemHealthProblemLink';
-            link.textContent = 'zu den Einstellungen';
-            link.addEventListener('click', (event) => {
-                event.preventDefault();
-                scrollToIntegrationSection(sectionKey);
-            });
-            item.appendChild(document.createTextNode(' '));
-            item.appendChild(link);
-        }
-        list.appendChild(item);
+        list.appendChild(buildProblemListItem(problem.message, actionFailedProblemSectionKey(problem.id)));
+    }
+    for (const warning of warnings) {
+        list.appendChild(buildProblemListItem(warning.message, warning.sectionKey));
     }
     container.appendChild(list);
 }
@@ -726,8 +725,8 @@ function actionFailedProblemSectionKey(problemId) {
 }
 
 // Kurzer, klickbarer Hinweis ganz oben auf dem Dashboard, sobald es auf der Konfigurationsseite
-// etwas zu beheben gibt - fasst dieselben zwei Quellen zusammen, die dort separat angezeigt werden
-// (renderSystemHealth/renderConfigWarnings): Laufzeit-Probleme (/system-health) UND
+// etwas zu beheben gibt - fasst dieselben zwei Quellen zusammen, die dort in EINER Liste angezeigt
+// werden (siehe renderSystemHealth): Laufzeit-Probleme (/system-health) UND
 // Konfigurations-Warnungen (/config/warnings). Ein Klick wechselt direkt auf den
 // Konfigurations-Tab (simuliert denselben Tab-Button-Klick wie der Nutzer selbst, statt die
 // Tab-Wechsel-Logik hier zu duplizieren).
@@ -780,7 +779,6 @@ async function autoSave() {
             statusElement.textContent = 'Speichere...';
         }
         await saveConfigurationNow();
-        renderConfigWarnings();
         renderSystemHealth();
         if (statusElement) {
             statusElement.classList.remove('status-error');
@@ -837,7 +835,6 @@ const loadConfiguration = async (event) => {
         renderGeneralConfigSection();
         renderIntegrationSections();
         renderNotificationSection();
-        renderConfigWarnings();
         renderSystemHealth();
         renderDashboardProblemBanner();
     } catch (err) {
@@ -980,7 +977,7 @@ const REQUIRED_FIELD_OPTIONAL_ACTION_KEYS = new Set(['consumption_limit_14a', 'p
 
 // Ausfuehrlichere Schwester von isSectionComplete oben: statt nur true/false liefert das hier je
 // unvollstaendigem Geraet die konkret fehlenden Feldbezeichnungen - Grundlage fuer die
-// "noch nicht vollstaendig konfiguriert"-Warnung (siehe renderConfigWarnings/
+// "noch nicht vollstaendig konfiguriert"-Warnung (siehe renderSystemHealth/
 // renderDashboardProblemBanner). Spiegelt dieselbe Variantenlogik wie isSectionComplete (Direkte
 // Entitaets-Steuerung vs. HA-Automation, je nach Aktionstyp in controlVariant/hotWaterRecipe.type/
 // carChargeRecipe.type gespeichert), nur mit den oben genannten Ausnahmen und lesbaren Labels statt
@@ -5816,17 +5813,30 @@ function setupTabs() {
     }
 }
 
+// Setzt --topbar-height (siehe .topBar-Kommentar in index.html) auf die tatsaechliche Hoehe der
+// sticky Kopfzeile - .dashboardProblemBanner haengt sich sticky direkt darunter,
+// .integrationSection nutzt denselben Wert als scroll-margin-top. Einmalig beim Laden reicht: die
+// Hoehe von .topBar haengt nur an Logo/Schriftgroesse, nicht am Viewport, aendert sich also nicht
+// durch Fenstergroesse/Rotation (kein Resize-Listener noetig).
+function syncTopBarHeightVar() {
+    const topBar = document.querySelector('.topBar');
+    if (!topBar) return;
+    document.documentElement.style.setProperty('--topbar-height', topBar.offsetHeight + 'px');
+}
+
 // loadShyftActions waits for loadConfiguration so the action cards' brand icons (getActionIconUrl)
 // have integrationsData/currentIntegrationSelections available on the very first render
 if (document.readyState === 'complete') {
     loadConfiguration().then(loadShyftActions);
     loadDashboard();
     setupTabs();
+    syncTopBarHeightVar();
 } else {
     window.addEventListener('load', () => {
         loadConfiguration().then(loadShyftActions);
         loadDashboard();
         setupTabs();
+        syncTopBarHeightVar();
     });
 }
 

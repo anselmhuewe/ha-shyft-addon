@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.0.44.93
+
+* **Fix: die Problem-Statuskarte auf der Konfigurationsseite zählte falsch** - ihre Überschrift ("3 Probleme erfordern deine Aufmerksamkeit") zählte nur die Laufzeit-Probleme aus `/system-health`, während direkt darunter unbeschriftet noch weitere Konfigurations-Warnungen standen, die nirgends mitgezählt wurden. Das widersprach der Summe im Hinweis-Banner auf dem Dashboard, der beide Quellen schon immer zusammenzählte. Beide Listen laufen jetzt unter einer gemeinsamen Überschrift mit der korrekten Gesamtzahl.
+* **Fix: der "X Probleme erfordern deine Aufmerksamkeit"-Hinweis auf dem Dashboard verschwand beim Herunterscrollen** unter der Navigationsleiste. Bleibt jetzt sticky direkt darunter sichtbar.
+* **Fix: der Pfeil im selben Hinweis war kaum sichtbar und schwebte weit vom Text entfernt** (rechtsbündig statt direkt dahinter). Sitzt jetzt direkt hinter dem Text, in dessen Schriftfarbe, etwas größer und fett für bessere Sichtbarkeit.
+* **Fix: ein Klick auf "zu den Einstellungen" scrollte zu weit herunter** und versteckte die Überschrift der Gerätekachel unter der sticky Navigationsleiste. Hält jetzt mit etwas Rand darunter an.
+
 ## 0.0.44.92
 
 * **Fix: PV-Prognose-Chart zeigte für die frühen Morgenstunden eine Lücke statt einer Linie.** Bekommt der Prognose-Snapshot sein erstes Update erst nach 0 Uhr (z.B. nach einem Neustart), gibt es für die Stunden davor im Snapshot technisch nie eine echte Prognose. Anders als beim Snapshot liefert open-meteo bei jedem Abruf aber auch mehrere Tage rückwirkend Wetterdaten - der Chart rekonstruiert fehlende frühe Stunden jetzt direkt aus dem aktuellen Wetter-Cache (dieselbe Formel/Kalibrierung wie sonst), also mit dem echten tageszeitabhängigen Verlauf statt einer künstlich konstanten Linie.
