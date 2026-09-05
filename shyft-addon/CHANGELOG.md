@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.0.44.96
+
+* **Fix: PV-Überschussladen (Fallback) eskalierte innerhalb weniger Minuten bis zur Wallbox-Obergrenze**, obwohl real gar keine so große PV-Spitze vorlag. Jede Ziel-Anpassung reagierte bisher sofort auf den Netz-Sensor - Wallbox und Auto brauchen nach einer Änderung aber selbst einige Sekunden bis Minuten, um die tatsächlich bezogene Leistung anzuheben. Feuerte in dieser Zeit ein weiterer Live-Tick (was bei schwankendem PV-Ertrag alle paar Sekunden passieren kann), sah dieser denselben, noch nicht abgebauten Überschuss erneut und legte wieder oben drauf - Schritt für Schritt bis zum Anschlag. Automatische Anpassungen einer laufenden Session sind jetzt auf höchstens eine pro 5 Minuten begrenzt, damit Wallbox/Auto Zeit zum Nachziehen bekommen, bevor der nächste Schritt berechnet wird. Das dürfte auch erklären, warum die Easee-App/-Integration kurz nach Ladestart wiederholt auf "Warten auf Genehmigung" zurücksprang: jede zu schnell wiederholte Start-Anfrage an dieselbe Automation unterbricht vermutlich die laufende Freigabe-Verhandlung des Ladevorgangs.
+
 ## 0.0.44.95
 
 * **Fix: der 30-Sekunden-Hintergrund-Refresh des Dashboards liess die ganze Seite sichtbar "neu laden".** Jedes Chart blitzte auf und die Scrollposition sprang zurück, weil `loadDashboard()` bei jedem Refresh die komplette Sektion abgerissen und neu aufgebaut hat. Ersetzt jetzt nur noch das jeweils betroffene Widget an seinem bestehenden Platz - Struktur, Reihenfolge und Scrollposition bleiben dabei unverändert, nur die Werte in den Charts/der EV-Prognose aktualisieren sich.

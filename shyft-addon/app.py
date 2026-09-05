@@ -111,6 +111,16 @@ PV_SURPLUS_BATTERY_STOP_SOC = 97
 # innerhalb einer einzigen Minute. Echte, dauerhafte Zustandswechsel werden dadurch nicht
 # verhindert, nur das Nachschwingen einzelner Messwerte in unmittelbarer Naehe einer Schwelle.
 PV_SURPLUS_RESTART_COOLDOWN_MS = 5 * 60 * 1000
+# Mindestabstand zwischen zwei automatischen Ziel-Anpassungen EINER laufenden Session - die
+# Regelschleife wurde urspruenglich fuer den 5-Minuten-Cron ausgelegt, reagiert inzwischen aber
+# zusaetzlich sofort auf jede Netz-Sensor-Aenderung (siehe PV_SURPLUS_LIVE_UPDATE_THRESHOLD_KW).
+# Die Wallbox/das Auto braucht nach einer Zielaenderung selbst einige Sekunden bis Minuten, um die
+# tatsaechlich bezogene Leistung anzuheben - bis dahin zeigt der Netz-Sensor weiterhin (faelschlich)
+# denselben Ueberschuss wie vor der Anhebung. Ohne diese Sperre summierte sich das: jeder
+# Live-Tick sah denselben, noch nicht abgebauten Ueberschuss und addierte erneut PV_SURPLUS_INCREASE_OVERSHOOT
+# obendrauf, wodurch das Ziel innerhalb weniger Minuten bis zur Wallbox-Obergrenze hochschnellte,
+# obwohl real gar keine so grosse PV-Spitze vorlag.
+PV_SURPLUS_REGULATION_MIN_INTERVAL_MS = 5 * 60 * 1000
 # Batterie-Vorzeichen ist nicht herstellerunabhaengig standardisiert (siehe
 # detect_battery_flow_sign_convention) - 7 Tage Historie reichen normalerweise fuer mehrere klare
 # Lade-/Entladewechsel; unter BATTERY_SIGN_MIN_SAMPLES eindeutigen Stunden gilt die Erkennung als
@@ -2499,6 +2509,10 @@ def _run_pv_surplus_charging_tick_impl():
         if grid_kw is None:
             return  # kein aktueller Messwert - Zielwert unveraendert bis zum naechsten Tick
 
+        last_regulation_ms = session.get("last_regulation_ms", session.get("start_ms"))
+        if last_regulation_ms is not None and now_ms - last_regulation_ms < PV_SURPLUS_REGULATION_MIN_INTERVAL_MS:
+            return  # Wallbox/Auto erst Zeit geben, dem zuletzt gesetzten Ziel zu folgen (siehe PV_SURPLUS_REGULATION_MIN_INTERVAL_MS)
+
         target_kw = session.get("target_kw", PV_SURPLUS_MIN_KW)
         if grid_kw <= PV_SURPLUS_REGULATION_THRESHOLD_KW:
             increase = abs(grid_kw) * PV_SURPLUS_INCREASE_OVERSHOOT
@@ -2534,6 +2548,7 @@ def _run_pv_surplus_charging_tick_impl():
             return
         _append_pv_surplus_log(session, new_target)
         session["target_kw"] = new_target
+        session["last_regulation_ms"] = int(now_ms)
         _write_pv_surplus_actions(actions)
     else:
         if grid_kw is None or not car_ready:
