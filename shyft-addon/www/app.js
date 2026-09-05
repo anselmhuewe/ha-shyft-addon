@@ -4724,10 +4724,14 @@ const PRESENCE_STATE_COLORS = {
 };
 function mostLikelyPresenceState(entry) {
     if (!entry) return null;
+    // Reihenfolge unterwegs -> steht -> eingesteckt und ">=" statt ">": bei Gleichstand gewinnt
+    // "unterwegs". Genau dieselbe Bruch-Entscheidung nutzt die Verbrauchszuteilung in app.py
+    // (_is_predicted_driving), damit eine Stunde mit kWh > 0 in der Liste nie "eingesteckt"/"steht"
+    // heissen kann.
     const states = [
-        {label: 'eingesteckt', p: entry.connected},
-        {label: 'steht', p: entry.standing},
         {label: 'unterwegs', p: entry.driving},
+        {label: 'steht', p: entry.standing},
+        {label: 'eingesteckt', p: entry.connected},
     ];
     return states.reduce((a, b) => (b.p > a.p ? b : a));
 }

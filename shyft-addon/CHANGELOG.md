@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.0.45.5
+
+* **EV-Verbrauchsprognose: kWh werden jetzt ausschließlich auf Stunden mit prognostiziertem Zustand „unterwegs" verteilt.** Bisher ging der Verbrauch auf alle Stunden mit `P(abwesend) > 0.5` – dadurch konnte er auch auf Stunden landen, deren wahrscheinlichster Zustand „eingesteckt" oder „steht" war (in der Liste als solche beschriftet, aber mit kWh > 0 daneben). Jetzt: eingesteckt / steht / unterwegs sind drei exklusive Zustände (je Stunde der größte der drei Wahrscheinlichkeiten), und Verbrauch entsteht nur, wenn „unterwegs" gewinnt – gewichtet nach `P(unterwegs)`. Ein eingestecktes oder stehendes Auto hat damit garantiert 0 kWh. Chart-Balken, Verbrauchsliste und Zuteilung nutzen dieselbe Bruch-Entscheidung (bei Gleichstand gewinnt „unterwegs").
+* **`/dashboard/car-presence-forecast` liefert zusätzlich `state` (pro Stunde), `dEvKwh` und `evUsageH`** – damit die Prognose 1:1 gegen die tatsächliche Optimierer-`input.csv` geprüft werden kann.
+
 ## 0.0.45.4
 
 * **EV-Verbrauchsprognose-Notnagel: die 3-Stunden-Sperre (0.0.45.3) zurückgerollt.** Stattdessen schiebt der Notnagel den Tages-`E_day` eines Tages ohne prognostizierte Abwesenheit jetzt auf die **letzte Stunde des Optimierungszeitraums** – dort verzerrt ein erfundener Verbrauch die Optimierung am wenigsten (maximaler Vorlauf, die Stunde wird längst durch frische Daten ersetzt, bevor sie eintritt). Mehrere solche Tage summieren sich dort auf. (Die Pufferstunde jenseits des Optimierungszeitraums bleibt frei.)

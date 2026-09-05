@@ -1198,12 +1198,6 @@ EV_DEFAULT_KWH_PER_100KM = 18
 EV_DEFAULT_WEEKDAY_BLOCK_HOURS = [7, 17]
 EV_DEFAULT_WEEKEND_BLOCK_HOURS = [15, 16, 17]
 
-# Ab dieser Abwesenheits-Wahrscheinlichkeit (1 - P(eingesteckt)) zaehlt eine Stunde als
-# prognostizierte Fahrt: der Verbrauch des Tages wird nur auf solche Stunden verteilt, und
-# ev_usage_h (siehe build_ev_optimizer_fields) enthaelt genau sie.
-EV_AWAY_THRESHOLD = 0.5
-
-
 def _recency_weight(sample_dt, now):
     "Exponentieller Abfall nach Alter - siehe CAR_PRESENCE_RECENCY_HALF_LIFE_DAYS."
     age_days = max(0.0, (now - sample_dt).total_seconds() / 86400.0)
@@ -1235,11 +1229,14 @@ def compute_car_presence_forecast(hours=48, buffer_hours=0):
     2. EV-Verbrauch: NICHT als P(fahren)*Ø-Verbrauch pro Stunde verschmiert. Stattdessen wird je
        Kalendertag eine Tagesfahrleistung E_day bestimmt - recency-gewichteter historischer
        Tagesdurchschnitt (kWh) je Gruppe {Werktag, Wochenende}, inkl. fahrtloser Tage als 0 - und
-       VOLLSTAENDIG auf die fuer diesen Tag prognostizierten Abwesenheitsstunden verteilt
-       (P(abwesend) > EV_AWAY_THRESHOLD), gewichtet nach P(abwesend). Damit gilt per Konstruktion:
+       VOLLSTAENDIG auf die Stunden verteilt, deren prognostizierter Zustand "unterwegs" ist
+       (groesster der drei exklusiven Zustaende eingesteckt/steht/unterwegs), gewichtet nach
+       P(unterwegs). eingesteckt/steht-Stunden bekommen immer 0. Damit gilt per Konstruktion:
        Summe(consumption_kwh_forecast ueber den Tag) == E_day, und ein Wert > 0 steht genau in den
-       Abwesenheitsstunden - deckungsgleich mit ev_usage_h (siehe build_ev_optimizer_fields). Ohne
-       jeden Fahrtag greift ein festes Default-Profil (EV_DEFAULT_*).
+       Fahrstunden - deckungsgleich mit ev_usage_h (siehe build_ev_optimizer_fields). Sieht das
+       Modell fuer einen Tag keine Fahrstunde, wandert dessen E_day auf die letzte Stunde des
+       Optimierungszeitraums (Notnagel). Ohne jeden Fahrtag greift ein festes Default-Profil
+       (EV_DEFAULT_*).
 
     Rueckgabe zusaetzlich consumption_basis: "default" (kein Fahrtag -> Default-Profil), "learning"
     (1..CAR_PRESENCE_MIN_SAMPLES-1 Fahrtage) oder "ok" (>= CAR_PRESENCE_MIN_SAMPLES Fahrtage) -
@@ -1376,8 +1373,12 @@ def compute_car_presence_forecast(hours=48, buffer_hours=0):
 
     p_away_list = [1.0 - p for p in probabilities]
 
-    # 3-Zustands-Aufteilung NUR fuer die Chart-Anzeige (eingesteckt / steht / unterwegs) - fliesst
-    # nicht mehr in den Verbrauch ein (Vampire/Standzeit-Verbrauch wird bewusst vernachlaessigt).
+    # Drei EXKLUSIVE Zustaende je Stunde: eingesteckt / steht / unterwegs. eingesteckt = P(connected),
+    # der Rest wird ueber den historischen Fahranteil dieses (Wochentag, Stunde)-Buckets in steht vs.
+    # unterwegs aufgeteilt. Der prognostizierte Zustand einer Stunde ist der groesste der drei -
+    # dieselbe Klassifikation, die auch der Chart-Balken und die Verbrauchsliste zeigen. Verbrauch
+    # wird NUR auf Stunden mit prognostiziertem Zustand "unterwegs" verteilt (siehe unten): ein
+    # eingestecktes oder stehendes Auto kann definitionsgemaess keinen Fahrstrom verbrauchen.
     standing_probabilities = []
     driving_probabilities = []
     for i in range(hours):
@@ -1386,8 +1387,12 @@ def compute_car_presence_forecast(hours=48, buffer_hours=0):
         driving_probabilities.append(p_away_list[i] * frac_driving)
         standing_probabilities.append(p_away_list[i] * (1.0 - frac_driving))
 
-    # E_day je Kalendertag VOLLSTAENDIG auf dessen prognostizierte Abwesenheitsstunden verteilen
-    # (bzw. im Cold-Start auf die festen Default-Bloecke der Gruppe).
+    def _is_predicted_driving(i):
+        "True, wenn der wahrscheinlichste der drei Zustaende 'unterwegs' ist (Gleichstand mit eingesteckt zaehlt als unterwegs, damit E_day nicht verloren geht)."
+        return driving_probabilities[i] > standing_probabilities[i] and driving_probabilities[i] >= probabilities[i]
+
+    # E_day je Kalendertag VOLLSTAENDIG auf dessen als "unterwegs" prognostizierte Stunden verteilen
+    # (bzw. im Cold-Start auf die festen Default-Bloecke der Gruppe - die SIND die simulierte Fahrt).
     consumption_kwh_forecast = [0.0] * hours
     day_indices = {}
     for i in range(hours):
@@ -1403,8 +1408,8 @@ def compute_car_presence_forecast(hours=48, buffer_hours=0):
             target_idxs = [i for i in idxs if (start + timedelta(hours=i)).astimezone().hour in block_hours]
             weights = [1.0] * len(target_idxs)
         else:
-            target_idxs = [i for i in idxs if p_away_list[i] > EV_AWAY_THRESHOLD]
-            weights = [p_away_list[i] for i in target_idxs]
+            target_idxs = [i for i in idxs if _is_predicted_driving(i)]
+            weights = [driving_probabilities[i] for i in target_idxs]
         if not target_idxs:
             # Kein prognostizierter Abwesenheitsblock fuer diesen Tag: E_day trotzdem im Plan
             # halten, aber auf die letzte Stunde des Optimierungszeitraums schieben (Nutzer-Vorgabe)
@@ -1540,15 +1545,34 @@ def build_hot_water_optimizer_fields(config, optimizer_period=48):
 @app.route("/dashboard/car-presence-forecast", methods=["GET"])
 def carPresenceForecast():
     labels, probabilities, standing_probabilities, driving_probabilities, consumption_kwh_forecast, low_data_basis, consumption_basis = compute_car_presence_forecast()
+
+    def _state(i):
+        c, s, d = probabilities[i], standing_probabilities[i], driving_probabilities[i]
+        if d >= c and d >= s:
+            return "unterwegs"
+        return "eingesteckt" if c >= s else "steht"
+
+    # Die an den Optimierer gehenden Felder (build_ev_optimizer_fields) MIT ausgeben, damit die
+    # Prognose 1:1 gegen die tatsaechliche input.csv geprueft werden kann. Anderer Horizont
+    # (optimizer_period+1 statt 48), deshalb separat.
+    optimizer_input = {}
+    try:
+        optimizer_input = build_ev_optimizer_fields(_read_current_config())
+    except Exception as e:
+        print("[Shyft] car-presence-forecast: build_ev_optimizer_fields fehlgeschlagen:", repr(e))
+
     return jsonify({
         "status": "success",
         "labels": labels,
         "probabilities": [round(p, 3) for p in probabilities],
         "standingProbabilities": [round(p, 3) for p in standing_probabilities],
         "drivingProbabilities": [round(p, 3) for p in driving_probabilities],
+        "state": [_state(i) for i in range(len(labels))],
         "consumptionKwh": [round(v, 3) for v in consumption_kwh_forecast],
         "consumptionBasis": consumption_basis,
         "lowDataBasis": low_data_basis,
+        "dEvKwh": optimizer_input.get("d_ev_kwh"),
+        "evUsageH": optimizer_input.get("ev_usage_h"),
     })
 
 
