@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.0.44.92
+
+* **Fix: PV-Prognose-Chart zeigte für die frühen Morgenstunden eine Lücke statt einer Linie.** Bekommt der Prognose-Snapshot sein erstes Update erst nach 0 Uhr (z.B. nach einem Neustart), gibt es für die Stunden davor im Snapshot technisch nie eine echte Prognose. Anders als beim Snapshot liefert open-meteo bei jedem Abruf aber auch mehrere Tage rückwirkend Wetterdaten - der Chart rekonstruiert fehlende frühe Stunden jetzt direkt aus dem aktuellen Wetter-Cache (dieselbe Formel/Kalibrierung wie sonst), also mit dem echten tageszeitabhängigen Verlauf statt einer künstlich konstanten Linie.
+* **Fix: Dashboard-Charts (Strompreis, PV-Leistung, Raumtemperatur, ...) aktualisierten sich nie von selbst.** `loadDashboard()` lief bisher nur einmal beim Öffnen der Seite - in einem lange offenen Browser-Tab (das Addon läuft dauerhaft als HA-Ingress-Panel) zeigten die Charts dadurch weiterhin den Datenstand vom letzten echten Seitenaufruf. Aktualisiert sich jetzt wie die übrigen Dashboard-Kacheln alle 30 Sekunden von selbst.
+* **Fix: Verbrauchsprognose fürs Auto stand nach der Zweispaltigkeit der Dashboard-Charts unter beiden Spalten statt gezielt unter "Ladestand Auto".** Ist jetzt fest in dessen Chart-Kachel verschachtelt.
+* **Anwesenheitsprognose: die 48 Werte in der aufklappbaren Verbrauchsprognose-Liste sind jetzt farblich unterlegt** (grün/grau/rot, dieselbe Farbe wie im Anwesenheits-Balken darüber) und nennen explizit den wahrscheinlichsten Zustand der Stunde (eingesteckt/steht/unterwegs) - beide Ansichten nutzen jetzt dieselbe Klassifizierungslogik, können sich also nicht mehr widersprechen.
+
 ## 0.0.44.91
 
 * **Fix: Gerätesteuerung scrollte nur beim allerersten Seitenaufruf zur aktiven Aktion, nicht bei jedem Tab-Wechsel.** Da das Addon als dauerhaftes HA-Ingress-Panel läuft, passiert ein "echter" Seitenaufruf praktisch nie mehr - jetzt scrollt jeder Klick auf "Gerätesteuerung" erneut zur laufenden Aktion.

@@ -4289,17 +4289,11 @@ function buildLineChart(title, unit, labels, values, options = {}) {
         const barY = baseline + 6;
         const cellWidth = plotWidth / (points.length - 1 || 1);
         for (let i = 0; i < points.length; i++) {
-            const byLabel = presenceForecast.byLabel[labels[i]];
-            if (byLabel === undefined) continue;
-            const states = [
-                {p: byLabel.connected, color: 'var(--color-accent)'},
-                {p: byLabel.standing, color: 'var(--color-text-secondary)'},
-                {p: byLabel.driving, color: 'var(--color-error)'},
-            ];
-            const best = states.reduce((a, b) => (b.p > a.p ? b : a));
+            const best = mostLikelyPresenceState(presenceForecast.byLabel[labels[i]]);
+            if (best === null) continue;
             const opacity = (0.1 + Math.max(0, Math.min(1, best.p)) * 0.8).toFixed(2);
             const x = (points[i][0] - cellWidth / 2).toFixed(1);
-            presenceMarkup += `<rect x="${x}" y="${barY.toFixed(1)}" width="${cellWidth.toFixed(1)}" height="10" fill="${best.color}" opacity="${opacity}" />`;
+            presenceMarkup += `<rect x="${x}" y="${barY.toFixed(1)}" width="${cellWidth.toFixed(1)}" height="10" fill="${PRESENCE_STATE_COLORS[best.label]}" opacity="${opacity}" />`;
         }
     }
 
@@ -4563,9 +4557,32 @@ function buildPvForecastActualChart(labels, forecast, actual) {
     return wrapper;
 }
 
+// Welcher der drei Anwesenheits-Zustaende fuer eine Stunde als "der wahrscheinlichste" gilt (reine
+// Mehrheitsentscheidung der drei Wahrscheinlichkeiten) - gemeinsam genutzt vom Anwesenheits-Balken
+// im Chart (buildLineChart) und der Verbrauchsprognose-Liste (buildCarConsumptionForecastDetails),
+// damit beide garantiert dieselbe Klassifizierung je Stunde zeigen (siehe Nutzer-Nachfrage: die
+// Farbe im Chart darf der Stunde in der Liste nicht widersprechen).
+const PRESENCE_STATE_COLORS = {
+    eingesteckt: 'var(--color-accent)',
+    steht: 'var(--color-text-secondary)',
+    unterwegs: 'var(--color-error)',
+};
+function mostLikelyPresenceState(entry) {
+    if (!entry) return null;
+    const states = [
+        {label: 'eingesteckt', p: entry.connected},
+        {label: 'steht', p: entry.standing},
+        {label: 'unterwegs', p: entry.driving},
+    ];
+    return states.reduce((a, b) => (b.p > a.p ? b : a));
+}
+
 // Einfacher, aufklappbarer Zahlenvektor der für die nächsten 48h prognostizierten Verbräuche
 // (kWh) - erstmal ohne eigenes Diagramm, bis die input.csv-Erzeugung selbst ins Addon wandert.
-function buildCarConsumptionForecastDetails(labels, consumptionKwh, lowDataBasis) {
+// presenceForecast (optional, dieselbe {byLabel} Struktur wie beim Chart) faerbt jede Zeile nach
+// ihrem wahrscheinlichsten Zustand ein und nennt ihn explizit - vorher stand hier nur die kWh-Zahl
+// ohne erkennbaren Bezug zur Chart-Farbe.
+function buildCarConsumptionForecastDetails(labels, consumptionKwh, lowDataBasis, presenceForecast) {
     const details = document.createElement('details');
     details.className = 'dashboardConsumptionForecast';
     const summary = document.createElement('summary');
@@ -4578,13 +4595,26 @@ function buildCarConsumptionForecastDetails(labels, consumptionKwh, lowDataBasis
         note.textContent = `⚠ ${lowCount} von ${labels.length} Stunden (markiert mit ~) basieren auf wenig Datenbasis (Cold-Start oder wenig Historie) - Werte dort sind noch unsicher.`;
         details.appendChild(note);
     }
-    const pre = document.createElement('pre');
-    pre.textContent = labels.map((label, i) => {
+    const list = document.createElement('div');
+    list.className = 'dashboardConsumptionForecastList';
+    labels.forEach((label, i) => {
         const timeText = new Date(label).toLocaleString('de-DE', {weekday: 'short', hour: '2-digit', minute: '2-digit'}).replace('.', '');
         const marker = (lowDataBasis && lowDataBasis[i]) ? '~' : ' ';
-        return `${marker}${timeText}: ${consumptionKwh[i].toFixed(2)} kWh`;
-    }).join('\n');
-    details.appendChild(pre);
+        const state = presenceForecast ? mostLikelyPresenceState(presenceForecast.byLabel[label]) : null;
+        const row = document.createElement('div');
+        row.className = 'dashboardConsumptionForecastRow';
+        if (state) {
+            const dot = document.createElement('span');
+            dot.className = 'dashboardChartLegendDot';
+            dot.style.background = PRESENCE_STATE_COLORS[state.label];
+            row.appendChild(dot);
+        }
+        const text = document.createElement('span');
+        text.textContent = `${marker}${timeText}: ${consumptionKwh[i].toFixed(2)} kWh` + (state ? ` (${state.label})` : '');
+        row.appendChild(text);
+        list.appendChild(row);
+    });
+    details.appendChild(list);
     return details;
 }
 
@@ -5661,15 +5691,22 @@ async function loadDashboard() {
         } catch (err) {
             console.log(err);
         }
-        container.appendChild(buildLineChart('Ladestand Auto', '%', data.output_labels, data.soc_ev, {
+        // Wrapper hier festhalten statt direkt an container zu haengen: die Verbrauchsprognose-
+        // Details sollen darunter erscheinen (siehe Nutzer-Feedback), nicht als eigenes, eigenstaen-
+        // diges Element in der #dashboardBody-Flex-Reihenfolge - dort wuerde sie durch die
+        // Zweispaltigkeit (siehe .dashboardChartHalf) unter BEIDEN Spalten statt gezielt unter
+        // "Ladestand Auto" landen.
+        const ladestandAutoChart = buildLineChart('Ladestand Auto', '%', data.output_labels, data.soc_ev, {
             fixedMin: 0,
             fixedMax: 100,
             valueScale: 100,
             slopeBands: {riseColor: 'var(--color-accent)', dropColor: 'var(--color-error)', flatColor: 'var(--color-text-secondary)', bigDropThreshold: 0.1},
             presenceForecast,
-        }));
+        });
+        container.appendChild(ladestandAutoChart);
         if (consumptionForecast) {
-            container.appendChild(buildCarConsumptionForecastDetails(consumptionForecast.labels, consumptionForecast.consumptionKwh, consumptionForecast.lowDataBasis));
+            ladestandAutoChart.appendChild(buildCarConsumptionForecastDetails(
+                consumptionForecast.labels, consumptionForecast.consumptionKwh, consumptionForecast.lowDataBasis, presenceForecast));
         }
     } catch (err) {
         console.log(err);
@@ -5745,6 +5782,20 @@ async function refreshShyftActions() {
     await loadShyftActions();
 }
 setInterval(refreshShyftActions, ENERGY_FLOW_REFRESH_INTERVAL_MS);
+
+// Wie refreshShyftActions oben: loadDashboard() lief bisher nur einmal beim Seitenaufruf - die
+// Charts (Strompreis, PV-Leistung, Raumtemperatur, ...) zeigten dann als erste Stunde weiterhin den
+// Stand von damals, auch wenn /dashboard/chart-data serverseitig laengst vergangene Stunden
+// abschneidet (siehe readDashboardChartData) - ohne einen erneuten Fetch bekommt das Frontend davon
+// schlicht nichts mit. Baut wie loadShyftActions/renderShyftActions die komplette Sektion neu auf
+// (container.innerHTML = ''), dasselbe Muster wie der bestehende Gerätesteuerung-Refresh.
+async function refreshDashboard() {
+    if (document.visibilityState !== 'visible') return;
+    const panel = document.getElementById('tab-dashboard');
+    if (!panel || !panel.classList.contains('active')) return;
+    await loadDashboard();
+}
+setInterval(refreshDashboard, ENERGY_FLOW_REFRESH_INTERVAL_MS);
 
 function setupTabs() {
     const buttons = document.querySelectorAll('.tabButton');

@@ -618,7 +618,11 @@ def readPvForecastVsActual():
     Snapshot (siehe _maybe_freeze_pv_forecast_snapshot - vergangene Stunden darin sind eingefroren
     auf die letzte Prognose vor ihrem Eintritt, noch bevorstehende Stunden bekommen bei jedem Sync
     die aktuellste Prognose nachgetragen) mit der normalen, laufend aktualisierten Prognose (fuer
-    alles ab morgen); 'actual' sind die stundenweise gemittelten tatsaechlichen Messwerte von 0 Uhr
+    alles ab morgen); fehlt eine fruehe Stunde von heute darin (Snapshot deckt sie noch nicht ab,
+    z.B. nach einem Neustart), wird sie aus dem aktuellen Wetter-Cache rekonstruiert (siehe
+    pv_forecast.compute_site_weather_fields - open-meteo liefert bei jedem Abruf auch rueckwirkende
+    Tage, der Cache deckt fruehe Stunden von heute also i.d.R. schon ab, auch wenn der Snapshot es
+    (noch) nicht tut). 'actual' sind die stundenweise gemittelten tatsaechlichen Messwerte von 0 Uhr
     bis jetzt, nur fuer heute (keine Ist-Werte fuer die Zukunft). Fehlende Werte je Stunde sind
     null, nicht ausgelassen - hält beide Reihen synchron zur selben labels-Achse, wie es das
     Frontend zum Zeichnen zweier Linien braucht."""
@@ -684,6 +688,25 @@ def readPvForecastVsActual():
         labels.append(hour.isoformat())
         forecast.append(today_forecast_by_hour.get(hour, future_forecast_by_hour.get(hour)))
         actual.append(actual_by_hour.get(hour))
+
+    # Fruehe Stunden vor dem allerersten Sync des Tages auffuellen (siehe
+    # _maybe_freeze_pv_forecast_snapshot: bekommt der Snapshot sein erstes input_csv erst nach 0 Uhr,
+    # z.B. nach einem Neustart, gibt es fuer die Stunden davor dort technisch nie eine echte Prognose
+    # - ein Fetch kann nicht rueckwirkend fuer eine schon vergangene Stunde geliefert werden).
+    # Anders als bei input_csv gilt das aber NICHT fuer die Wetterdaten selbst: open-meteo liefert
+    # bei jedem Abruf auch OPEN_METEO_PAST_DAYS Tage rueckwirkend (siehe fetch_weather), der aktuelle
+    # WEATHER_CACHE_PATH deckt also auch fruehe Stunden von heute bereits ab. compute_site_weather_
+    # fields rechnet daraus dieselbe kW-Prognose wie sonst (gleiche Kalibrierung/Formel) - echte,
+    # tageszeitabhaengige Werte statt eines konstanten Rueckwaerts-Auffuellens.
+    if any(v is None for v in forecast):
+        try:
+            reconstructed = pv_forecast.compute_site_weather_fields(hour_count, pv_sensor_configured=bool(entity_id))
+            reconstructed_pv = [float(v) for v in reconstructed["pvPrediction"].split(",")]
+            for i, v in enumerate(forecast):
+                if v is None and i < len(reconstructed_pv):
+                    forecast[i] = reconstructed_pv[i]
+        except Exception as e:
+            print("[Shyft] PV-Prognose (rueckwirkend aus Wetterdaten) konnte nicht rekonstruiert werden:", repr(e))
 
     return jsonify({"status": "success", "labels": labels, "forecast": forecast, "actual": actual})
 
