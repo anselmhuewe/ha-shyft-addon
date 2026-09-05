@@ -103,6 +103,14 @@ PV_SURPLUS_DECREASE_RATIO = 0.05
 PV_SURPLUS_NO_BATTERY_DECREASE_RATIO = 0.10
 PV_SURPLUS_NO_BATTERY_MIN_DECREASE_KW = 0.3
 PV_SURPLUS_BATTERY_STOP_SOC = 97
+# Mindestabstand zwischen dem Ende einer Fallback-Session und dem Start der naechsten - ohne diese
+# Sperre konnte eine Session, die z.B. wegen kurzzeitig gefallenem Heimspeicher-SOC beendet wurde,
+# schon Sekunden spaeter durch den naechsten live-getriggerten Tick (siehe
+# PV_SURPLUS_LIVE_UPDATE_THRESHOLD_KW) wieder neu gestartet werden, sobald ein einzelner
+# Sensorwert kurz zurueckschwankt - das fuehrte zu mehreren Start/Stopp-Wechseln derselben Aktion
+# innerhalb einer einzigen Minute. Echte, dauerhafte Zustandswechsel werden dadurch nicht
+# verhindert, nur das Nachschwingen einzelner Messwerte in unmittelbarer Naehe einer Schwelle.
+PV_SURPLUS_RESTART_COOLDOWN_MS = 5 * 60 * 1000
 # Batterie-Vorzeichen ist nicht herstellerunabhaengig standardisiert (siehe
 # detect_battery_flow_sign_convention) - 7 Tage Historie reichen normalerweise fuer mehrere klare
 # Lade-/Entladewechsel; unter BATTERY_SIGN_MIN_SAMPLES eindeutigen Stunden gilt die Erkennung als
@@ -2405,7 +2413,7 @@ def _pv_surplus_session_to_action(session):
         "Status": "aktiv" if is_active else "beendet",
         "Execution Status": "yes, started",
         "Target Value": target_kw,
-        "Subtitle": f"PV-Überschussladen (Fallback, {target_kw:.1f} kW)",
+        "Subtitle": f"PV-Überschussladen ({target_kw:.1f} kW)",
         "Date Start": session.get("start_ms"),
         "Date End": session.get("end_ms") if not is_active else session.get("planned_end_ms"),
         "Savings": None,
@@ -2422,6 +2430,7 @@ def stop_pv_surplus_charging(actions, session, config, reason=None):
         print("[Shyft] PV-Überschussladen: Stop fehlgeschlagen:", repr(e))
     session["active"] = False
     session["end_ms"] = int(time.time() * 1000)
+    session["stop_reason"] = reason
     _write_pv_surplus_actions(actions)
     notify_action_event(config, _pv_surplus_session_to_action(session), "beendet")
 
@@ -2528,6 +2537,22 @@ def _run_pv_surplus_charging_tick_impl():
         _write_pv_surplus_actions(actions)
     else:
         if grid_kw is None or not car_ready:
+            return
+        # Solange der Heimspeicher noch nicht voll ist, soll ein PV-Ueberschuss zuerst dorthin
+        # fliessen statt ans Auto - dieselbe Bedingung, die eine laufende Session oben beendet
+        # (PV_SURPLUS_BATTERY_STOP_SOC), muss daher auch einen Neustart verhindern. Ohne diesen
+        # Check konnte eine gerade wegen niedrigem SOC beendete Session Sekunden spaeter sofort
+        # wieder neu eroeffnet werden, sobald der Netz-Sensor kurz erneut Einspeisung meldete.
+        if has_battery and battery_soc <= PV_SURPLUS_BATTERY_STOP_SOC:
+            return
+        # Der Ablauf der geplanten Stunde ist ein regulaerer, gewollter Uebergang (siehe oben,
+        # "Stunde abgelaufen") - die naechste Stunde soll bei fortbestehendem Ueberschuss sofort
+        # nahtlos weiterlaufen, nicht erst nach der Cooldown-Frist. Die Sperre gilt nur fuer
+        # Sessions, die aus einem anderen (potenziell schwankenden) Grund beendet wurden.
+        last_session = actions[-1] if actions else None
+        last_end_ms = last_session.get("end_ms") if last_session else None
+        if (last_session and last_session.get("stop_reason") != "Stunde abgelaufen"
+                and last_end_ms is not None and now_ms - last_end_ms < PV_SURPLUS_RESTART_COOLDOWN_MS):
             return
         start_threshold = PV_SURPLUS_START_THRESHOLD_KW if has_battery else PV_SURPLUS_START_THRESHOLD_NO_BATTERY_KW
         if grid_kw > start_threshold:

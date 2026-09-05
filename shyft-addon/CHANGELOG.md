@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.0.44.95
+
+* **Fix: der 30-Sekunden-Hintergrund-Refresh des Dashboards liess die ganze Seite sichtbar "neu laden".** Jedes Chart blitzte auf und die Scrollposition sprang zurück, weil `loadDashboard()` bei jedem Refresh die komplette Sektion abgerissen und neu aufgebaut hat. Ersetzt jetzt nur noch das jeweils betroffene Widget an seinem bestehenden Platz - Struktur, Reihenfolge und Scrollposition bleiben dabei unverändert, nur die Werte in den Charts/der EV-Prognose aktualisieren sich.
+* **Fix: PV-Überschussladen (Fallback) konnte mehrfach pro Minute starten/stoppen.** Der Start einer neuen Ladesession prüfte den Heimspeicher-Ladestand nicht - eine Session, die gerade wegen gefallenem Speicher-SOC beendet wurde, konnte Sekunden später sofort neu starten, sobald der Netz-Sensor kurz erneut eine Einspeisung meldete. Ein Start ist jetzt nur noch möglich, wenn der Speicher (falls vorhanden) tatsächlich über der Abbruchschwelle liegt, und zusätzlich erst nach einer kurzen Sperrfrist seit dem letzten Ende - außer die vorherige Session ist regulär zur vollen Stunde ausgelaufen, dann läuft die nächste bei fortbestehendem Überschuss nahtlos weiter.
+* **"(Fallback, X kW)" beim PV-Überschussladen entfernt** - stand ohne weitere Erklärung in der Aktionsliste und ist für die Anzeige nicht relevant.
+
 ## 0.0.44.94
 
 * **Fix: Anwesenheitsprognose blieb auch bei historisch geringer Fahrleistung nicht überwiegend "eingesteckt".** Die Fallback-Logik (ohne genug Daten für die konkrete Wochentag/Stunde-Kombination) nutzte bisher symmetrisch 90%/10%-Übergangsraten - das lässt die Prognose über mehrere Stunden hinweg unweigerlich Richtung 50/50 abdriften, egal wie oft das Auto historisch tatsächlich eingesteckt war. Die beiden Raten werden jetzt so berechnet, dass sich die Prognose langfristig dem tatsächlichen historischen Anteil verbundener Stunden annähert (z.B. ~95%, wenn das Auto nur selten fährt), kurzfristig aber weiterhin stark am aktuellen Zustand festhält.

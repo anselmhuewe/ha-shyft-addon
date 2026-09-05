@@ -5481,8 +5481,8 @@ function buildEnergyFlowSvgMobile(data) {
 // .energyFlowSvgDesktop/.energyFlowSvgMobile in index.html, dieselbe 600px-Grenze wie die
 // vergroesserte .energyFlowLabel-Mobil-Schrift) entscheiden, welches sichtbar ist - robuster als ein
 // JS-seitiger resize-Listener (funktioniert auch bei Rotation/Fenstergroessenaenderung ohne
-// Nachbau-Aufruf) und aendert an refreshEnergyFlowWidget (ersetzt einfach den ganzen
-// .energyFlowWidget-Knoten) nichts.
+// Nachbau-Aufruf) und aendert am periodischen Dashboard-Refresh (updateOrAppendDashboardWidget
+// ersetzt einfach den ganzen .energyFlowWidget-Knoten) nichts.
 function buildEnergyFlowWidget(data) {
     const wrapper = document.createElement('div');
     wrapper.className = 'energyFlowWidget dashboardChart';
@@ -5575,6 +5575,25 @@ function trimWeatherStripToFit(strip) {
     }
 }
 
+// Ersetzt (oder haengt beim allerersten Aufruf neu an) ein Dashboard-Widget anhand eines stabilen
+// Schluessels, statt die gesamte #dashboardBody bei jedem Refresh neu aufzubauen (siehe Nutzer-
+// Feedback: der 30-Sekunden-Hintergrund-Refresh liess vorher die ganze Seite "neu laden" - jedes
+// Widget blitzte auf, die Scrollposition sprang zurueck). Nur der EINE betroffene Knoten wird
+// ausgetauscht, Reihenfolge/Struktur der uebrigen Elemente bleiben unberuehrt.
+function updateOrAppendDashboardWidget(container, key, newEl) {
+    newEl.dataset.dashboardWidgetKey = key;
+    const existing = container.querySelector(`[data-dashboard-widget-key="${key}"]`);
+    if (existing) {
+        existing.replaceWith(newEl);
+    } else {
+        container.appendChild(newEl);
+    }
+}
+
+// Baut/aktualisiert alle Dashboard-Widgets - sowohl beim ersten Seitenaufruf (container ist leer,
+// jedes updateOrAppendDashboardWidget haengt einfach an) als auch bei jedem periodischen Refresh
+// (siehe refreshDashboard unten): dann wird JEDES Widget einzeln an seinem bestehenden Platz
+// ausgetauscht, ohne die Seite als Ganzes neu aufzubauen.
 async function loadDashboard() {
     const container = document.getElementById('dashboardBody');
     if (!container) return;
@@ -5588,7 +5607,6 @@ async function loadDashboard() {
             container.appendChild(error);
             return;
         }
-        container.innerHTML = '';
         // Wetter zuerst holen: der aktuelle Wettercode fliesst ins Himmels-Icon des Energiefluss-
         // Widgets (renderSkyIcon) und wird weiter unten fuer den Wetter-Streifen wiederverwendet.
         let weather = null;
@@ -5604,19 +5622,19 @@ async function loadDashboard() {
         let flowData = null;
         try {
             flowData = await getJson(insideHomeAssistant + '/dashboard/energy-flow');
-            container.appendChild(buildEnergyFlowWidget(flowData));
+            updateOrAppendDashboardWidget(container, 'energyFlow', buildEnergyFlowWidget(flowData));
         } catch (err) {
             // best-effort: ein fehlgeschlagenes Energiefluss-Widget darf die restlichen Charts nicht verhindern
             console.log(err);
         }
-        container.appendChild(buildLineChart('Strompreis', 'Cent/kWh', data.labels, data.p_buy, {
+        updateOrAppendDashboardWidget(container, 'strompreis', buildLineChart('Strompreis', 'Cent/kWh', data.labels, data.p_buy, {
             subtitle: 'Bezug',
             stepped: true,
             valueScale: 100,
             decimals: 0,
             colorBands: {highThreshold: 35, highColor: 'var(--color-error)', lowThreshold: 25, lowColor: 'var(--color-accent)', midColor: 'var(--color-text-secondary)'},
         }));
-        container.appendChild(buildLineChart('Außentemperatur', '°C', data.labels, data.temperature));
+        updateOrAppendDashboardWidget(container, 'aussentemperatur', buildLineChart('Außentemperatur', '°C', data.labels, data.temperature));
         // Ersetzt die reine Prognose-Ansicht: gemeinsame Stundenachse ab 0 Uhr heute, aufgezeichnete
         // Prognose (heute, vergangene Stunden eingefroren/kommende laufend aktualisiert + ab morgen
         // live) gegen tatsaechliche Ist-Werte (siehe
@@ -5625,7 +5643,7 @@ async function loadDashboard() {
         if (weather) {
             const strip = buildWeatherStrip(weather);
             if (strip) {
-                container.appendChild(strip);
+                updateOrAppendDashboardWidget(container, 'weatherStrip', strip);
                 trimWeatherStripToFit(strip);
             }
         }
@@ -5633,19 +5651,19 @@ async function loadDashboard() {
         try {
             const pvComparison = await getJson(insideHomeAssistant + '/dashboard/pv-forecast-vs-actual');
             if (pvComparison.status === 'success' && pvComparison.labels.length > 0) {
-                container.appendChild(buildPvForecastActualChart(pvComparison.labels, pvComparison.forecast, pvComparison.actual));
+                updateOrAppendDashboardWidget(container, 'pvLeistung', buildPvForecastActualChart(pvComparison.labels, pvComparison.forecast, pvComparison.actual));
                 pvChartRendered = true;
             }
         } catch (err) {
             console.log(err);
         }
         if (!pvChartRendered) {
-            container.appendChild(buildLineChart('PV-Leistung', 'kW', data.labels, data.pv_generation, {minY: 0}));
+            updateOrAppendDashboardWidget(container, 'pvLeistung', buildLineChart('PV-Leistung', 'kW', data.labels, data.pv_generation, {minY: 0}));
         }
         if (data.einsatzplan) {
-            container.appendChild(buildEinsatzplanCard(data.einsatzplan, data.optimizer_running));
+            updateOrAppendDashboardWidget(container, 'einsatzplan', buildEinsatzplanCard(data.einsatzplan, data.optimizer_running));
         }
-        container.appendChild(buildLineChart('Raumtemperatur', '°C', data.output_labels, data.t_i_target, {
+        updateOrAppendDashboardWidget(container, 'raumtemperatur', buildLineChart('Raumtemperatur', '°C', data.output_labels, data.t_i_target, {
             subtitle: 'Ziel',
             stepped: true,
             round: true,
@@ -5658,10 +5676,10 @@ async function loadDashboard() {
                 ? 'Heizung deaktiviert - keine Heizungs-Aktionen'
                 : null,
         }));
-        container.appendChild(buildLineChart('Warmwasser', '°C', data.output_labels, data.t_hw, {
+        updateOrAppendDashboardWidget(container, 'warmwasser', buildLineChart('Warmwasser', '°C', data.output_labels, data.t_hw, {
             slopeBands: {riseColor: 'var(--color-accent)', dropColor: 'var(--color-error)', flatColor: 'var(--color-text-secondary)', bigDropThreshold: 1},
         }));
-        container.appendChild(buildLineChart('Ladestand Heimspeicher', '%', data.output_labels, data.soc_b, {
+        updateOrAppendDashboardWidget(container, 'ladestandHeimspeicher', buildLineChart('Ladestand Heimspeicher', '%', data.output_labels, data.soc_b, {
             fixedMin: 0,
             fixedMax: 100,
             slopeBands: {riseColor: 'var(--color-accent)', dropColor: 'var(--color-error)', flatColor: 'var(--color-text-secondary)', bigDropThreshold: 0.1},
@@ -5700,11 +5718,11 @@ async function loadDashboard() {
             slopeBands: {riseColor: 'var(--color-accent)', dropColor: 'var(--color-error)', flatColor: 'var(--color-text-secondary)', bigDropThreshold: 0.1},
             presenceForecast,
         });
-        container.appendChild(ladestandAutoChart);
         if (consumptionForecast) {
             ladestandAutoChart.appendChild(buildCarConsumptionForecastDetails(
                 consumptionForecast.labels, consumptionForecast.consumptionKwh, consumptionForecast.lowDataBasis, presenceForecast));
         }
+        updateOrAppendDashboardWidget(container, 'ladestandAuto', ladestandAutoChart);
     } catch (err) {
         console.log(err);
         container.innerHTML = '';
@@ -5715,57 +5733,10 @@ async function loadDashboard() {
     }
 }
 
-// Haelt das Energiefluss-Widget aktuell, ohne den restlichen Dashboard-Tab (Liniencharts,
-// Anwesenheitsprognose) mit neu aufzubauen - die Charts aendern sich ohnehin nur stuendlich, taeglich
-// neu zu laden waere unnoetiger Aufwand und wuerde bei jedem Tick kurz aufblitzen/den Scroll
-// zuruecksetzen. Ersetzt nur den bestehenden .energyFlowWidget-Knoten durch einen frisch gebauten.
+// Gemeinsames Intervall fuer alle periodischen Hintergrund-Refreshs (Dashboard, Gerätesteuerung, ...).
 const ENERGY_FLOW_REFRESH_INTERVAL_MS = 30000;
 
-async function refreshEnergyFlowWidget() {
-    if (document.visibilityState !== 'visible') return;
-    const dashboardTab = document.getElementById('tab-dashboard');
-    if (!dashboardTab || !dashboardTab.classList.contains('active')) return;
-    const container = document.getElementById('dashboardBody');
-    const existing = container ? container.querySelector('.energyFlowWidget') : null;
-    // kein bestehendes Widget (z.B. Dashboard noch nicht/fehlgeschlagen geladen) - nichts zu ersetzen,
-    // der naechste volle loadDashboard() (Seitenaufruf) kuemmert sich darum
-    if (!existing) return;
-    try {
-        const flowData = await getJson(insideHomeAssistant + '/dashboard/energy-flow');
-        existing.replaceWith(buildEnergyFlowWidget(flowData));
-    } catch (err) {
-        // best-effort: das zuletzt erfolgreich gerenderte Widget bleibt einfach stehen
-        console.log(err);
-    }
-}
-
-setInterval(refreshEnergyFlowWidget, ENERGY_FLOW_REFRESH_INTERVAL_MS);
-
-// Wie refreshEnergyFlowWidget oben, nur fuer die Einsatzplan-Karte - die zeigt u.a. "Neue
-// Optimierung laeuft..." (siehe buildEinsatzplanCard/optimizer_running), einen per Definition
-// voruebergehenden Zustand. Ohne eigenen Refresh wuerde die Karte einmalig beim Seitenaufruf gebaut
-// und danach nie wieder aktualisiert - eine erst NACH dem Laden gestartete Optimierung (oder ihr
-// Abschluss) waere dann nie sichtbar, ohne die Seite manuell neu zu laden.
-async function refreshEinsatzplanCard() {
-    if (document.visibilityState !== 'visible') return;
-    const dashboardTab = document.getElementById('tab-dashboard');
-    if (!dashboardTab || !dashboardTab.classList.contains('active')) return;
-    const container = document.getElementById('dashboardBody');
-    const existing = container ? container.querySelector('.einsatzplanCard') : null;
-    if (!existing) return;
-    try {
-        const data = await getJson(insideHomeAssistant + '/dashboard/chart-data');
-        if (data.einsatzplan) {
-            existing.replaceWith(buildEinsatzplanCard(data.einsatzplan, data.optimizer_running));
-        }
-    } catch (err) {
-        console.log(err);
-    }
-}
-
-setInterval(refreshEinsatzplanCard, ENERGY_FLOW_REFRESH_INTERVAL_MS);
-
-// Wie refreshEnergyFlowWidget/refreshEinsatzplanCard oben: die Gerätesteuerung-Liste wurde bisher
+// Wie refreshDashboard/refreshShyftActions unten: die Gerätesteuerung-Liste wurde bisher
 // nur einmal beim Öffnen der Seite geladen (loadShyftActions) - ein zwischenzeitlicher Statuswechsel
 // (z.B. "aktiv" -> "beendet" zur vollen Stunde, siehe run_hourly_action_transition) blieb im Browser
 // unsichtbar, bis man die Seite manuell neu laedt. loadShyftActions baut die Liste komplett neu auf
@@ -5784,8 +5755,10 @@ setInterval(refreshShyftActions, ENERGY_FLOW_REFRESH_INTERVAL_MS);
 // Charts (Strompreis, PV-Leistung, Raumtemperatur, ...) zeigten dann als erste Stunde weiterhin den
 // Stand von damals, auch wenn /dashboard/chart-data serverseitig laengst vergangene Stunden
 // abschneidet (siehe readDashboardChartData) - ohne einen erneuten Fetch bekommt das Frontend davon
-// schlicht nichts mit. Baut wie loadShyftActions/renderShyftActions die komplette Sektion neu auf
-// (container.innerHTML = ''), dasselbe Muster wie der bestehende Gerätesteuerung-Refresh.
+// schlicht nichts mit. Anders als frueher (und anders als refreshShyftActions) baut loadDashboard()
+// dafuer NICHT die komplette Sektion neu auf - jedes Widget wird einzeln per
+// updateOrAppendDashboardWidget an seinem bestehenden Platz ausgetauscht (siehe dort), damit die
+// Seite beim periodischen Refresh nicht sichtbar "neu laedt"/die Scrollposition zurueckspringt.
 async function refreshDashboard() {
     if (document.visibilityState !== 'visible') return;
     const panel = document.getElementById('tab-dashboard');
