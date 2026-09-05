@@ -97,3 +97,9 @@ def active_problems():
         problems = list(_read().values())
     problems.sort(key=lambda p: p.get("lastSeen", ""), reverse=True)
     return problems
+
+
+def is_active(problem_id):
+    "True, wenn genau diese Problem-ID aktuell registriert ist - z.B. als Sicherheits-Gate, bevor ein Wert aus der juengsten Historie einer Entitaet uebernommen wird, deren letzte Aktion evtl. fehlgeschlagen ist (siehe compute_hw_soc_min)."
+    with _lock:
+        return problem_id in _read()

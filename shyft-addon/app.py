@@ -2704,11 +2704,74 @@ DHW_TARGET_TEMP_RETRY_DELAY_SECONDS = 10
 DHW_TARGET_TEMP_RETRY_TIMEOUT_SECONDS = 60
 DHW_TARGET_TEMP_TEST_TIMEOUT_SECONDS = 20
 DHW_TARGET_TEMP_TEST_BOOST_C = 5
-DHW_TARGET_TEMP_TEST_REVERT_DELAY_MINUTES = 3
 
 
 def _dhw_target_temp_entity(config):
     return (config.get("sensorMappings", {}) or {}).get(DHW_TARGET_TEMP_SENSOR_FIELD, "")
+
+
+# ============================================================================
+# hw_soc_min: die Warmwasser-Solltemperatur-Entitaet ist gleichzeitig Eingabe (Untergrenze, unter
+# die der Optimierer nie gehen soll) UND Steuerungsgroesse (waehrend "Warmwasser" laeuft, wird sie
+# ueber diese Untergrenze hinaus angehoben, siehe _start_dhw_target_temp_boost). Statt dafuer ein
+# eigenes Konfigurationsfeld abzufragen, wird die Untergrenze automatisch aus der juengsten
+# Sensor-Historie abgeleitet (Minimum der letzten HW_SOC_MIN_HISTORY_HOURS Stunden) - in aller Regel
+# genau der Wert, auf den die Entitaet zurueckfaellt, wenn gerade keine "Warmwasser"-Aktion laeuft.
+#
+# Sicherheitsnetz gegen ein "Hochschaukeln": ein einzelner fehlgeschlagener Rueckstell-Versuch am
+# Ende einer Aktion (siehe _end_dhw_target_temp_restore) hinterlaesst die Entitaet dauerhaft auf dem
+# angehobenen Wert - wuerde man dann OHNE weitere Pruefung einfach das Minimum der letzten Stunden
+# uebernehmen, koennte dieser bereits erhoehte Wert selbst zur neuen "Untergrenze" werden, und mit
+# jedem weiteren betroffenen Zyklus faelschlich immer weiter steigen. Ein fehlgeschlagenes
+# Zuruecksetzen wird bereits jetzt als "action_failed:warmwasser"-Problem gemeldet (siehe
+# handle_shyft_action_end/_note_action_outcome) und bleibt (bewusst ohne automatisches
+# Verfallsdatum, siehe problem_registry) so lange aktiv, bis ein SPAETERES Zuruecksetzen wieder
+# erfolgreich war - genau dieses Signal reicht als Sicherheitsbedingung: solange es aktiv ist, wird
+# der zuletzt zwischengespeicherte Wert unveraendert weiterverwendet statt ein neues (potenziell
+# durch den haengengebliebenen Boost verfaelschtes) Minimum zu uebernehmen.
+# ============================================================================
+
+HW_SOC_MIN_HISTORY_HOURS = 12
+
+
+def compute_hw_soc_min(config):
+    """Minimum der Warmwasser-Solltemperatur-Historie der letzten HW_SOC_MIN_HISTORY_HOURS Stunden -
+    None, wenn keine Entitaet zugeordnet ist. Uebernimmt eine frische Berechnung nur, wenn seit dem
+    letzten Zuruecksetzen einer "Warmwasser"-Aktion kein Fehlschlag aktiv gemeldet ist (siehe
+    Modul-Kommentar oben) UND tatsaechlich verwertbare Messwerte in der Historie liegen - sonst wird
+    der zuletzt zwischengespeicherte Wert (falls vorhanden) unveraendert zurueckgegeben, damit ein
+    einzelner luecken-/fehlerhafter Durchlauf keinen bereits bekannten guten Wert verwirft."""
+    entity_id = _dhw_target_temp_entity(config)
+    if not entity_id:
+        return None
+    cached_value = config.get("hwSocMinC")
+    if problem_registry.is_active("action_failed:warmwasser"):
+        return cached_value
+    try:
+        end = datetime.now(timezone.utc)
+        start = end - timedelta(hours=HW_SOC_MIN_HISTORY_HOURS)
+        events = homeassistant_adapter.load_entity_history_raw(entity_id, start, end)
+    except Exception as e:
+        print("[Shyft] hw_soc_min: Historie konnte nicht gelesen werden:", repr(e))
+        return cached_value
+    values = []
+    for _last_changed, state in events:
+        try:
+            values.append(float(state))
+        except (TypeError, ValueError):
+            continue
+    if not values:
+        return cached_value
+    return min(values)
+
+
+def maybe_compute_hw_soc_min():
+    "Wie maybe_detect_battery_flow_sign_convention - einmal beim Addon-Start UND taeglich per Cron (siehe Scheduler), damit hw_soc_min nicht auf einem veralteten Stand haengen bleibt, aber auch nicht bei jedem Tick unnoetig neu berechnet wird."
+    config = _read_current_config()
+    hw_soc_min = compute_hw_soc_min(config)
+    if hw_soc_min != config.get("hwSocMinC"):
+        config["hwSocMinC"] = hw_soc_min
+        _write_current_config(config)
 
 
 def _write_and_verify_dhw_target_temp(entity_id, target_value, retry_timeout_seconds):
@@ -2763,31 +2826,40 @@ def _start_dhw_target_temp_boost(action, config):
 
 
 def _end_dhw_target_temp_restore(action, config):
-    "Gegenstueck zu _start_dhw_target_temp_boost - setzt die Solltemperatur-Entitaet auf den beim Start gemerkten Wert zurueck. Kein-Op, wenn keine Entitaet zugeordnet ist oder beim Start kein Wert gemerkt werden konnte (z.B. weil sie damals nicht lesbar war)."
+    """Gegenstueck zu _start_dhw_target_temp_boost - setzt die Solltemperatur-Entitaet zurueck.
+    Bevorzugt hw_soc_min (die gepflegte, aus der Historie abgeleitete Untergrenze - siehe
+    compute_hw_soc_min): das ist der eigentlich gewuenschte Ruhewert, unabhaengig davon, ob der beim
+    Start dieser SPEZIELLEN Aktion gemerkte Live-Wert selbst schon (durch eine vorherige, fehlge-
+    schlagene Rueckstellung) verfaelscht war - genau das verhindert ein schleichendes Hochschaukeln
+    ueber mehrere Zyklen hinweg. Faellt nur auf den Start-Snapshot (_dhwTargetTempRestoreValue)
+    zurueck, wenn hw_soc_min noch nicht verfuegbar ist (z.B. direkt nach der Ersteinrichtung, bevor
+    genug Historie vorliegt). Kein-Op, wenn keine Entitaet zugeordnet ist oder beides fehlt."""
     entity_id = _dhw_target_temp_entity(config)
-    restore_value = action.get("_dhwTargetTempRestoreValue")
-    if not entity_id or restore_value is None:
+    if not entity_id:
+        return
+    hw_soc_min = config.get("hwSocMinC")
+    restore_value = hw_soc_min if hw_soc_min is not None else action.get("_dhwTargetTempRestoreValue")
+    if restore_value is None:
         return
     if not _write_and_verify_dhw_target_temp(entity_id, restore_value, DHW_TARGET_TEMP_RETRY_TIMEOUT_SECONDS):
         raise Exception(f"Solltemperatur konnte nicht auf {restore_value} °C zurueckgesetzt werden")
 
 
-def _revert_dhw_target_temp_test(entity_id, original_value):
-    "Vom manuellen Solltemperatur-Test (testHotWaterTargetTemp) DHW_TARGET_TEMP_TEST_REVERT_DELAY_MINUTES spaeter ueber den Scheduler angestossen - setzt den Testwert wieder zurueck, ohne dass der Testklick selbst so lange blockieren muss."
-    with app.app_context():
-        if not _write_and_verify_dhw_target_temp(entity_id, original_value, DHW_TARGET_TEMP_RETRY_TIMEOUT_SECONDS):
-            print(f"[Shyft] Warmwasser-Solltemperatur-Test: Ruecksetzen auf {original_value} °C fuer '{entity_id}' fehlgeschlagen.")
+DHW_ACTIVATION_TEST_POLL_INTERVAL_SECONDS = 5
+DHW_ACTIVATION_TEST_POLL_TIMEOUT_SECONDS = 90
 
 
 @app.route("/actions/hot_water_target_temp/test", methods=["POST"])
 def testHotWaterTargetTemp():
-    """Testet Solltemperatur-Entitaet UND Aktivierung zusammen, nicht nur die Entitaet fuer sich:
-    erhoeht den aktuell gelesenen Sollwert testweise um DHW_TARGET_TEMP_TEST_BOOST_C, loest bei
-    Erfolg dieselbe Aktivierung wie eine echte Aktion aus (execute_hot_water_activate) und gilt nur
-    als erfolgreich, wenn BEIDES geklappt hat. Setzt die Solltemperatur nach
-    DHW_TARGET_TEMP_TEST_REVERT_DELAY_MINUTES automatisch im Hintergrund zurueck (siehe
-    _revert_dhw_target_temp_test), damit ein Testklick keinen dauerhaft erhoehten Sollwert
-    hinterlaesst."""
+    """Ein einziger Test fuer die komplette Warmwasserbereitung (ersetzt die frueher getrennten
+    "Test: Warmwasserbereitung"/"Test: Solltemperatur"-Buttons): erhoeht den aktuell gelesenen
+    Sollwert testweise um DHW_TARGET_TEMP_TEST_BOOST_C, loest dieselbe Aktivierung wie eine echte
+    Aktion aus (execute_hot_water_activate) und prueft per Live-Status, ob "Warmwasser gerade
+    erwärmt? An/Aus" (heatpump_dhw_on_off) daraufhin tatsaechlich auf An springt - bis zu
+    DHW_ACTIVATION_TEST_POLL_TIMEOUT_SECONDS lang. Setzt die Solltemperatur DANACH synchron auf den
+    urspruenglichen Wert zurueck (kein spaeterer Hintergrund-Job mehr noetig, da der Testklick ohnehin
+    schon auf das Umspringen wartet). Gilt nur als voller Erfolg, wenn Setzen, Aktivierung, das
+    Umspringen auf An UND das Zuruecksetzen alle geklappt haben."""
     config = _read_current_config()
     entity_id = _dhw_target_temp_entity(config)
     if not entity_id:
@@ -2799,28 +2871,41 @@ def testHotWaterTargetTemp():
 
     boosted_value = original_value + DHW_TARGET_TEMP_TEST_BOOST_C
     write_ok = _write_and_verify_dhw_target_temp(entity_id, boosted_value, DHW_TARGET_TEMP_TEST_TIMEOUT_SECONDS)
+    if not write_ok:
+        return jsonify({"success": False, "message": "Solltemperatur konnte nicht gesetzt/verifiziert werden",
+                         "originalValue": original_value, "boostedValue": boosted_value}), 500
 
     activate_error = None
-    if write_ok:
-        try:
-            execute_hot_water_activate()
-        except Exception as e:
-            activate_error = str(e)
-        scheduler.add_job(
-            _revert_dhw_target_temp_test,
-            "date",
-            run_date=datetime.now(timezone.utc) + timedelta(minutes=DHW_TARGET_TEMP_TEST_REVERT_DELAY_MINUTES),
-            id=f"dhw_target_temp_test_revert_{time.time()}",
-            args=[entity_id, original_value],
-            misfire_grace_time=120,
-        )
+    try:
+        execute_hot_water_activate()
+    except Exception as e:
+        activate_error = str(e)
 
-    if write_ok and activate_error is None:
+    heating_confirmed = False
+    if activate_error is None:
+        deadline = time.time() + DHW_ACTIVATION_TEST_POLL_TIMEOUT_SECONDS
+        while True:
+            if _read_mapped_bool_on(config, "heatpump_dhw_on_off") is True:
+                heating_confirmed = True
+                break
+            if time.time() >= deadline:
+                break
+            time.sleep(DHW_ACTIVATION_TEST_POLL_INTERVAL_SECONDS)
+
+    revert_ok = _write_and_verify_dhw_target_temp(entity_id, original_value, DHW_TARGET_TEMP_RETRY_TIMEOUT_SECONDS)
+
+    if activate_error is None and heating_confirmed and revert_ok:
         _note_action_outcome(DHW_ACTION_NAME, "getestet", None)
         return jsonify({"success": True, "originalValue": original_value, "boostedValue": boosted_value})
 
-    message = "Solltemperatur konnte nicht gesetzt/verifiziert werden" if not write_ok \
-        else f"Warmwasserbereitung fehlgeschlagen: {activate_error}"
+    if activate_error is not None:
+        message = f"Warmwasserbereitung fehlgeschlagen: {activate_error}"
+    elif not heating_confirmed:
+        message = "\"Warmwasser gerade erwärmt?\" ist nicht auf An gesprungen"
+    else:
+        message = "Solltemperatur konnte nach dem Test nicht zurückgesetzt werden"
+    if not revert_ok and (activate_error is not None or not heating_confirmed):
+        message += " - Solltemperatur konnte außerdem nicht zurückgesetzt werden"
     return jsonify({"success": False, "message": message, "originalValue": original_value, "boostedValue": boosted_value}), 500
 
 
@@ -2968,35 +3053,6 @@ def testCarChargeStop():
         return jsonify({"success": False, "message": str(e)}), 500
     except Exception as e:
         log_error_to_shyft("car_charge_stop_test", classify_error(str(e)), str(e))
-        return jsonify({"success": False, "message": str(e)}), 500
-
-
-@app.route("/actions/hot_water_activate/test", methods=["POST"])
-def testHotWaterActivate():
-    config = _read_current_config()
-    recipe = config.get("hotWaterRecipe", {})
-
-    if recipe.get("type") == "ha_automation":
-        if not recipe.get("haAutomationEntityId"):
-            return jsonify({"success": False, "message": "Keine Automation ausgewählt"}), 400
-        try:
-            trigger_ha_automation(recipe.get("haAutomationEntityId"), "start", None)
-            return jsonify({"success": True})
-        except Exception as e:
-            log_error_to_shyft("hot_water_activate_test", classify_error(str(e)), str(e),
-                                service_called="automation.trigger")
-            return jsonify({"success": False, "message": str(e)}), 500
-
-    if not recipe.get("service"):
-        return jsonify({"success": False, "message": "Kein Befehl konfiguriert"}), 400
-    try:
-        call_recipe_stage(recipe, integration_key="waermepumpe")
-        return jsonify({"success": True})
-    except RecipeCallError as e:
-        log_error_to_shyft("hot_water_activate_test", "service_call_failed", str(e), service_called=e.service, data_sent=e.data)
-        return jsonify({"success": False, "message": str(e)}), 500
-    except Exception as e:
-        log_error_to_shyft("hot_water_activate_test", classify_error(str(e)), str(e))
         return jsonify({"success": False, "message": str(e)}), 500
 
 
@@ -5189,6 +5245,10 @@ def maybe_detect_battery_flow_sign_convention_periodically():
     with app.app_context():
         maybe_detect_battery_flow_sign_convention()
 
+def maybe_compute_hw_soc_min_periodically():
+    with app.app_context():
+        maybe_compute_hw_soc_min()
+
 def fetch_weather_forecast_periodically():
     with app.app_context():
         fetch_weather_forecast()
@@ -5262,6 +5322,11 @@ scheduler.add_job(run_pv_surplus_charging_tick_periodically, 'interval', minutes
 # wurde (siehe maybe_detect_battery_flow_sign_convention) - z.B. weil bei der Ersteinrichtung noch
 # nicht genug Lade-/Entladewechsel in der Historie vorlagen
 scheduler.add_job(maybe_detect_battery_flow_sign_convention_periodically, 'cron', hour="3", minute="30")
+# hw_soc_min taeglich neu aus der juengsten Solltemperatur-Historie ableiten (siehe
+# compute_hw_soc_min) - haelt sich an echte, langsam driftende Nutzer-Anpassungen, ohne bei jedem
+# Tick neu zu rechnen; das Sicherheits-Gate darin verhindert ein Uebernehmen waehrend eine
+# fehlgeschlagene Rueckstellung noch als aktives Problem gemeldet ist.
+scheduler.add_job(maybe_compute_hw_soc_min_periodically, 'cron', hour="3", minute="45")
 # open-meteo-Wetterprognose alle 3h holen (Minute 2, kurz nach den ueblichen Modell-Publikationen);
 # die m2-Kalibrierung der PV-Prognose laeuft taeglich um 22:00 lokal (siehe pv_forecast.py)
 scheduler.add_job(fetch_weather_forecast_periodically, 'cron', hour="*/3", minute="2")
@@ -5320,6 +5385,11 @@ if __name__ == "__main__":
         maybe_detect_battery_flow_sign_convention()
     except Exception as e:
         print("Failed to detect battery flow sign convention at startup:", repr(e))
+
+    try:
+        maybe_compute_hw_soc_min()
+    except Exception as e:
+        print("Failed to compute hw_soc_min at startup:", repr(e))
 
     try:
         # damit das Dashboard sofort eine Wetterprognose zeigen kann, auch bevor der erste

@@ -3333,33 +3333,39 @@ function buildHotWaterControl() {
     const statusDisplay = document.createElement('span');
     statusDisplay.className = 'autoActionValue';
 
-    // shows the mapped "Warmwassermodus aktiviert?" sensor's own state - an honest read of
-    // whatever the Wärmepumpe integration reports, not a claim that the test call itself is
-    // being verified (see the "(wird geprüft...)" wording fix for why that distinction matters)
+    // Zeigt den mapped "Warmwasser gerade erwärmt? An/Aus"-Sensor (heatpump_dhw_on_off) - genau
+    // das, was der Test unten prueft, statt des davon unabhaengigen "Warmwassermodus aktiviert?"-
+    // Sensors (heatpump_dhw_activated, der nur meldet OB die Funktion an der Waermepumpe generell
+    // aktiviert ist, nicht ob gerade tatsaechlich erwaermt wird).
     function refreshHotWaterStatus() {
-        const entity = (configData['sensorMappings'] || {})['heatpump_dhw_activated'] || '';
+        const entity = (configData['sensorMappings'] || {})['heatpump_dhw_on_off'] || '';
         if (!entity) {
-            statusDisplay.textContent = 'Warmwassermodus: – (kein Sensor zugeordnet)';
+            statusDisplay.textContent = 'Warmwasser gerade erwärmt?: – (kein Sensor zugeordnet)';
             return;
         }
         const match = allSensorIdOptions.find(e => e.entity_id === entity);
-        statusDisplay.textContent = 'Warmwassermodus: ' + (match ? match.state : '–');
+        statusDisplay.textContent = 'Warmwasser gerade erwärmt?: ' + (match ? match.state : '–');
     }
 
+    // Ein einziger Test fuer die komplette Warmwasserbereitung (ersetzt die frueher getrennten
+    // "Test: Warmwasserbereitung"/"Test: Solltemperatur"-Buttons): erhoeht die Solltemperatur um
+    // 5 °C, loest die Aktivierung aus, wartet serverseitig bis zu 90s darauf, dass "Warmwasser
+    // gerade erwärmt?" auf An springt, und setzt die Solltemperatur danach wieder zurueck (siehe
+    // /actions/hot_water_target_temp/test) - kann deshalb spuerbar laenger dauern als ein normaler
+    // Testklick.
     const testButton = document.createElement('button');
     testButton.type = 'button';
     testButton.textContent = 'Test: Warmwasserbereitung';
     testButton.addEventListener('click', async () => {
         testButton.disabled = true;
-        status.textContent = 'Teste...';
+        status.textContent = 'Teste... (kann bis zu 90s dauern)';
         status.className = 'autoActionStatus';
         try {
-            const response = await fetch(insideHomeAssistant + '/actions/hot_water_activate/test', {method: 'POST'});
+            const response = await fetch(insideHomeAssistant + '/actions/hot_water_target_temp/test', {method: 'POST'});
             const result = await response.json();
             if (result.success) {
-                status.textContent = 'Gesendet: Warmwasserbereitung aktiviert.';
+                status.textContent = `Erfolgreich: Solltemperatur ${result.originalValue} °C → ${result.boostedValue} °C → zurückgesetzt, "Warmwasser gerade erwärmt?" ist auf An gesprungen.`;
                 status.className = 'autoActionStatus status-ok';
-                setTimeout(refreshHotWaterStatus, 4000);
             } else {
                 status.textContent = 'Fehler: ' + (result.message || 'unbekannt');
                 status.className = 'autoActionStatus status-error';
@@ -3370,42 +3376,12 @@ function buildHotWaterControl() {
             status.className = 'autoActionStatus status-error';
         } finally {
             testButton.disabled = false;
-        }
-    });
-
-    // Zweiter Test speziell fuer die "Warmwasser: Solltemperatur"-Entitaet (sensorMappings-Zeile in
-    // der Sensor-Tabelle oben): erhoeht den aktuell gelesenen Sollwert im Hintergrund um 5 °C,
-    // loest danach dieselbe Warmwasserbereitung wie eine echte Aktion aus und setzt den Sollwert
-    // nach 3 Minuten automatisch zurueck (serverseitig, siehe /actions/hot_water_target_temp/test).
-    const targetTempTestButton = document.createElement('button');
-    targetTempTestButton.type = 'button';
-    targetTempTestButton.textContent = 'Test: Solltemperatur (+5 °C)';
-    targetTempTestButton.addEventListener('click', async () => {
-        targetTempTestButton.disabled = true;
-        status.textContent = 'Teste Solltemperatur...';
-        status.className = 'autoActionStatus';
-        try {
-            const response = await fetch(insideHomeAssistant + '/actions/hot_water_target_temp/test', {method: 'POST'});
-            const result = await response.json();
-            if (result.success) {
-                status.textContent = `Erfolgreich: Solltemperatur ${result.originalValue} °C → ${result.boostedValue} °C, Warmwasserbereitung ausgelöst. Wird in 3 Minuten automatisch zurückgesetzt.`;
-                status.className = 'autoActionStatus status-ok';
-            } else {
-                status.textContent = 'Fehler: ' + (result.message || 'unbekannt');
-                status.className = 'autoActionStatus status-error';
-            }
-        } catch (err) {
-            console.log(err);
-            status.textContent = 'Fehler beim Testen';
-            status.className = 'autoActionStatus status-error';
-        } finally {
-            targetTempTestButton.disabled = false;
+            refreshHotWaterStatus();
         }
     });
 
     controlsRow.appendChild(statusDisplay);
     controlsRow.appendChild(testButton);
-    controlsRow.appendChild(targetTempTestButton);
     wrapper.appendChild(controlsRow);
 
     wrapper.__refresh = refreshHotWaterStatus;

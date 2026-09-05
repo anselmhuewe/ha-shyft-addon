@@ -251,6 +251,11 @@ class SyncService:
         add("HP - Heating Curve, slope", "hpHeatingCurveSlope")
         add("B - Capacity", "batteryCapacityKwh")
         add("B - SOC min", "batterySocMinPercent")
+        # Untergrenze der Warmwasser-Solltemperatur, automatisch aus der juengsten Sensor-Historie
+        # abgeleitet statt per eigenem Konfigurationsfeld abgefragt (siehe compute_hw_soc_min in
+        # app.py) - fehlt (kein add()), solange noch kein Wert berechnet werden konnte (z.B. keine
+        # Entitaet zugeordnet oder noch keine Historie vorhanden).
+        add("hw_soc_min", "hwSocMinC")
         add("EV - SOC Normal", "evSocNormal")
         add("EV - SOC Max PV Surplus", "evSocMaxPvSurplus")
         add("CO - Price Gas", "coPriceGas")
