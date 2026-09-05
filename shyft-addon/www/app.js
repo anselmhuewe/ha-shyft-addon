@@ -50,6 +50,10 @@ const helpinformation = {
         label: 'Temperatur Warmwassertank',
         description: ' Die aktuelle Temperatur im Warmwassertank (in °C)'
     },
+    'heatpump_dhw_target_temp': {
+        label: 'Warmwasser: Solltemperatur (°C)',
+        description: ' Die Home-Assistant-Entity (number oder climate), über die Shyft die Ziel-/Solltemperatur für die Warmwasserbereitung setzt. Während einer "Warmwasser"-Aktion wird sie auf den von Shyft berechneten Zielwert gesetzt und beim Beenden der Aktion wieder auf den vorherigen Wert zurückgesetzt.'
+    },
     'heatpump_dhw_activated': {
         label: 'Warmwassermodus aktiviert? An/Aus',
         description: ' je nachdem ob an deiner Wärmepumpe die Warmwasserbereitung aktiviert ist oder nicht.'
@@ -161,6 +165,7 @@ const SENSOR_ENTITY_FILTERS = {
     'battery_charge_limit_current': {type: 'device_class', value: 'power'},
     'battery_discharge_limit_current': {type: 'device_class', value: 'power'},
     'heatpump_dhw_tank_temp': {type: 'device_class', value: 'temperature'},
+    'heatpump_dhw_target_temp': {type: 'device_class', value: 'temperature'},
     'heatpump_dhw_activated': {type: 'state_on_off'},
     'heatpump_dhw_on_off': {type: 'state_on_off'},
     'heatpump_heating_target_temp_normal': {type: 'device_class', value: 'temperature'},
@@ -206,7 +211,7 @@ const INTEGRATION_SECTIONS = [
     {
         key: 'waermepumpe',
         label: 'Wärmepumpe',
-        sensors: ['heatpump_dhw_tank_temp', 'heatpump_dhw_activated', 'heatpump_dhw_on_off', 'heatpump_heating_target_temp_normal', 'heatpump_heating_activated', 'heatpump_current_power_elect', 'heatpump_on_off', 'heatpump_supply_temp_hp'],
+        sensors: ['heatpump_dhw_tank_temp', 'heatpump_dhw_target_temp', 'heatpump_dhw_activated', 'heatpump_dhw_on_off', 'heatpump_heating_target_temp_normal', 'heatpump_heating_activated', 'heatpump_current_power_elect', 'heatpump_on_off', 'heatpump_supply_temp_hp'],
         actions: ['hot_water', 'heating_target_temp'],
         requiresDeviceClass: 'temperature',
         hasDemo: true
@@ -3246,8 +3251,39 @@ function buildHotWaterControl() {
         }
     });
 
+    // Zweiter Test speziell fuer die "Warmwasser: Solltemperatur"-Entitaet (sensorMappings-Zeile in
+    // der Sensor-Tabelle oben): erhoeht den aktuell gelesenen Sollwert im Hintergrund um 5 °C,
+    // loest danach dieselbe Warmwasserbereitung wie eine echte Aktion aus und setzt den Sollwert
+    // nach 3 Minuten automatisch zurueck (serverseitig, siehe /actions/hot_water_target_temp/test).
+    const targetTempTestButton = document.createElement('button');
+    targetTempTestButton.type = 'button';
+    targetTempTestButton.textContent = 'Test: Solltemperatur (+5 °C)';
+    targetTempTestButton.addEventListener('click', async () => {
+        targetTempTestButton.disabled = true;
+        status.textContent = 'Teste Solltemperatur...';
+        status.className = 'autoActionStatus';
+        try {
+            const response = await fetch(insideHomeAssistant + '/actions/hot_water_target_temp/test', {method: 'POST'});
+            const result = await response.json();
+            if (result.success) {
+                status.textContent = `Erfolgreich: Solltemperatur ${result.originalValue} °C → ${result.boostedValue} °C, Warmwasserbereitung ausgelöst. Wird in 3 Minuten automatisch zurückgesetzt.`;
+                status.className = 'autoActionStatus status-ok';
+            } else {
+                status.textContent = 'Fehler: ' + (result.message || 'unbekannt');
+                status.className = 'autoActionStatus status-error';
+            }
+        } catch (err) {
+            console.log(err);
+            status.textContent = 'Fehler beim Testen';
+            status.className = 'autoActionStatus status-error';
+        } finally {
+            targetTempTestButton.disabled = false;
+        }
+    });
+
     controlsRow.appendChild(statusDisplay);
     controlsRow.appendChild(testButton);
+    controlsRow.appendChild(targetTempTestButton);
     wrapper.appendChild(controlsRow);
 
     wrapper.__refresh = refreshHotWaterStatus;

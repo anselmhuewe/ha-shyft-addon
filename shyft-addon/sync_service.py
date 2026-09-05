@@ -16,6 +16,7 @@ LIST_OF_SENSORS = {
     "battery_charge_limit_current": "B - Charge Limit (current)",
     "battery_discharge_limit_current": "B - Discharge Limit (current)",
     "heatpump_dhw_tank_temp": "HP - DHW Tank Temp",
+    "heatpump_dhw_target_temp": "HP - DHW Target Temp",
     "heatpump_dhw_activated": "HP - DHW Activated",
     "heatpump_dhw_on_off": "HP - DHW on/off",
     "heatpump_heating_target_temp_normal": "HP - Heating Target Temp (normal)",
@@ -41,6 +42,7 @@ EXPECTED_UNITS = {
     "battery_charge_limit_current": "kW",
     "battery_discharge_limit_current": "kW",
     "heatpump_dhw_tank_temp": "°C",
+    "heatpump_dhw_target_temp": "°C",
     "heatpump_heating_target_temp_normal": "°C",
     "heatpump_current_power_elect": "kW",
     "heatpump_supply_temp_hp": "°C",
@@ -82,7 +84,7 @@ def convert_to_expected_unit(key, state, unit):
 DEMO_SECTION_SENSORS = {
     "wechselrichter": ["photovoltaic_powerflow_pv", "photovoltaic_powerflow_load", "photovoltaic_powerflow_grid", "photovoltaic_powerflow_battery"],
     "batterie": ["battery_storage_command_mode", "battery_state_of_charge", "battery_charge_limit_current", "battery_discharge_limit_current"],
-    "waermepumpe": ["heatpump_dhw_tank_temp", "heatpump_dhw_activated", "heatpump_dhw_on_off", "heatpump_heating_target_temp_normal", "heatpump_heating_activated", "heatpump_current_power_elect", "heatpump_on_off", "heatpump_supply_temp_hp"],
+    "waermepumpe": ["heatpump_dhw_tank_temp", "heatpump_dhw_target_temp", "heatpump_dhw_activated", "heatpump_dhw_on_off", "heatpump_heating_target_temp_normal", "heatpump_heating_activated", "heatpump_current_power_elect", "heatpump_on_off", "heatpump_supply_temp_hp"],
     "auto": ["electronicvehicle_state_of_charge"],
     "wallbox": ["wallbox_current_charging_power", "wallbox_plugged"],
 }
@@ -140,6 +142,8 @@ def get_demo_value(sensor_key):
         return "5.0", "kW"
     if sensor_key == "heatpump_dhw_tank_temp":
         return "52.0", "°C"
+    if sensor_key == "heatpump_dhw_target_temp":
+        return "48.0", "°C"
     if sensor_key == "heatpump_dhw_activated":
         return "on", None
     if sensor_key == "heatpump_dhw_on_off":

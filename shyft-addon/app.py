@@ -2592,13 +2592,156 @@ def execute_hot_water_activate():
     """"Warmwasserbereitung" is a single fixed action (e.g. a Wärmepumpe-integration's "one-time
     DHW charge" service) rather than a multi-stage recipe like "Auto laden" - there's no computed
     value and no branch to pick, and (unlike a wallbox) nothing to explicitly turn back off again,
-    so there's no matching stop/end action."""
+    so this itself has no matching stop/end action (the Solltemperatur-Boost below does, see
+    _end_dhw_target_temp_restore)."""
     config = _read_current_config()
     recipe = config.get("hotWaterRecipe", {})
     if recipe.get("type") == "ha_automation":
         trigger_ha_automation(recipe.get("haAutomationEntityId"), "start", None)
         return
     call_recipe_stage(recipe, integration_key="waermepumpe")
+
+
+# ============================================================================
+# Warmwasser: Solltemperatur-Boost - ergaenzt execute_hot_water_activate um einen echten Zielwert.
+# compute_dhw_actions berechnet laengst einen Target Value (die vom Optimierer prognostizierte
+# Warmwassertemperatur), der bisher nirgends an ein Geraet weitergegeben wurde - execute_hot_water_
+# activate loest nur den fixen "einmalig aufheizen"-Befehl aus, ohne Zieltemperatur. Waehrend
+# "Warmwasser" laeuft, wird die hier zugeordnete Solltemperatur-Entitaet der Waermepumpe deshalb
+# zusaetzlich auf den Target Value gesetzt (siehe handle_shyft_action_start) und beim Beenden der
+# Aktion wieder auf den Wert zurueckgesetzt, der dort unmittelbar vor dem Boost stand (siehe
+# handle_shyft_action_end). Der Snapshot wird direkt auf der Aktion gespeichert
+# (_dhwTargetTempRestoreValue) - die wird ueber _update_computed_action ohnehin schon persistiert,
+# ueberlebt also einen Addon-Neustart zwischen Start und Ende. Anders als bei AUTO_MANAGED_CONTROLS
+# gibt es hier keine "HA-Automation"-Variante - die Entitaet wird immer direkt geschrieben,
+# unabhaengig davon, ob hotWaterRecipe.type "direct" oder "ha_automation" ist (die Aktivierung
+# selbst bleibt davon unberuehrt). Optional: ist keine Entitaet zugeordnet, passiert einfach nichts
+# (kein Fehler) - execute_hot_water_activate funktioniert unveraendert auch ohne diesen Boost.
+# ============================================================================
+
+DHW_TARGET_TEMP_SENSOR_FIELD = "heatpump_dhw_target_temp"
+DHW_TARGET_TEMP_RETRY_DELAY_SECONDS = 10
+DHW_TARGET_TEMP_RETRY_TIMEOUT_SECONDS = 60
+DHW_TARGET_TEMP_TEST_TIMEOUT_SECONDS = 20
+DHW_TARGET_TEMP_TEST_BOOST_C = 5
+DHW_TARGET_TEMP_TEST_REVERT_DELAY_MINUTES = 3
+
+
+def _dhw_target_temp_entity(config):
+    return (config.get("sensorMappings", {}) or {}).get(DHW_TARGET_TEMP_SENSOR_FIELD, "")
+
+
+def _write_and_verify_dhw_target_temp(entity_id, target_value, retry_timeout_seconds):
+    """Schreibt target_value auf die Warmwasser-Solltemperatur-Entitaet (number.set_value oder
+    climate.set_temperature, je nach Domain) und prueft per Live-Status, ob sie ihn wirklich
+    uebernommen hat - mit Retry alle DHW_TARGET_TEMP_RETRY_DELAY_SECONDS, bis zu
+    retry_timeout_seconds. True bei Erfolg, False wenn nach Ablauf der Frist immer noch keine
+    Uebereinstimmung besteht (oder die Entitaet weder number- noch climate-Domain hat)."""
+    domain = entity_id.split(".")[0]
+    if domain == "number":
+        service, data_key = "set_value", "value"
+    elif domain == "climate":
+        service, data_key = "set_temperature", "temperature"
+    else:
+        print(f"[Shyft] Warmwasser-Solltemperatur: '{entity_id}' ist weder number- noch climate-Entity.")
+        return False
+    deadline = time.time() + retry_timeout_seconds
+    attempt = 0
+    while True:
+        attempt += 1
+        try:
+            homeassistant_adapter.call_service(domain, service, {"entity_id": entity_id, data_key: target_value})
+        except Exception as e:
+            print(f"[Shyft] Warmwasser-Solltemperatur: {domain}.{service} auf '{entity_id}' fehlgeschlagen (Versuch {attempt}):", repr(e))
+        try:
+            current_state = homeassistant_adapter.load_entity_state(entity_id)
+            if abs(float(current_state.state) - float(target_value)) < 1e-6:
+                return True
+        except Exception as e:
+            print(f"[Shyft] Warmwasser-Solltemperatur: Status von '{entity_id}' nicht lesbar (Versuch {attempt}):", repr(e))
+        if time.time() >= deadline:
+            return False
+        time.sleep(DHW_TARGET_TEMP_RETRY_DELAY_SECONDS)
+
+
+def _start_dhw_target_temp_boost(action, config):
+    """Setzt die Warmwasser-Solltemperatur-Entitaet (falls zugeordnet) auf den Target Value der
+    Aktion und merkt sich deren vorherigen Live-Wert auf der Aktion selbst fuer die Rueckstellung
+    beim Beenden (siehe _end_dhw_target_temp_restore). Kein-Op (kein Fehler), wenn keine Entitaet
+    zugeordnet ist oder die Aktion keinen Target Value hat - raised nur, wenn eine Entitaet
+    zugeordnet ist, das Schreiben/Verifizieren aber tatsaechlich fehlschlaegt."""
+    entity_id = _dhw_target_temp_entity(config)
+    if not entity_id:
+        return
+    target_value = action.get("Target Value")
+    if target_value is None:
+        return
+    previous_value = _read_mapped_numeric(config, DHW_TARGET_TEMP_SENSOR_FIELD)
+    if not _write_and_verify_dhw_target_temp(entity_id, target_value, DHW_TARGET_TEMP_RETRY_TIMEOUT_SECONDS):
+        raise Exception(f"Solltemperatur konnte nicht auf {target_value} °C gesetzt werden")
+    action["_dhwTargetTempRestoreValue"] = previous_value
+
+
+def _end_dhw_target_temp_restore(action, config):
+    "Gegenstueck zu _start_dhw_target_temp_boost - setzt die Solltemperatur-Entitaet auf den beim Start gemerkten Wert zurueck. Kein-Op, wenn keine Entitaet zugeordnet ist oder beim Start kein Wert gemerkt werden konnte (z.B. weil sie damals nicht lesbar war)."
+    entity_id = _dhw_target_temp_entity(config)
+    restore_value = action.get("_dhwTargetTempRestoreValue")
+    if not entity_id or restore_value is None:
+        return
+    if not _write_and_verify_dhw_target_temp(entity_id, restore_value, DHW_TARGET_TEMP_RETRY_TIMEOUT_SECONDS):
+        raise Exception(f"Solltemperatur konnte nicht auf {restore_value} °C zurueckgesetzt werden")
+
+
+def _revert_dhw_target_temp_test(entity_id, original_value):
+    "Vom manuellen Solltemperatur-Test (testHotWaterTargetTemp) DHW_TARGET_TEMP_TEST_REVERT_DELAY_MINUTES spaeter ueber den Scheduler angestossen - setzt den Testwert wieder zurueck, ohne dass der Testklick selbst so lange blockieren muss."
+    with app.app_context():
+        if not _write_and_verify_dhw_target_temp(entity_id, original_value, DHW_TARGET_TEMP_RETRY_TIMEOUT_SECONDS):
+            print(f"[Shyft] Warmwasser-Solltemperatur-Test: Ruecksetzen auf {original_value} °C fuer '{entity_id}' fehlgeschlagen.")
+
+
+@app.route("/actions/hot_water_target_temp/test", methods=["POST"])
+def testHotWaterTargetTemp():
+    """Testet Solltemperatur-Entitaet UND Aktivierung zusammen, nicht nur die Entitaet fuer sich:
+    erhoeht den aktuell gelesenen Sollwert testweise um DHW_TARGET_TEMP_TEST_BOOST_C, loest bei
+    Erfolg dieselbe Aktivierung wie eine echte Aktion aus (execute_hot_water_activate) und gilt nur
+    als erfolgreich, wenn BEIDES geklappt hat. Setzt die Solltemperatur nach
+    DHW_TARGET_TEMP_TEST_REVERT_DELAY_MINUTES automatisch im Hintergrund zurueck (siehe
+    _revert_dhw_target_temp_test), damit ein Testklick keinen dauerhaft erhoehten Sollwert
+    hinterlaesst."""
+    config = _read_current_config()
+    entity_id = _dhw_target_temp_entity(config)
+    if not entity_id:
+        return jsonify({"success": False, "message": "Keine Entität für die Solltemperatur zugeordnet"}), 400
+
+    original_value = _read_mapped_numeric(config, DHW_TARGET_TEMP_SENSOR_FIELD)
+    if original_value is None:
+        return jsonify({"success": False, "message": "Aktueller Sollwert nicht lesbar"}), 500
+
+    boosted_value = original_value + DHW_TARGET_TEMP_TEST_BOOST_C
+    write_ok = _write_and_verify_dhw_target_temp(entity_id, boosted_value, DHW_TARGET_TEMP_TEST_TIMEOUT_SECONDS)
+
+    activate_error = None
+    if write_ok:
+        try:
+            execute_hot_water_activate()
+        except Exception as e:
+            activate_error = str(e)
+        scheduler.add_job(
+            _revert_dhw_target_temp_test,
+            "date",
+            run_date=datetime.now(timezone.utc) + timedelta(minutes=DHW_TARGET_TEMP_TEST_REVERT_DELAY_MINUTES),
+            id=f"dhw_target_temp_test_revert_{time.time()}",
+            args=[entity_id, original_value],
+            misfire_grace_time=120,
+        )
+
+    if write_ok and activate_error is None:
+        _note_action_outcome(DHW_ACTION_NAME, "getestet", None)
+        return jsonify({"success": True, "originalValue": original_value, "boostedValue": boosted_value})
+
+    message = "Solltemperatur konnte nicht gesetzt/verifiziert werden" if not write_ok \
+        else f"Warmwasserbereitung fehlgeschlagen: {activate_error}"
+    return jsonify({"success": False, "message": message, "originalValue": original_value, "boostedValue": boosted_value}), 500
 
 
 def extract_select_options(field_info):
@@ -3402,13 +3545,25 @@ def handle_shyft_action_start(action, actions_enabled, config):
             print(f"[Shyft] Start fuer '{label}' fehlgeschlagen: {e!r}")
             _note_action_outcome(label, "gestartet", e)
     elif label == "Warmwasser":
+        # Solltemperatur-Boost und Aktivierung sind unabhaengig voneinander - beide werden immer
+        # versucht, auch wenn der jeweils andere fehlschlaegt (siehe _start_dhw_target_temp_boost),
+        # aber jeder Fehlschlag zaehlt fuer die gemeldete Aktion als Ganzes.
+        errors = []
+        try:
+            _start_dhw_target_temp_boost(action, config)
+        except Exception as e:
+            errors.append(str(e))
         try:
             execute_hot_water_activate()
+        except Exception as e:
+            errors.append(str(e))
+        if errors:
+            combined = Exception("; ".join(errors))
+            print(f"[Shyft] Start fuer '{label}' fehlgeschlagen: {combined!r}")
+            _note_action_outcome(label, "gestartet", combined)
+        else:
             print(f"[Shyft] Start ausgefuehrt fuer '{label}'.")
             _note_action_outcome(label, "gestartet")
-        except Exception as e:
-            print(f"[Shyft] Start fuer '{label}' fehlgeschlagen: {e!r}")
-            _note_action_outcome(label, "gestartet", e)
     elif ACTION_NAME_TO_ACTOR_KEY.get(label) in BATTERY_SHIFT_ACTOR_KEYS:
         actor_key = ACTION_NAME_TO_ACTOR_KEY[label]
         try:
@@ -3464,7 +3619,13 @@ def handle_shyft_action_end(action, actions_enabled, config):
             print(f"[Shyft] Ende fuer '{label}' fehlgeschlagen: {e!r}")
             _note_action_outcome(label, "beendet", e)
     elif label == "Warmwasser":
-        _note_action_outcome(label, "beendet")  # single-action Aktionstyp, kein Ende-Verhalten (siehe execute_hot_water_activate)
+        try:
+            _end_dhw_target_temp_restore(action, config)
+            print(f"[Shyft] Ende ausgefuehrt fuer '{label}'.")
+            _note_action_outcome(label, "beendet")
+        except Exception as e:
+            print(f"[Shyft] Ende fuer '{label}' fehlgeschlagen: {e!r}")
+            _note_action_outcome(label, "beendet", e)
     elif ACTION_NAME_TO_ACTOR_KEY.get(label) in BATTERY_SHIFT_ACTOR_KEYS:
         try:
             # shared across all three battery Aktionstypen - see BATTERY_SHIFT_ACTOR_KEYS - and no
@@ -3731,9 +3892,11 @@ def _recheck_active_pv_surplus_optimizer_action(config):
 
 # ============================================================================
 # Warmwasser (DHW) - zweiter Aktionstyp nach demselben Muster wie "Auto laden": Berechnung aus
-# output_csv, Reconciliation ueber die generische _reconcile_computed_actions, Start/Ende bereits
-# vorhanden (execute_hot_water_activate - "single-action" Aktionstyp, kein Ende-Verhalten). Kein
-# Live-Anschluss-Check wie bei "Auto laden" und keine PV-Ueberschuss-Sonderbehandlung.
+# output_csv, Reconciliation ueber die generische _reconcile_computed_actions. Die Aktivierung
+# selbst (execute_hot_water_activate) bleibt ein "single-action" Aktionstyp ohne eigenes
+# Ende-Verhalten - ein Ende-Verhalten gibt es aber fuer den separaten Solltemperatur-Boost (siehe
+# _start_dhw_target_temp_boost/_end_dhw_target_temp_restore weiter oben). Kein Live-Anschluss-Check
+# wie bei "Auto laden" und keine PV-Ueberschuss-Sonderbehandlung.
 # ============================================================================
 
 DHW_ACTION_NAME = "Warmwasser"
