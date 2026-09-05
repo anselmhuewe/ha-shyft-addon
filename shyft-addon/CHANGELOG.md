@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.0.45.2
+
+* **Fix: Autarkiegrad im Einsatzplan konnte weit über 100 % anzeigen** (z.B. 243 %) und schwankte zwischen zwei Optimierungsläufen extrem. Ursache: eingespeister Strom (negativer Netto-`GR_sum`) wurde gegen den Bezug gegengerechnet und landete so im Zähler. Jetzt zählt für die Autarkie nur noch der pro Stunde tatsächlich **eingekaufte** Netzstrom (Einspeise-Stunden auf 0 gesetzt, keine Verrechnung mit Bezug) – der Wert liegt damit von Natur aus zwischen 0 % und 100 %.
+
 ## 0.0.45.1
 
 * **Verbrauchsprognose fürs Auto grundlegend überarbeitet – konsistent mit der Anwesenheitsprognose.** Bisher wurde der erwartete Tagesverbrauch als „P(fahren) × Ø-Verbrauch" über *alle* Stunden verschmiert (plus eine Nachkorrektur nur für datenarme Stunden). Dadurch konnte der prognostizierte Ladestand über Tage abrutschen, obwohl die Anwesenheitsprognose „überwiegend eingesteckt" zeigte. Jetzt zweistufig: (1) Anwesenheit prognostizieren, (2) die historische Tagesfahrleistung **vollständig auf die für den Tag prognostizierten Abwesenheitsstunden** verteilen. Die Tagessumme der Prognose entspricht damit per Konstruktion der historischen Tagesfahrleistung, und die stündlichen kWh-Werte finden sich **1:1** in der `d_ev_kwh`-Spalte der Optimierer-Eingabe wieder (`ev_usage_h` ist jetzt exakt die Stundenmenge mit Verbrauch > 0).

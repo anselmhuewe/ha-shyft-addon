@@ -513,16 +513,17 @@ def _compute_einsatzplan_kpis(rows, pv_values):
     profits_opt sind Pro-Stunde-Spalten in output_csv (siehe OptimizerOutputHeader.java).
 
     GR_sum ist laut Optimierer (run_SHEMS.jl: "net load / feed in from / to the grid") ein NETTO-
-    Wert und wird in Stunden mit Netzeinspeisung negativ - je nach Kennzahl wird das unterschiedlich
-    behandelt (Absprache mit Nutzer nach anfaenglichem Bug: negativer "Netzstrom"-Preis, Autarkie
-    weit ueber 100%):
+    Wert und wird in Stunden mit Netzeinspeisung negativ. Fuer ø Netzstrom UND Autarkie wird jede
+    Stunde mit Einspeisung (negativer GR_sum) auf 0 gesetzt, d.h. Einspeisung wird gar nicht
+    beruecksichtigt und nicht gegen Bezug gegengerechnet (Nutzer-Vorgabe):
       - Stromverbrauch (kWh) = Summe(X_sum)
       - o Netzstrom (Cent/kWh): NUR tatsaechlich eingekaufter (positiver) Netzstrom zaehlt -
         eingespeister Strom wird fuer diese Kennzahl ignoriert (nicht gegengerechnet), pro Stunde
         bei 0 gekappt. "-" wenn gar keine Energie eingekauft wurde (z.B. 100% Autarkie).
-      - Autarkie (%) = (Summe(X_sum) - Summe(GR_sum, roh/netto)) / Summe(X_sum) * 100 - bewusst
-        UNGEKAPPT: bei Netto-Einspeisung (mehr Ertrag als Bezug) kann die Autarkie ueber 100%
-        liegen, das ist korrekt so (mehr eingespeist als bezogen). Nur nach unten auf 0% begrenzt.
+      - Autarkie (%) = (Summe(X_sum) - Summe(eingekaufter Netzenergie)) / Summe(X_sum) * 100 -
+        eingekaufte Netzenergie = GR_sum pro Stunde bei 0 gekappt (Einspeisung ignoriert). Dadurch
+        von Natur aus zwischen 0% und 100%: kein Deckel noetig, aber Netzladen des Hausspeichers
+        kann die Kennzahl bis auf 0% druecken (dessen Bezug steckt in GR_sum, nicht in X_sum).
       - Eigenverbrauch (%) = (Summe(X_sum) - Summe(eingekaufter Netzenergie)) / PV-Erzeugung * 100,
         gedeckelt auf 100% (mehr als 100% der PV-Erzeugung kann nicht selbst verbraucht werden) -
         nutzt wie ø Netzstrom nur den eingekauften (nicht-negativen) Anteil.
@@ -545,7 +546,6 @@ def _compute_einsatzplan_kpis(rows, pv_values):
         return total
 
     x_sum = _sum_column("X_sum")
-    gr_sum_net = _sum_column("GR_sum")
     gr_purchased_sum = _sum_column("GR_sum", clamp_non_negative=True)
     costs_opt_sum = _sum_column("costs_opt")
     profits_opt_sum = _sum_column("profits_opt")
@@ -557,7 +557,7 @@ def _compute_einsatzplan_kpis(rows, pv_values):
 
     autarkie_pct = None
     if x_sum > EINSATZPLAN_ZERO_THRESHOLD:
-        autarkie_pct = round(max(0.0, (x_sum - gr_sum_net) / x_sum * 100))
+        autarkie_pct = round(max(0.0, (x_sum - gr_purchased_sum) / x_sum * 100))
 
     # Anders als bei Netzstrom-Preis/Autarkie ist "keine PV-Erzeugung" hier kein undefinierter Fall,
     # sondern eindeutig 0% Eigenverbrauch (von nichts kann nichts selbst verbraucht worden sein) -
