@@ -612,7 +612,11 @@ let saveStatusTimeout = null;
 // auf - gemeinsam genutzt von den Konfigurations-Warnungen oben und der "zu den Einstellungen"-Zeile
 // an fehlgeschlagenen Aktionen (siehe renderSystemHealth). Wechselt dafuer selbst auf den
 // Konfigurations-Tab, falls man gerade woanders ist (z.B. vom Dashboard-Problem-Banner aus).
-function scrollToIntegrationSection(sectionKey) {
+// fieldId (optional): DOM-Id des konkret betroffenen Sensor-/Steuerungsfelds (siehe
+// resolveActionControlFieldId) - die Kachel scrollt weiterhin wie bisher an den oberen Bildschirmrand,
+// aber liegt das Feld bei einer langen Kachel danach immer noch ausserhalb des Viewports, wird
+// zusaetzlich (nur so weit wie noetig) bis zu genau diesem Feld nachgescrollt.
+function scrollToIntegrationSection(sectionKey, fieldId) {
     const konfigButton = document.querySelector('.tabButton[data-tab="konfiguration"]');
     if (konfigButton && !konfigButton.classList.contains('active')) konfigButton.click();
     const sectionDiv = document.querySelector(`.integrationSection[data-section-key="${sectionKey}"]`);
@@ -622,13 +626,25 @@ function scrollToIntegrationSection(sectionKey) {
         const toggleButton = sectionDiv.querySelector('.sectionToggleButton');
         if (toggleButton) toggleButton.click();
     }
-    requestAnimationFrame(() => sectionDiv.scrollIntoView({behavior: 'smooth', block: 'start'}));
+    requestAnimationFrame(() => {
+        sectionDiv.scrollIntoView({behavior: 'smooth', block: 'start'});
+        if (fieldId) {
+            // Wartet kurz, bis der obige Smooth-Scroll (in etwa) abgeschlossen ist, bevor das
+            // konkrete Feld per 'nearest' nachgescrollt wird - 'nearest' bewegt die Seite nur, wenn
+            // das Feld tatsaechlich noch nicht sichtbar ist, und dann nur so weit wie noetig, um es
+            // gerade eben ins Bild zu bringen (kein Ueberscrollen ueber die Kachel hinaus).
+            setTimeout(() => {
+                const fieldElement = document.getElementById(fieldId);
+                if (fieldElement) fieldElement.scrollIntoView({behavior: 'smooth', block: 'nearest'});
+            }, 400);
+        }
+    });
 }
 
 // Ein <li> fuer die Problemliste in renderSystemHealth - Text plus optionaler "zu den
 // Einstellungen"-Link, wenn ein sectionKey bekannt ist (gemeinsam fuer System-Health-Probleme und
 // Konfigurations-Warnungen genutzt, die den Link auf unterschiedlichen Wegen ermitteln).
-function buildProblemListItem(message, sectionKey) {
+function buildProblemListItem(message, sectionKey, fieldId) {
     const item = document.createElement('li');
     item.appendChild(document.createTextNode(message));
     if (sectionKey) {
@@ -638,12 +654,27 @@ function buildProblemListItem(message, sectionKey) {
         link.textContent = 'zu den Einstellungen';
         link.addEventListener('click', (event) => {
             event.preventDefault();
-            scrollToIntegrationSection(sectionKey);
+            scrollToIntegrationSection(sectionKey, fieldId);
         });
         item.appendChild(document.createTextNode(' '));
         item.appendChild(link);
     }
     return item;
+}
+
+// Legt/entfernt den roten Rahmen (siehe .configFieldError in index.html) um genau die Sensor-/
+// Steuerungsfelder, die gerade eine Fehlermeldung (fehlgeschlagene Aktion ODER fehlendes
+// Pflichtfeld) ausloesen - fieldIds ist eine flache Liste aller betroffenen DOM-Ids (siehe
+// actionFailedFieldId/computeMissingRequiredFieldsWarnings). Entfernt zuerst IMMER alle bisherigen
+// Markierungen, damit ein inzwischen behobenes Feld seinen roten Rahmen auch wieder verliert.
+function applyConfigFieldErrorHighlights(fieldIds) {
+    for (const el of document.querySelectorAll('.configFieldError')) {
+        el.classList.remove('configFieldError');
+    }
+    for (const fieldId of fieldIds) {
+        const el = document.getElementById(fieldId);
+        if (el) el.classList.add('configFieldError');
+    }
 }
 
 // Nutzer-sichtbare Fehler-/Statuskarte ganz oben auf der Konfigurationsseite: entweder
@@ -686,6 +717,7 @@ async function renderSystemHealth() {
         const text = document.createElement('span');
         text.textContent = 'Alle Systeme laufen';
         container.appendChild(text);
+        applyConfigFieldErrorHighlights([]);
         return;
     }
     container.className = 'systemHealthCard has-problems';
@@ -697,13 +729,18 @@ async function renderSystemHealth() {
     container.appendChild(title);
     const list = document.createElement('ul');
     list.className = 'systemHealthProblemList';
+    const errorFieldIds = [];
     for (const problem of problems) {
-        list.appendChild(buildProblemListItem(problem.message, actionFailedProblemSectionKey(problem.id)));
+        const fieldId = actionFailedFieldId(problem.id);
+        if (fieldId) errorFieldIds.push(fieldId);
+        list.appendChild(buildProblemListItem(problem.message, actionFailedProblemSectionKey(problem.id), fieldId));
     }
     for (const warning of warnings) {
-        list.appendChild(buildProblemListItem(warning.message, warning.sectionKey));
+        errorFieldIds.push(...(warning.fieldIds || (warning.fieldId ? [warning.fieldId] : [])));
+        list.appendChild(buildProblemListItem(warning.message, warning.sectionKey, warning.fieldId));
     }
     container.appendChild(list);
+    applyConfigFieldErrorHighlights(errorFieldIds);
 }
 
 // Ordnet ein "action_failed:<slug>"-Problem (siehe _action_problem_id/_note_action_outcome in
@@ -727,6 +764,64 @@ const ACTION_FAILED_SLUG_TO_SECTION = {
 function actionFailedProblemSectionKey(problemId) {
     if (!problemId || !problemId.startsWith('action_failed:')) return null;
     return ACTION_FAILED_SLUG_TO_SECTION[problemId.slice('action_failed:'.length)] || null;
+}
+
+// Wie ACTION_FAILED_SLUG_TO_SECTION oben, aber auf den internen Aktions-Schluessel (nicht die
+// Geraetekachel) - Grundlage fuer resolveActionControlFieldId/actionFailedFieldId, damit der
+// "zu den Einstellungen"-Link nicht nur zur Kachel, sondern zum tatsaechlich betroffenen Feld
+// scrollt und es rot umrandet.
+const ACTION_FAILED_SLUG_TO_ACTION_KEY = {
+    'auto_laden': 'car_charge_start',
+    'warmwasser': 'hot_water',
+    'batterie_netzladen': 'battery_grid_charge',
+    'batterie_entladen_verschieben': 'battery_discharge_shift',
+    'batterie_laden_verschieben_pv_berschuss': 'battery_charge_shift_pv_surplus',
+    'heizung_soll_temperatur': 'heating_target_temp',
+    'verbraucher_an': 'consumer_on',
+    'pv_einspeisung_begrenzen': 'pv_feed_in_limit',
+    'verbrauch_begrenzen_14a': 'consumption_limit_14a',
+};
+
+// Ermittelt die DOM-Id des konkreten Eingabefelds fuer einen Aktions-/Steuerungs-Schluessel (nicht
+// zu verwechseln mit section.sensors weiter oben, die immer direkt <key>+VALUE_POSTFIX sind) - je
+// nach hinterlegter Variante (direkte Entitaet vs. HA-Automation) ein anderes Feld. null, wenn es
+// (wie bei "Auto laden" mit dreistufiger Steuerung, mehrere Teilfelder statt einem) kein einzelnes
+// Zielfeld gibt. Gemeinsam genutzt von computeMissingRequiredFieldsWarnings (fehlende Pflichtfelder)
+// und actionFailedFieldId (fehlgeschlagene Aktion).
+function resolveActionControlFieldId(actionKey) {
+    if (BATTERY_DIRECT_ACTION_KEYS.has(actionKey)) {
+        const variant = (configData['controlVariant'] || {})[actionKey] || 'ha_automation';
+        return variant === 'ha_automation'
+            ? actionKey + '_ha_automation_entity'
+            : BATTERY_DIRECT_REQUIRED_SENSOR_FIELDS[actionKey] + VALUE_POSTFIX;
+    }
+    const control = AUTO_MANAGED_CONTROLS.find(c => c.actionKeys.includes(actionKey));
+    if (control) {
+        const variant = control.automationOnly ? 'ha_automation'
+            : control.hasAutomationVariant ? ((configData['controlVariant'] || {})[control.key] || 'direct')
+            : 'direct';
+        if (variant === 'ha_automation') {
+            if (control.type === 'number') return control.key + '_ha_automation_entity';
+            if (actionKey === 'consumer_on') return 'consumer_on_ha_automation_entity';
+            if (actionKey === 'consumer_off') return 'consumer_off_ha_automation_entity';
+        }
+        return control.sensorField ? control.sensorField + VALUE_POSTFIX : null;
+    }
+    if (CAR_CHARGE_ACTION_KEYS.has(actionKey)) {
+        const recipe = configData['carChargeRecipe'] || {};
+        return recipe.type === 'ha_automation' ? 'car_charge_ha_automation_entity' : null;
+    }
+    if (HOT_WATER_ACTION_KEYS.has(actionKey)) {
+        const recipe = configData['hotWaterRecipe'] || {};
+        return recipe.type === 'ha_automation' ? 'hot_water_ha_automation_entity' : null;
+    }
+    return actionKey + ACTOR_VALUE_POSTFIX;
+}
+
+function actionFailedFieldId(problemId) {
+    if (!problemId || !problemId.startsWith('action_failed:')) return null;
+    const actionKey = ACTION_FAILED_SLUG_TO_ACTION_KEY[problemId.slice('action_failed:'.length)];
+    return actionKey ? resolveActionControlFieldId(actionKey) : null;
 }
 
 // Kurzer, klickbarer Hinweis ganz oben auf dem Dashboard, sobald es auf der Konfigurationsseite
@@ -998,11 +1093,16 @@ function computeMissingRequiredFieldsWarnings() {
         if (currentIds.length === 0) continue;
         if (currentIds.length === 1 && currentIds[0] === DEMO_INTEGRATION_ID) continue;
 
+        // {label, fieldId} statt nur eines Labels - fieldId ist die DOM-Id des konkreten
+        // Eingabefelds (siehe resolveActionControlFieldId), Grundlage fuer den roten Rahmen um den
+        // betroffenen Sensor UND fuer das gezielte Nachscrollen zu genau diesem Feld (statt nur zur
+        // Geraetekachel), sobald man dem "zu den Einstellungen"-Link folgt. null, wenn es (wie bei
+        // "Auto laden" mit dreistufiger Steuerung) kein einzelnes Zielfeld gibt.
         const missing = [];
 
         for (const key of section.sensors) {
             if (REQUIRED_FIELD_OPTIONAL_SENSOR_KEYS.has(key)) continue;
-            if (!sensorMappings[key]) missing.push((helpinformation[key] || {}).label || key);
+            if (!sensorMappings[key]) missing.push({label: (helpinformation[key] || {}).label || key, fieldId: key + VALUE_POSTFIX});
         }
 
         for (const control of AUTO_MANAGED_CONTROLS) {
@@ -1011,28 +1111,31 @@ function computeMissingRequiredFieldsWarnings() {
             const variant = control.hasAutomationVariant ? ((configData['controlVariant'] || {})[control.key] || 'direct') : 'direct';
             if (variant === 'ha_automation') {
                 if (control.type === 'number') {
-                    if (!actorMappings[control.key]) missing.push(control.titleLabel + ' (Automation)');
+                    if (!actorMappings[control.key]) missing.push({label: control.titleLabel + ' (Automation)', fieldId: control.key + '_ha_automation_entity'});
                 } else if (!actorMappings['consumer_on'] || !actorMappings['consumer_off']) {
-                    missing.push(control.titleLabel + ' (Automation)');
+                    missing.push({
+                        label: control.titleLabel + ' (Automation)',
+                        fieldId: !actorMappings['consumer_on'] ? 'consumer_on_ha_automation_entity' : 'consumer_off_ha_automation_entity',
+                    });
                 }
             } else if (!sensorMappings[control.sensorField]) {
-                missing.push(control.titleLabel);
+                missing.push({label: control.titleLabel, fieldId: control.sensorField + VALUE_POSTFIX});
             }
         }
 
         const manualActions = section.actions.filter(key => !AUTO_MANAGED_ACTION_KEYS.has(key) && !CAR_CHARGE_ACTION_KEYS.has(key) && !HOT_WATER_ACTION_KEYS.has(key) && !BATTERY_DIRECT_ACTION_KEYS.has(key));
         for (const key of manualActions) {
             if (REQUIRED_FIELD_OPTIONAL_ACTION_KEYS.has(key)) continue;
-            if (!actorMappings[key]) missing.push((actorHelpInformation[key] || {}).label || key);
+            if (!actorMappings[key]) missing.push({label: (actorHelpInformation[key] || {}).label || key, fieldId: key + ACTOR_VALUE_POSTFIX});
         }
 
         for (const key of section.actions.filter(k => BATTERY_DIRECT_ACTION_KEYS.has(k))) {
             const variant = (configData['controlVariant'] || {})[key] || 'ha_automation';
             const label = (actorHelpInformation[key] || {}).label || key;
             if (variant === 'ha_automation') {
-                if (!actorMappings[key]) missing.push(label);
+                if (!actorMappings[key]) missing.push({label, fieldId: key + '_ha_automation_entity'});
             } else if (!sensorMappings[BATTERY_DIRECT_REQUIRED_SENSOR_FIELDS[key]]) {
-                missing.push(label);
+                missing.push({label, fieldId: BATTERY_DIRECT_REQUIRED_SENSOR_FIELDS[key] + VALUE_POSTFIX});
             }
         }
 
@@ -1043,21 +1146,23 @@ function computeMissingRequiredFieldsWarnings() {
                 && amperageStage.service && (amperageStage.amountFields || []).length > 0 && (recipe.control || {}).service;
             const isHaAutomationComplete = recipe.type === 'ha_automation' && !!recipe.haAutomationEntityId;
             if (!(isThreeStageComplete || isHaAutomationComplete)) {
-                missing.push('Auto laden (Ladesteuerung)');
+                missing.push({label: 'Auto laden (Ladesteuerung)', fieldId: recipe.type === 'ha_automation' ? 'car_charge_ha_automation_entity' : null});
             }
         }
 
         if (section.actions.some(k => HOT_WATER_ACTION_KEYS.has(k))) {
             const recipe = configData['hotWaterRecipe'] || {};
             const isComplete = recipe.type === 'ha_automation' ? !!recipe.haAutomationEntityId : !!recipe.service;
-            if (!isComplete) missing.push('Warmwasser');
+            if (!isComplete) missing.push({label: 'Warmwasser', fieldId: recipe.type === 'ha_automation' ? 'hot_water_ha_automation_entity' : null});
         }
 
         if (missing.length > 0) {
             warnings.push({
                 key: 'missing_required_fields:' + section.key,
                 sectionKey: section.key,
-                message: `${section.label} noch nicht vollständig konfiguriert - es fehlen: ${missing.join(', ')}.`,
+                fieldId: missing[0].fieldId || null,
+                fieldIds: missing.map(m => m.fieldId).filter(Boolean),
+                message: `${section.label} noch nicht vollständig konfiguriert - es fehlen: ${missing.map(m => m.label).join(', ')}.`,
             });
         }
     }

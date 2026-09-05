@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.0.45.0
+
+* **"Zu den Einstellungen"-Link scrollt jetzt bis zum konkret betroffenen Sensor-/Steuerungsfeld**, nicht nur zur Geraetekachel - liegt das Feld bei einer langen Kachel nach dem gewohnten Scrollen zur Kachel immer noch außerhalb des sichtbaren Bereichs, wird zusätzlich (nur so weit wie nötig) bis dorthin nachgescrollt.
+* **Sensoren/Steuerungsfelder, die gerade eine Fehlermeldung auslösen (fehlgeschlagene Aktion oder fehlendes Pflichtfeld), werden jetzt rot umrandet.**
+
 ## 0.0.44.99
 
 * **PV-Überschussladen (Fallback): Ladeleistung auf die tatsächlich am Wechselrichter gemessene PV-Leistung gedeckelt.** Bisher richtete sich das Ziel beim Starten und beim Erhöhen ausschließlich nach dem Netz-Sensor - physikalisch kann die Ladeleistung aber nie höher liegen als die aktuell erzeugte PV-Leistung. Ist ein PV-Erzeugungssensor zugeordnet, gilt diese Grenze jetzt zusätzlich zur Wallbox-Obergrenze (die jeweils engere gewinnt); ohne zugeordneten Sensor bleibt das Verhalten unverändert.
