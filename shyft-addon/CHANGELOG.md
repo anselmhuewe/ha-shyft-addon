@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.0.44.89
+
+* **Fix: Dashboard-Charts zeigten als erste Stunde noch den Stand des letzten Cache-Schreibens, statt zur aktuellen Stunde vorzurücken**, solange keine neue Optimierung ankam (z.B. um 8:56 Uhr begannen die Charts noch bei 7:00 statt bei 8:00). `/dashboard/chart-data` schneidet jetzt bei jedem Abruf bereits vergangene volle Stunden vom Anfang der Zeitreihen ab, unabhängig davon, wann die zugrunde liegenden Daten zuletzt aktualisiert wurden.
+
 ## 0.0.44.88
 
 * **Fix: "PV-Überschuss"-Klassifizierung für "Auto laden" konnte fälschlich zutreffen, obwohl der Ladestrom überwiegend aus dem Netz kam.** Bisher wurde eine Stunde als PV-Überschuss gewertet, wenn laut Optimierer kaum Netzeinspeisung stattfand (`PV_GR`) UND die Batterie nicht ins Auto entlud (`B_EV`) - beides kann aber auch aus anderen Gründen niedrig sein (z.B. kaum PV vorhanden UND eine parallele "Batterie nicht entladen"-Aktion), ohne dass tatsächlich PV-Überschuss vorliegt. Neue, direkte dritte Bedingung: `GR_EV` (Netzstrom, der laut Optimierer direkt ans Auto geht) muss ebenfalls niedrig sein. Am konkreten Fall vom 04.09. (`GR_EV` ≈ 10 kW) hätte das die fehlerhafte Klassifizierung verhindert.

@@ -428,6 +428,23 @@ def readDashboardChartData():
 
     einsatzplan = _compute_einsatzplan_summary(output_rows, pv_generation, creation_date_ms, start)
 
+    # Die Charts sollen mit der aktuellen Stunde beginnen, nicht mit der Stunde des letzten
+    # Cache-Schreibens (siehe Nutzer-Beobachtung: um 8:56 Uhr zeigten die Charts noch 7:00 als
+    # ersten Wert, weil seit 7 Uhr keine neue Optimierung/kein neuer Cache-Schreibvorgang mehr
+    # stattgefunden hatte). "start" ist immer die Stunde des Cache-Standes - vergangene, bereits
+    # abgeschlossene Stunden davor werden hier abgeschnitten, unabhaengig davon, ob zwischenzeitlich
+    # ein frischer Optimierungslauf ankam. labels/output_labels teilen sich denselben Anker "start"
+    # und denselben stuendlichen Schritt, daher gilt derselbe Versatz fuer beide Arrays (Python-
+    # Slicing klemmt von selbst auf die jeweilige Array-Laenge, kein Sonderfall noetig fuer den Fall,
+    # dass output_csv kuerzer ist als input_csv). einsatzplan/optimizer_running bleiben bewusst auf
+    # den UNGEKUERZTEN Daten berechnet - _compute_einsatzplan_summary filtert "Heute" ohnehin schon
+    # selbst auf noch nicht vergangene Stunden.
+    now_hour = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
+    skip = max(0, int((now_hour - start).total_seconds() // 3600))
+    labels, pv_generation, p_buy, temperature = labels[skip:], pv_generation[skip:], p_buy[skip:], temperature[skip:]
+    output_labels, t_i_target, t_hw, soc_b, soc_ev = (
+        output_labels[skip:], t_i_target[skip:], t_hw[skip:], soc_b[skip:], soc_ev[skip:])
+
     return jsonify({
         "status": "success",
         "labels": labels,
